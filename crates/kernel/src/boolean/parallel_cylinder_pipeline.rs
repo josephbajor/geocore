@@ -28,12 +28,13 @@ use crate::section::section_bodies_in_scope;
 use crate::session::PartEdit;
 use crate::{BodyId, BodySectionGraph};
 
-/// Consume the strict positive-overlap parallel-cylinder theorem through the
-/// shared arrangement, truth-selection, planning, and Full-check path.
+/// Consume proof-complete parallel-cylinder relations through Full-checked
+/// realization paths.
 ///
-/// Intersect, Unite, and ordered Subtract admit either strict nesting or two
-/// uniquely owned overlap ends. Commutative operations receive a canonical
-/// source order; Subtract preserves caller order.
+/// Strictly disjoint sources retain whole boundaries; positive overlaps use
+/// shared arrangement, truth selection, and shell planning. Commutative
+/// operations receive a canonical source order; Subtract preserves caller
+/// order.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -50,21 +51,13 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let first = extract_cylinder_operand(edit, bodies[0].clone(), 0, scope)?;
     let second = extract_cylinder_operand(edit, bodies[1].clone(), 1, scope)?;
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
-    let relation = certify_parallel_cylinder_relation(&graph, [&first, &second], scope)?;
+    let relation =
+        certify_parallel_cylinder_relation(&edit.state.store, &graph, [&first, &second], scope)?;
     match relation {
-        ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation => match operation {
-            PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
-            PlanarBooleanOperation::Unite => realize_certified_cylinder_source_copies(
-                edit,
-                &[(bodies[0].clone(), &first), (bodies[1].clone(), &second)],
-                scope,
-            ),
-            PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
-                edit,
-                &[(bodies[0].clone(), &first)],
-                scope,
-            ),
-        },
+        ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation
+        | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_) => {
+            execute_disjoint_source_boolean(edit, operation, &bodies, [&first, &second], scope)
+        }
         ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
             edit,
             operation,
@@ -90,6 +83,31 @@ pub(super) fn execute_parallel_cylinder_boolean(
         ParallelCylinderRelationOutcome::Indeterminate(_) => {
             refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
         }
+    }
+}
+
+fn execute_disjoint_source_boolean(
+    edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
+    bodies: &[BodyId; 2],
+    cylinders: [&CertifiedCylinderSource; 2],
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    match operation {
+        PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
+        PlanarBooleanOperation::Unite => realize_certified_cylinder_source_copies(
+            edit,
+            &[
+                (bodies[0].clone(), cylinders[0]),
+                (bodies[1].clone(), cylinders[1]),
+            ],
+            scope,
+        ),
+        PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
+            edit,
+            &[(bodies[0].clone(), cylinders[0])],
+            scope,
+        ),
     }
 }
 

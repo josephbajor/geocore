@@ -1,20 +1,21 @@
 //! Operation-local theorem for the first parallel-cylinder Boolean slice.
 //!
 //! The section graph remains the general intersection authority.  This module
-//! only recognizes the strict finite lens-prism relation needed by the first
-//! Cylinder/Cylinder Boolean slices: exactly parallel or antiparallel axes,
-//! strict transverse radial secancy, a strict positive axial overlap with two
-//! uniquely owned physical ends, and one closed section component alternating
-//! between two rulings and the matching cap arcs. Both authored boundary
-//! orders are normalized onto one certified common axial coordinate before
-//! overlap ownership is decided. Every join is owned by the section graph's
-//! source-edge/root identity; rounded points are never used as topology keys.
+//! recognizes two proof-complete relations needed by the first Cylinder/Cylinder
+//! Boolean slices: strict axial separation of exactly parallel or antiparallel
+//! finite sources, and the strict finite lens-prism relation. Both authored
+//! boundary orders are normalized onto one certified common axial coordinate
+//! before gap or overlap ownership is decided. Every retained boundary is
+//! topology-owned; rounded points are never used as topology keys.
 
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
 use kcore::predicates::{Orientation, affine_dot3, orient3d};
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::vec::{Point3, Vec3};
 use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId};
+use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use ktopo::store::Store;
 
 use super::curved_source::CertifiedCylinderSource;
 use super::pipeline::PLANAR_BOOLEAN_BSP_WORK;
@@ -34,9 +35,11 @@ pub(super) use coincident_caps::{
 
 /// Fixed proof work charged before the first semantic exit.
 ///
-/// Accepted inputs have exactly four branches, fragments, and endpoints and
-/// one component.  Oversized inputs are rejected from their lengths before
-/// any collection scan, so this constant is a geometry-independent ceiling.
+/// Constant source normalization and gap comparisons cover the strict axial
+/// exit. Overlap paths additionally admit exactly four branches, fragments,
+/// and endpoints and one component; oversized graph shapes are rejected from
+/// their lengths before collection scans. This remains a geometry-independent
+/// ceiling for every exit.
 pub(super) const PARALLEL_CYLINDER_RELATION_WORK: u64 = 64;
 
 /// First unmet obligation in the strict parallel-cylinder lens relation.
@@ -51,6 +54,8 @@ pub(super) enum ParallelCylinderRelationGap {
     RadialSecancyNotStrict,
     /// A source's authored cap interval is not strictly positive on its own axis.
     SourceAxialOrder,
+    /// A cap plane/ring cannot be proof-bound to its finite-cylinder support.
+    SourceBoundaryBinding,
     /// The source cap intervals are disjoint or touch without positive overlap.
     AxialOverlapNotStrictlyPositive,
     /// The supplied section is not globally complete and gap-free.
@@ -182,12 +187,58 @@ impl CertifiedParallelCylinderLensRelation {
     }
 }
 
+/// One topology-owned cap boundary delimiting a strict axial gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ParallelCylinderAxialGapBoundaryWitness {
+    operand: usize,
+    boundary: usize,
+    cap_face: RawFaceId,
+    edge: RawEdgeId,
+}
+
+impl ParallelCylinderAxialGapBoundaryWitness {
+    /// Operand owning this gap boundary.
+    pub(super) const fn operand(&self) -> usize {
+        self.operand
+    }
+
+    /// Owning source boundary ordinal in authored-axis order.
+    pub(super) const fn boundary(&self) -> usize {
+        self.boundary
+    }
+
+    /// Topology-owned cap face.
+    pub(super) const fn cap_face(&self) -> RawFaceId {
+        self.cap_face
+    }
+
+    /// Vertexless cap-ring edge bounding the cap.
+    pub(super) const fn edge(&self) -> RawEdgeId {
+        self.edge
+    }
+}
+
+/// Certified proof that two finite parallel-cylinder sources have a strict axial gap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CertifiedParallelCylinderAxialSeparation {
+    gap_boundaries: [ParallelCylinderAxialGapBoundaryWitness; 2],
+}
+
+impl CertifiedParallelCylinderAxialSeparation {
+    /// Gap boundaries in low/high order on the canonical common axis.
+    pub(super) const fn gap_boundaries(&self) -> &[ParallelCylinderAxialGapBoundaryWitness; 2] {
+        &self.gap_boundaries
+    }
+}
+
 /// Certified relation or a typed fail-closed missing obligation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ParallelCylinderRelationOutcome {
     /// Exact graph proof bound to both certified source side faces shows that
     /// the infinite radial supports are strictly exterior-disjoint.
     CertifiedExteriorRadialSeparation,
+    /// Exact or Full-envelope-bounded source supports prove a strict cap gap.
+    CertifiedAxialSeparation(Box<CertifiedParallelCylinderAxialSeparation>),
     /// Every analytic, topology, and provenance obligation was discharged.
     Certified(Box<CertifiedParallelCylinderLensRelation>),
     /// The operation-local incomplete-Section theorem for one or two shared
@@ -200,6 +251,7 @@ pub(super) enum ParallelCylinderRelationOutcome {
 /// Certify the exact strict-overlap relation consumed by the first
 /// parallel-cylinder Boolean realization slices.
 pub(super) fn certify_parallel_cylinder_relation(
+    store: &Store,
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
     scope: &mut OperationScope<'_, '_>,
@@ -209,11 +261,33 @@ pub(super) fn certify_parallel_cylinder_relation(
         .charge(PLANAR_BOOLEAN_BSP_WORK, PARALLEL_CYLINDER_RELATION_WORK)
         .map_err(Error::from)?;
 
-    if certifies_exterior_radial_separation(graph, cylinders) {
+    let supports = match certify_source_cap_supports(store, cylinders)? {
+        Some(supports) => supports,
+        None => {
+            return Ok(ParallelCylinderRelationOutcome::Indeterminate(
+                ParallelCylinderRelationGap::SourceBoundaryBinding,
+            ));
+        }
+    };
+    let normalized = match normalize_source_axial_intervals(cylinders, supports) {
+        Ok(normalized) => normalized,
+        Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+    };
+    match certify_strict_axial_separation(cylinders, &normalized) {
+        Ok(Some(certificate)) => {
+            return Ok(ParallelCylinderRelationOutcome::CertifiedAxialSeparation(
+                Box::new(certificate),
+            ));
+        }
+        Ok(None) => {}
+        Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+    }
+
+    if certifies_exterior_radial_separation(graph, cylinders, &normalized.supports) {
         return Ok(ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation);
     }
 
-    let overlap_ends = match certify_source_relation(cylinders) {
+    let overlap_ends = match certify_source_relation_from_normalized(cylinders, &normalized) {
         Ok(relation) => relation,
         Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
     };
@@ -250,6 +324,7 @@ pub(super) fn certify_parallel_cylinder_relation(
 fn certifies_exterior_radial_separation(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
+    supports: &[[AxialBoundarySupport; 2]; 2],
 ) -> bool {
     let [separation] = graph.cylinder_cylinder_exterior_radial_separations() else {
         return false;
@@ -259,11 +334,198 @@ fn certifies_exterior_radial_separation(
         .iter()
         .zip(cylinders)
         .all(|(face, cylinder)| face.raw() == cylinder.side_face())
+        && exterior_radial_gap_clears_support_envelopes(cylinders, supports)
 }
 
+/// Extend the exact infinite-carrier witness over any tolerance-backed ring
+/// centering admitted by Full validation. Exact sources keep zero inflation;
+/// otherwise the radial carrier gap must clear both source envelopes.
+fn exterior_radial_gap_clears_support_envelopes(
+    cylinders: [&CertifiedCylinderSource; 2],
+    supports: &[[AxialBoundarySupport; 2]; 2],
+) -> bool {
+    let envelopes = supports.map(|boundaries| boundaries[0].envelope.max(boundaries[1].envelope));
+    if envelopes == [0.0; 2] {
+        return true;
+    }
+    let first = cylinders[0].cylinder();
+    let second = cylinders[1].cylinder();
+    let axis = interval_vec3(first.frame().z());
+    let displacement = interval_sub(
+        interval_vec3(second.frame().origin()),
+        interval_vec3(first.frame().origin()),
+    );
+    let distance_squared = match interval_norm_squared(interval_cross(displacement, axis))
+        .checked_div(interval_norm_squared(axis))
+    {
+        Some(distance) => distance,
+        None => return false,
+    };
+    let inflated_radius = Interval::point(first.radius())
+        + Interval::point(second.radius())
+        + Interval::point(envelopes[0])
+        + Interval::point(envelopes[1]);
+    let inflated_radius_squared = inflated_radius.square();
+    finite_interval(distance_squared)
+        && finite_interval(inflated_radius_squared)
+        && distance_squared.lo() > inflated_radius_squared.hi()
+}
+
+/// Bind every finite-source cap plane and ring to its side cylinder.
+///
+/// Full topology validity proves incidence only to tolerance. The axial
+/// theorem therefore requires exact live carrier, circle, normal, cap-plane,
+/// and constant-v pcurve identities. A ring center that is an exact affine
+/// cylinder evaluation has zero uncertainty. Rounded authored evaluations
+/// retain the Full checker's conservative linear incidence envelope; later
+/// separation comparisons must clear both boundary envelopes.
+fn certify_source_cap_supports(
+    store: &Store,
+    cylinders: [&CertifiedCylinderSource; 2],
+) -> Result<Option<[[AxialBoundarySupport; 2]; 2]>> {
+    let mut supports = [[AxialBoundarySupport::zero(); 2]; 2];
+    for (operand, source) in cylinders.into_iter().enumerate() {
+        let side_face = store
+            .get(source.side_face())
+            .map_err(|source| Error::InconsistentTopology { source })?;
+        let SurfaceGeom::Cylinder(live_cylinder) = store
+            .surface(side_face.surface())
+            .map_err(|source| Error::InconsistentTopology { source })?
+        else {
+            return Ok(None);
+        };
+        let cylinder = source.cylinder();
+        if *live_cylinder != cylinder {
+            return Ok(None);
+        }
+        let axis = cylinder.frame().z();
+        for (boundary_ordinal, boundary) in source.boundaries().iter().enumerate() {
+            let cap_face = store
+                .get(boundary.cap_face())
+                .map_err(|source| Error::InconsistentTopology { source })?;
+            let SurfaceGeom::Plane(plane) = store
+                .surface(cap_face.surface())
+                .map_err(|source| Error::InconsistentTopology { source })?
+            else {
+                return Ok(None);
+            };
+            let edge = store
+                .get(boundary.edge())
+                .map_err(|source| Error::InconsistentTopology { source })?;
+            let Some(curve) = edge.curve() else {
+                return Ok(None);
+            };
+            let CurveGeom::Circle(circle) = store
+                .curve(curve)
+                .map_err(|source| Error::InconsistentTopology { source })?
+            else {
+                return Ok(None);
+            };
+            let side_fin = store
+                .get(boundary.side_fin())
+                .map_err(|source| Error::InconsistentTopology { source })?;
+            let Some(side_pcurve) = side_fin.pcurve() else {
+                return Ok(None);
+            };
+            let Curve2dGeom::Line(side_line) = store
+                .pcurve(side_pcurve.curve())
+                .map_err(|source| Error::InconsistentTopology { source })?
+            else {
+                return Ok(None);
+            };
+            let center = circle.frame().origin();
+            let plane_normal = plane.frame().z();
+            let circle_normal = circle.frame().z();
+            let side_line_origin = side_line.origin();
+            let side_line_direction = side_line.dir();
+            if center != boundary.center()
+                || circle.radius() != cylinder.radius()
+                || side_fin.edge() != boundary.edge()
+                || side_line_direction.y != 0.0
+                || !side_line_origin.y.is_finite()
+                || !finite_vec3(center)
+                || !finite_vec3(plane.frame().origin())
+                || !finite_vec3(plane_normal)
+                || !finite_vec3(circle_normal)
+                || !vectors_are_exactly_parallel(plane_normal, axis)
+                || !vectors_are_exactly_parallel(circle_normal, axis)
+                || !vectors_are_exactly_parallel(circle_normal, plane_normal)
+                || affine_dot3(
+                    plane_normal.to_array(),
+                    center.to_array(),
+                    plane.frame().origin().to_array(),
+                    0.0,
+                )
+                .is_none_or(|value| value.sign() != Orientation::Zero)
+            {
+                return Ok(None);
+            }
+            supports[operand][boundary_ordinal] = AxialBoundarySupport {
+                point: center,
+                envelope: if axis_parameter_identity_is_exact(
+                    center,
+                    cylinder.frame().origin(),
+                    axis,
+                    side_line_origin.y,
+                ) {
+                    0.0
+                } else {
+                    // `CertifiedCylinderSource` is Full-valid, and its edge
+                    // and faces carry no larger entity tolerance. The exact
+                    // cap-plane/circle proof above leaves only the side
+                    // pcurve lift's fixed checker envelope.
+                    LINEAR_RESOLUTION
+                },
+            };
+        }
+    }
+    Ok(Some(supports))
+}
+
+/// Prove `point = origin + axis * parameter` component-by-component without
+/// allowing a rounded multiply-add to erase a nonzero dyadic residual.
+fn axis_parameter_identity_is_exact(
+    point: Point3,
+    origin: Point3,
+    axis: Vec3,
+    parameter: f64,
+) -> bool {
+    let point = point.to_array();
+    let origin = origin.to_array();
+    let axis = axis.to_array();
+    (0..3).all(|component| {
+        affine_dot3(
+            [1.0, axis[component], -1.0],
+            [origin[component], parameter, point[component]],
+            [0.0; 3],
+            0.0,
+        )
+        .is_some_and(|value| value.sign() == Orientation::Zero)
+    })
+}
+
+#[cfg(test)]
 fn certify_source_relation(
     cylinders: [&CertifiedCylinderSource; 2],
 ) -> core::result::Result<[SourceOverlapEnd; 2], ParallelCylinderRelationGap> {
+    let supports = cylinders.map(|source| {
+        source
+            .boundaries()
+            .map(|boundary| AxialBoundarySupport::exact(boundary.center()))
+    });
+    let normalized = normalize_source_axial_intervals(cylinders, supports)?;
+    certify_source_relation_from_normalized(cylinders, &normalized)
+}
+
+/// Normalize both authored cap orders onto one deterministic unoriented axis.
+///
+/// Every comparison is an exact affine-dot orientation. The resulting low and
+/// high ordinals therefore remain source topology identities rather than
+/// rounded coordinates, including when an authored axis is antiparallel.
+fn normalize_source_axial_intervals(
+    cylinders: [&CertifiedCylinderSource; 2],
+    supports: [[AxialBoundarySupport; 2]; 2],
+) -> core::result::Result<NormalizedAxialIntervals, ParallelCylinderRelationGap> {
     let cylinder_a = cylinders[0].cylinder();
     let cylinder_b = cylinders[1].cylinder();
     let axis_a = cylinder_a.frame().z();
@@ -274,55 +536,154 @@ fn certify_source_relation(
         || !finite_vec3(cylinder_b.frame().origin())
         || !cylinder_a.radius().is_finite()
         || !cylinder_b.radius().is_finite()
-        || cylinders
+        || supports
             .iter()
-            .flat_map(|source| source.boundaries())
-            .any(|boundary| !finite_vec3(boundary.center()))
+            .flatten()
+            .any(|support| !finite_vec3(support.point) || !support.envelope.is_finite())
     {
         return Err(ParallelCylinderRelationGap::ArithmeticGuard);
     }
     if !vectors_are_exactly_parallel(axis_a, axis_b) {
         return Err(ParallelCylinderRelationGap::AxesNotExactlyParallel);
     }
-    let axis_sign = affine_dot3(axis_a.to_array(), axis_b.to_array(), [0.0; 3], 0.0)
+    let axis_alignment = affine_dot3(axis_a.to_array(), axis_b.to_array(), [0.0; 3], 0.0)
         .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)?
         .sign();
-    let common_axis = match axis_sign {
-        Orientation::Positive => axis_a,
-        Orientation::Negative => canonical_unoriented_axis(axis_a)?,
-        Orientation::Zero => return Err(ParallelCylinderRelationGap::ArithmeticGuard),
-    };
-    certify_strict_radial_secancy(cylinders)?;
+    if axis_alignment == Orientation::Zero {
+        return Err(ParallelCylinderRelationGap::ArithmeticGuard);
+    }
+    let common_axis = canonical_unoriented_axis(axis_a)?;
 
     let mut intervals = [NormalizedSourceInterval::default(); 2];
     for (operand, source) in cylinders.into_iter().enumerate() {
         if axial_compare(
             source.cylinder().frame().z(),
-            source.boundaries()[1].center(),
-            source.boundaries()[0].center(),
+            supports[operand][1].point,
+            supports[operand][0].point,
         )? != Orientation::Positive
         {
             return Err(ParallelCylinderRelationGap::SourceAxialOrder);
         }
         intervals[operand] = match axial_compare(
             common_axis,
-            source.boundaries()[1].center(),
-            source.boundaries()[0].center(),
+            supports[operand][1].point,
+            supports[operand][0].point,
         )? {
             Orientation::Positive => NormalizedSourceInterval { low: 0, high: 1 },
             Orientation::Negative => NormalizedSourceInterval { low: 1, high: 0 },
             Orientation::Zero => return Err(ParallelCylinderRelationGap::SourceAxialOrder),
         };
     }
+
+    Ok(NormalizedAxialIntervals {
+        common_axis,
+        sources: intervals,
+        supports,
+    })
+}
+
+/// Return the two source caps delimiting a strictly positive axial gap.
+///
+/// Exact contact and every positive-overlap relation return `None`; callers
+/// can then continue with their existing relation proof without conflating it
+/// with separation.
+fn strict_axial_gap_boundaries(
+    normalized: &NormalizedAxialIntervals,
+) -> core::result::Result<Option<[SourceBoundary; 2]>, ParallelCylinderRelationGap> {
+    let intervals = normalized.sources;
+    for (operand, interval) in intervals.into_iter().enumerate() {
+        if certified_axial_compare(
+            normalized.common_axis,
+            normalized.supports[operand][interval.high],
+            normalized.supports[operand][interval.low],
+        )? != Some(Orientation::Positive)
+        {
+            return Ok(None);
+        }
+    }
+    if certified_axial_compare(
+        normalized.common_axis,
+        normalized.supports[1][intervals[1].low],
+        normalized.supports[0][intervals[0].high],
+    )? == Some(Orientation::Positive)
+    {
+        return Ok(Some([
+            SourceBoundary {
+                operand: 0,
+                boundary: intervals[0].high,
+            },
+            SourceBoundary {
+                operand: 1,
+                boundary: intervals[1].low,
+            },
+        ]));
+    }
+    if certified_axial_compare(
+        normalized.common_axis,
+        normalized.supports[0][intervals[0].low],
+        normalized.supports[1][intervals[1].high],
+    )? == Some(Orientation::Positive)
+    {
+        return Ok(Some([
+            SourceBoundary {
+                operand: 1,
+                boundary: intervals[1].high,
+            },
+            SourceBoundary {
+                operand: 0,
+                boundary: intervals[0].low,
+            },
+        ]));
+    }
+    Ok(None)
+}
+
+fn certify_strict_axial_separation(
+    cylinders: [&CertifiedCylinderSource; 2],
+    normalized: &NormalizedAxialIntervals,
+) -> core::result::Result<
+    Option<CertifiedParallelCylinderAxialSeparation>,
+    ParallelCylinderRelationGap,
+> {
+    let Some(boundaries) = strict_axial_gap_boundaries(normalized)? else {
+        return Ok(None);
+    };
+    let gap_boundaries = boundaries.map(|source| {
+        let boundary = cylinders[source.operand].boundaries()[source.boundary];
+        ParallelCylinderAxialGapBoundaryWitness {
+            operand: source.operand,
+            boundary: source.boundary,
+            cap_face: boundary.cap_face(),
+            edge: boundary.edge(),
+        }
+    });
+    Ok(Some(CertifiedParallelCylinderAxialSeparation {
+        gap_boundaries,
+    }))
+}
+
+fn certify_source_relation_from_normalized(
+    cylinders: [&CertifiedCylinderSource; 2],
+    normalized: &NormalizedAxialIntervals,
+) -> core::result::Result<[SourceOverlapEnd; 2], ParallelCylinderRelationGap> {
+    certify_strict_radial_secancy(cylinders)?;
+    source_overlap_ends(normalized)
+}
+
+fn source_overlap_ends(
+    normalized: &NormalizedAxialIntervals,
+) -> core::result::Result<[SourceOverlapEnd; 2], ParallelCylinderRelationGap> {
+    let common_axis = normalized.common_axis;
+    let intervals = normalized.sources;
     let low = axial_compare(
         common_axis,
-        cylinders[1].boundaries()[intervals[1].low].center(),
-        cylinders[0].boundaries()[intervals[0].low].center(),
+        normalized.supports[1][intervals[1].low].point,
+        normalized.supports[0][intervals[0].low].point,
     )?;
     let high = axial_compare(
         common_axis,
-        cylinders[1].boundaries()[intervals[1].high].center(),
-        cylinders[0].boundaries()[intervals[0].high].center(),
+        normalized.supports[1][intervals[1].high].point,
+        normalized.supports[0][intervals[0].high].point,
     )?;
     let low_end = match low {
         Orientation::Positive => SourceOverlapEnd {
@@ -360,8 +721,8 @@ fn certify_source_relation(
     };
     if axial_compare(
         common_axis,
-        cylinders[high_end.operand].boundaries()[high_end.boundary].center(),
-        cylinders[low_end.operand].boundaries()[low_end.boundary].center(),
+        normalized.supports[high_end.operand][high_end.boundary].point,
+        normalized.supports[low_end.operand][low_end.boundary].point,
     )? != Orientation::Positive
     {
         return Err(ParallelCylinderRelationGap::AxialOverlapNotStrictlyPositive);
@@ -430,6 +791,45 @@ fn axial_compare(
         .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)
 }
 
+/// Compare two cap supports only when their projected separation clears the
+/// Full-certified Euclidean incidence envelopes. Zero-envelope comparisons
+/// retain exact affine-dot behavior, including a one-ULP world-frame gap.
+fn certified_axial_compare(
+    axis: Vec3,
+    point: AxialBoundarySupport,
+    origin: AxialBoundarySupport,
+) -> core::result::Result<Option<Orientation>, ParallelCylinderRelationGap> {
+    if point.envelope == 0.0 && origin.envelope == 0.0 {
+        return axial_compare(axis, point.point, origin.point).map(Some);
+    }
+    let axis_norm = interval_norm_squared(interval_vec3(axis))
+        .sqrt()
+        .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)?;
+    let envelope =
+        ((Interval::point(point.envelope) + Interval::point(origin.envelope)) * axis_norm).hi();
+    let projection = affine_interval(axis, point.point, origin.point);
+    if !envelope.is_finite() || !finite_interval(projection) {
+        return Err(ParallelCylinderRelationGap::ArithmeticGuard);
+    }
+    if projection.lo() > envelope {
+        Ok(Some(Orientation::Positive))
+    } else if projection.hi() < -envelope {
+        Ok(Some(Orientation::Negative))
+    } else {
+        Ok(None)
+    }
+}
+
+fn affine_interval(axis: Vec3, point: Point3, origin: Point3) -> Interval {
+    let axis = axis.to_array();
+    let point = point.to_array();
+    let origin = origin.to_array();
+    (0..3).fold(Interval::point(0.0), |sum, component| {
+        sum + Interval::point(axis[component])
+            * (Interval::point(point[component]) - Interval::point(origin[component]))
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SourceOverlapEnd {
     /// Canonical first contributor. Shared ends use operand zero here and
@@ -459,6 +859,42 @@ impl SourceOverlapEnd {
 struct NormalizedSourceInterval {
     low: usize,
     high: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AxialBoundarySupport {
+    point: Point3,
+    envelope: f64,
+}
+
+impl AxialBoundarySupport {
+    const fn zero() -> Self {
+        Self {
+            point: Point3::new(0.0, 0.0, 0.0),
+            envelope: 0.0,
+        }
+    }
+
+    #[cfg(test)]
+    const fn exact(point: Point3) -> Self {
+        Self {
+            point,
+            envelope: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NormalizedAxialIntervals {
+    common_axis: Vec3,
+    sources: [NormalizedSourceInterval; 2],
+    supports: [[AxialBoundarySupport; 2]; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceBoundary {
+    operand: usize,
+    boundary: usize,
 }
 
 #[derive(Debug, Clone, Copy)]

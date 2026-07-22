@@ -1051,6 +1051,7 @@ mod tests {
         let relation = {
             let mut scope = OperationScope::new(&context);
             match certify_parallel_cylinder_relation(
+                &part.state.store,
                 &graph,
                 [&cylinders[0], &cylinders[1]],
                 &mut scope,

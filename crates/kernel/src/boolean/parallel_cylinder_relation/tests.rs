@@ -2,8 +2,10 @@ use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationContext, OperationScope, ResourceKind,
 };
 use kcore::tolerance::Tolerances;
+use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
-use kgeom::vec::{Point3, Vec3};
+use kgeom::surface::Plane;
+use kgeom::vec::{Point2, Point3, Vec3};
 
 use super::*;
 use crate::{
@@ -21,6 +23,12 @@ struct Fixture {
     part: PartId,
     outer: BodyId,
     inner: BodyId,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CapPlanePerturbation {
+    Shift,
+    Tilt,
 }
 
 fn shared_frame(placement: Placement) -> Frame {
@@ -49,16 +57,34 @@ fn fixture_with_axial_intervals_and_parity(
     second: (f64, f64),
     reverse_second_axis: bool,
 ) -> Fixture {
+    fixture_with_geometry(
+        placement,
+        first,
+        second,
+        reverse_second_axis,
+        [-0.5, 0.5],
+        [1.0, 1.0],
+    )
+}
+
+fn fixture_with_geometry(
+    placement: Placement,
+    first: (f64, f64),
+    second: (f64, f64),
+    reverse_second_axis: bool,
+    radial_offsets: [f64; 2],
+    radii: [f64; 2],
+) -> Fixture {
     let frame = shared_frame(placement);
     let second_frame = if reverse_second_axis {
         Frame::new(
-            frame.point_at(0.5, 0.0, second.0 + second.1),
+            frame.point_at(radial_offsets[1], 0.0, second.0 + second.1),
             -frame.z(),
             frame.x(),
         )
         .unwrap()
     } else {
-        frame.with_origin(frame.point_at(0.5, 0.0, second.0))
+        frame.with_origin(frame.point_at(radial_offsets[1], 0.0, second.0))
     };
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -66,8 +92,8 @@ fn fixture_with_axial_intervals_and_parity(
         let mut edit = session.edit_part(part.clone()).unwrap();
         let outer = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(-0.5, 0.0, first.0)),
-                1.0,
+                frame.with_origin(frame.point_at(radial_offsets[0], 0.0, first.0)),
+                radii[0],
                 first.1,
             ))
             .unwrap()
@@ -75,7 +101,7 @@ fn fixture_with_axial_intervals_and_parity(
             .unwrap()
             .body();
         let inner = edit
-            .create_cylinder(CylinderRequest::new(second_frame, 1.0, second.1))
+            .create_cylinder(CylinderRequest::new(second_frame, radii[1], second.1))
             .unwrap()
             .into_result()
             .unwrap()
@@ -104,6 +130,17 @@ fn partial_overlap_fixture(placement: Placement) -> Fixture {
 
 fn antiparallel_partial_overlap_fixture(placement: Placement) -> Fixture {
     fixture_with_axial_intervals_and_parity(placement, (-1.0, 2.0), (0.0, 2.0), true)
+}
+
+fn axially_separated_fixture(placement: Placement, reverse_second_axis: bool) -> Fixture {
+    fixture_with_geometry(
+        placement,
+        (-2.0, 2.0),
+        (1.0, 2.0),
+        reverse_second_axis,
+        [-0.5, 0.5],
+        [1.0, 1.0],
+    )
 }
 
 fn section(fixture: &Fixture, swapped: bool) -> BodySectionGraph {
@@ -140,6 +177,73 @@ fn extract_source(fixture: &Fixture, body: &BodyId) -> CertifiedCylinderSource {
     }
 }
 
+fn perturb_cap_plane_within_full_tolerance(
+    fixture: &mut Fixture,
+    body: &BodyId,
+    boundary: usize,
+    perturbation: CapPlanePerturbation,
+) {
+    let source = extract_source(fixture, body);
+    let cap_face = source.boundaries()[boundary].cap_face();
+    let raw_body = body.raw();
+    let linear = Tolerances::default().linear();
+    let mut edit = fixture.session.edit_part(fixture.part.clone()).unwrap();
+    let store = edit.store_mut_for_test();
+    let face = store.get(cap_face).unwrap();
+    let surface = face.surface();
+    let SurfaceGeom::Plane(plane) = store.surface(surface).unwrap() else {
+        panic!("cylinder cap must remain planar");
+    };
+    let frame = *plane.frame();
+    let perturbed_frame = match perturbation {
+        CapPlanePerturbation::Shift => {
+            frame.with_origin(frame.origin() + frame.z() * (linear * 0.125))
+        }
+        CapPlanePerturbation::Tilt => Frame::new(
+            frame.origin(),
+            frame.z() + frame.x() * (linear * 0.0625),
+            frame.x(),
+        )
+        .unwrap(),
+    };
+    let mut transaction = store.transaction().unwrap();
+    transaction
+        .assembly()
+        .replace_surface(surface, SurfaceGeom::Plane(Plane::new(perturbed_frame)))
+        .unwrap();
+    transaction.commit_checked_body(raw_body).unwrap();
+}
+
+fn perturb_side_height_within_full_tolerance(
+    fixture: &mut Fixture,
+    body: &BodyId,
+    boundary: usize,
+) {
+    let source = extract_source(fixture, body);
+    let side_fin = source.boundaries()[boundary].side_fin();
+    let raw_body = body.raw();
+    let linear = Tolerances::default().linear();
+    let mut edit = fixture.session.edit_part(fixture.part.clone()).unwrap();
+    let store = edit.store_mut_for_test();
+    let pcurve = store
+        .get(side_fin)
+        .unwrap()
+        .pcurve()
+        .expect("cylinder side fin must retain a pcurve");
+    let Curve2dGeom::Line(line) = store.pcurve(pcurve.curve()).unwrap() else {
+        panic!("cylinder side boundary must remain a line pcurve");
+    };
+    let origin = line.origin();
+    let shifted =
+        Line2d::new(Point2::new(origin.x, origin.y - linear * 0.125), line.dir()).unwrap();
+    let mut transaction = store.transaction().unwrap();
+    transaction
+        .assembly()
+        .replace_pcurve(pcurve.curve(), Curve2dGeom::Line(shifted))
+        .unwrap();
+    transaction.commit_checked_body(raw_body).unwrap();
+}
+
 fn sources(fixture: &Fixture, swapped: bool) -> [CertifiedCylinderSource; 2] {
     let outer = extract_source(fixture, &fixture.outer);
     let inner = extract_source(fixture, &fixture.inner);
@@ -169,7 +273,12 @@ fn certify(
         .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults())
         .with_budget_overrides(overrides);
     let mut scope = OperationScope::new(&context);
-    certify_parallel_cylinder_relation(graph, [&sources[0], &sources[1]], &mut scope)
+    certify_parallel_cylinder_relation(
+        &part.state.store,
+        graph,
+        [&sources[0], &sources[1]],
+        &mut scope,
+    )
 }
 
 fn certified(outcome: ParallelCylinderRelationOutcome) -> CertifiedParallelCylinderLensRelation {
@@ -185,6 +294,15 @@ fn certified_relation(
     sources: &[CertifiedCylinderSource; 2],
 ) -> CertifiedParallelCylinderLensRelation {
     certified(certify(fixture, graph, sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap())
+}
+
+fn certified_axial_separation(
+    outcome: ParallelCylinderRelationOutcome,
+) -> CertifiedParallelCylinderAxialSeparation {
+    match outcome {
+        ParallelCylinderRelationOutcome::CertifiedAxialSeparation(certificate) => *certificate,
+        other => panic!("expected certified axial separation, got {other:?}"),
+    }
 }
 
 fn certified_coincident_caps(
@@ -302,6 +420,212 @@ fn coincident_cap_relations_certify_equal_and_shared_end_graphs_generically() {
             let context = format!("shared-upper {placement:?} antiparallel={reverse_second_axis}");
             assert_coincident_cap_relation(&shared_upper, false, 1, &context);
             assert_coincident_cap_relation(&shared_upper, true, 1, &format!("{context} swapped"));
+        }
+    }
+}
+
+#[test]
+fn strict_axial_separation_is_radial_independent_replay_and_swap_deterministic() {
+    let radial_relations = [
+        ("strict secant", [-0.5, 0.5], [1.0, 1.0]),
+        ("tangent", [-1.0, 1.0], [1.0, 1.0]),
+        ("strict internal", [0.0, 0.25], [2.0, 0.5]),
+        ("coincident", [0.0, 0.0], [1.0, 1.0]),
+    ];
+    for placement in [Placement::World, Placement::Oblique] {
+        for reverse_second_axis in [false, true] {
+            for (radial_relation, offsets, radii) in radial_relations {
+                let fixture = fixture_with_geometry(
+                    placement,
+                    (-2.0, 2.0),
+                    (1.0, 2.0),
+                    reverse_second_axis,
+                    offsets,
+                    radii,
+                );
+                let forward_graph = section(&fixture, false);
+                let replay_graph = section(&fixture, false);
+                let swapped_graph = section(&fixture, true);
+                let forward_sources = sources(&fixture, false);
+                let swapped_sources = sources(&fixture, true);
+
+                let forward_outcome = certify(
+                    &fixture,
+                    &forward_graph,
+                    &forward_sources,
+                    PARALLEL_CYLINDER_RELATION_WORK,
+                )
+                .unwrap();
+                let replay_outcome = certify(
+                    &fixture,
+                    &replay_graph,
+                    &forward_sources,
+                    PARALLEL_CYLINDER_RELATION_WORK,
+                )
+                .unwrap();
+                let swapped_outcome = certify(
+                    &fixture,
+                    &swapped_graph,
+                    &swapped_sources,
+                    PARALLEL_CYLINDER_RELATION_WORK,
+                )
+                .unwrap();
+                let forward = certified_axial_separation(forward_outcome);
+                let replay = certified_axial_separation(replay_outcome);
+                let swapped = certified_axial_separation(swapped_outcome);
+
+                assert_eq!(forward, replay, "{placement:?} {radial_relation}");
+                assert_eq!(
+                    forward.gap_boundaries().map(|witness| (
+                        witness.boundary(),
+                        witness.cap_face(),
+                        witness.edge(),
+                    )),
+                    swapped.gap_boundaries().map(|witness| (
+                        witness.boundary(),
+                        witness.cap_face(),
+                        witness.edge(),
+                    )),
+                    "{placement:?} {radial_relation} antiparallel={reverse_second_axis}",
+                );
+                assert_eq!(
+                    forward.gap_boundaries().map(|witness| witness.operand()),
+                    [0, 1],
+                );
+                assert_eq!(
+                    swapped.gap_boundaries().map(|witness| witness.operand()),
+                    [1, 0],
+                );
+                assert_eq!(
+                    forward.gap_boundaries().map(|witness| witness.boundary()),
+                    [1, usize::from(reverse_second_axis)],
+                );
+                for witness in forward.gap_boundaries() {
+                    let source = &forward_sources[witness.operand()];
+                    let boundary = source.boundaries()[witness.boundary()];
+                    assert_eq!(witness.cap_face(), boundary.cap_face());
+                    assert_eq!(witness.edge(), boundary.edge());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exterior_radial_witness_remains_available_without_an_axial_gap() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for reverse_second_axis in [false, true] {
+            let fixture = fixture_with_geometry(
+                placement,
+                (-2.0, 4.0),
+                (-1.0, 2.0),
+                reverse_second_axis,
+                [-1.5, 1.5],
+                [1.0, 1.0],
+            );
+            for swapped in [false, true] {
+                let graph = section(&fixture, swapped);
+                let sources = sources(&fixture, swapped);
+                assert_eq!(
+                    certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+                    ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn axial_separation_rejects_full_valid_subtolerance_cap_plane_drift() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for perturbation in [CapPlanePerturbation::Shift, CapPlanePerturbation::Tilt] {
+            let mut fixture = axially_separated_fixture(placement, false);
+            let body = fixture.outer.clone();
+            perturb_cap_plane_within_full_tolerance(&mut fixture, &body, 1, perturbation);
+
+            let graph = section(&fixture, false);
+            // Extraction repeats Full validation; reaching Ready demonstrates
+            // why the stricter exact relation binding is independently needed.
+            let sources = sources(&fixture, false);
+            assert_eq!(
+                certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+                ParallelCylinderRelationOutcome::Indeterminate(
+                    ParallelCylinderRelationGap::SourceBoundaryBinding,
+                ),
+                "{placement:?} {perturbation:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn rounded_axis_evaluation_does_not_masquerade_as_an_exact_affine_identity() {
+    let tiny = f64::EPSILON / 2.0;
+    let origin = Point3::new(1.0, 1.0, 1.0);
+    let axis = Vec3::new(tiny, 1.0, 0.0);
+    let rounded = origin + axis;
+    assert_eq!(rounded.x, origin.x);
+    assert!(!axis_parameter_identity_is_exact(
+        rounded, origin, axis, 1.0,
+    ));
+
+    let exact = origin + axis * 2.0;
+    assert!(axis_parameter_identity_is_exact(exact, origin, axis, 2.0));
+}
+
+#[test]
+fn tolerance_backed_side_height_cannot_certify_a_one_ulp_cap_gap() {
+    let boundary = 1.0_f64;
+    let mut fixture = fixture_with_geometry(
+        Placement::World,
+        (-1.0, 2.0),
+        (next_up_positive(boundary), 0.5),
+        false,
+        [0.0, 0.25],
+        [2.0, 0.5],
+    );
+    let body = fixture.outer.clone();
+    perturb_side_height_within_full_tolerance(&mut fixture, &body, 1);
+
+    let graph = section(&fixture, false);
+    // Extraction repeats Full validation, but the tolerance-backed side lift
+    // is wider than the exact one-ULP cap-plane gap.
+    let sources = sources(&fixture, false);
+    assert!(matches!(
+        certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+        ParallelCylinderRelationOutcome::Indeterminate(_)
+    ));
+}
+
+#[test]
+fn exact_constructor_one_ulp_gap_contact_and_overlap_are_distinct() {
+    let boundary = 1.0;
+    for reverse_second_axis in [false, true] {
+        for (second_low, separated, context) in [
+            (next_up_positive(boundary), true, "one-ulp gap"),
+            (boundary, false, "contact"),
+            (next_down_positive(boundary), false, "one-ulp overlap"),
+        ] {
+            let fixture = fixture_with_geometry(
+                Placement::World,
+                (-1.0, 2.0),
+                (second_low, 1.5 - second_low),
+                reverse_second_axis,
+                [-0.5, 0.5],
+                [1.0, 1.0],
+            );
+            let graph = section(&fixture, false);
+            let sources = sources(&fixture, false);
+            let outcome =
+                certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap();
+            assert_eq!(
+                matches!(
+                    outcome,
+                    ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
+                ),
+                separated,
+                "{context} antiparallel={reverse_second_axis}: {outcome:?}",
+            );
         }
     }
 }
@@ -529,12 +853,15 @@ fn relation_work_accepts_exact_n_and_refuses_n_minus_one() {
     for fixture in [
         fixture(Placement::World),
         antiparallel_nested_fixture(Placement::World),
+        axially_separated_fixture(Placement::World, false),
+        axially_separated_fixture(Placement::World, true),
     ] {
         let graph = section(&fixture, false);
         let sources = sources(&fixture, false);
         assert!(matches!(
             certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
             ParallelCylinderRelationOutcome::Certified(_)
+                | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
         ));
 
         let error = certify(
@@ -659,6 +986,73 @@ fn analytic_sources(
             other => panic!("unexpected source extraction: {other:?}"),
         }
     })
+}
+
+fn next_up_positive(value: f64) -> f64 {
+    assert!(value.is_finite() && value > 0.0);
+    f64::from_bits(value.to_bits() + 1)
+}
+
+fn next_down_positive(value: f64) -> f64 {
+    assert!(value.is_finite() && value > 0.0);
+    f64::from_bits(value.to_bits() - 1)
+}
+
+#[test]
+fn normalized_axial_intervals_accept_only_a_strict_one_ulp_gap() {
+    let world = Frame::world();
+    let first_high = 1.0;
+    for reverse_second_axis in [false, true] {
+        for (second_low, expected, context) in [
+            (
+                next_up_positive(first_high),
+                Orientation::Positive,
+                "one-ulp gap",
+            ),
+            (first_high, Orientation::Zero, "exact contact"),
+            (
+                next_down_positive(first_high),
+                Orientation::Negative,
+                "one-ulp overlap",
+            ),
+        ] {
+            let second_high = 1.5;
+            let second_height = second_high - second_low;
+            let second_frame = if reverse_second_axis {
+                Frame::new(Point3::new(0.5, 0.0, second_high), -world.z(), world.x()).unwrap()
+            } else {
+                world.with_origin(Point3::new(0.5, 0.0, second_low))
+            };
+            let sources = analytic_sources(
+                world.with_origin(Point3::new(-0.5, 0.0, -1.0)),
+                2.0,
+                second_frame,
+                second_height,
+            );
+            let supports = sources.each_ref().map(|source| {
+                source
+                    .boundaries()
+                    .map(|boundary| AxialBoundarySupport::exact(boundary.center()))
+            });
+            let normalized = normalize_source_axial_intervals([&sources[0], &sources[1]], supports)
+                .unwrap_or_else(|gap| {
+                    panic!("{context} antiparallel={reverse_second_axis}: {gap:?}")
+                });
+            let first_upper = sources[0].boundaries()[normalized.sources[0].high].center();
+            let second_lower = sources[1].boundaries()[normalized.sources[1].low].center();
+            assert_eq!(
+                axial_compare(normalized.common_axis, second_lower, first_upper).unwrap(),
+                expected,
+                "{context} antiparallel={reverse_second_axis}",
+            );
+            let gap = strict_axial_gap_boundaries(&normalized).unwrap();
+            assert_eq!(
+                gap.is_some(),
+                expected == Orientation::Positive,
+                "{context} antiparallel={reverse_second_axis}",
+            );
+        }
+    }
 }
 
 #[test]

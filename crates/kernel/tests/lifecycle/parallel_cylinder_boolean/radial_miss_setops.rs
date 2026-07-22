@@ -1,4 +1,4 @@
-//! Facade-only lifecycle evidence for disjoint radial-miss Unite/Subtract.
+//! Facade-only lifecycle evidence for certified disjoint finite cylinders.
 //! Wall-time budget: less than 60 seconds for the rigid-frame/order matrix.
 
 use super::*;
@@ -8,96 +8,220 @@ use super::*;
 const ONE_CYLINDER_COPY_WORK: u64 = 26;
 const TWO_CYLINDER_COPY_WORK: u64 = 2 * ONE_CYLINDER_COPY_WORK;
 const ONE_CYLINDER_COPY_IDENTITIES: usize = 26;
-const RADIAL_MISS_RELATION_WORK: u64 = 64;
+const DISJOINT_RELATION_WORK: u64 = 64;
+
+#[derive(Debug, Clone, Copy)]
+struct CylinderSpec {
+    radius: f64,
+    radial_center: [f64; 2],
+    axial: [f64; 2],
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DisjointWitness {
+    ExteriorRadial,
+    ExteriorAxial,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct DisjointCylinderCase {
-    radii: [f64; 2],
-    radial_offset: [f64; 2],
+    name: &'static str,
+    cylinders: [CylinderSpec; 2],
+    witness: DisjointWitness,
 }
 
-const DISJOINT: DisjointCylinderCase = DisjointCylinderCase {
-    radii: [0.75, 1.25],
-    radial_offset: [1.5, 2.0],
+const RADIAL_DISJOINT: DisjointCylinderCase = DisjointCylinderCase {
+    name: "exterior radial separation",
+    cylinders: [
+        CylinderSpec {
+            radius: 0.75,
+            radial_center: [0.0, 0.0],
+            axial: [-1.0, 1.0],
+        },
+        CylinderSpec {
+            radius: 1.25,
+            radial_center: [1.5, 2.0],
+            axial: [-1.0, 1.0],
+        },
+    ],
+    witness: DisjointWitness::ExteriorRadial,
 };
 
-#[derive(Debug, Clone, Copy)]
+const AXIAL_DISJOINT: [DisjointCylinderCase; 4] = [
+    DisjointCylinderCase {
+        name: "axial gap with strict-secant radial supports",
+        cylinders: [
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, -1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [1.0, 0.0],
+                axial: [1.0, 2.0],
+            },
+        ],
+        witness: DisjointWitness::ExteriorAxial,
+    },
+    DisjointCylinderCase {
+        name: "axial gap with strict-internal radial supports",
+        cylinders: [
+            CylinderSpec {
+                radius: 2.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, -1.0],
+            },
+            CylinderSpec {
+                radius: 0.5,
+                radial_center: [0.3, 0.4],
+                axial: [1.0, 2.0],
+            },
+        ],
+        witness: DisjointWitness::ExteriorAxial,
+    },
+    DisjointCylinderCase {
+        name: "axial gap with tangent radial supports",
+        cylinders: [
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, -1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [2.0, 0.0],
+                axial: [1.0, 2.0],
+            },
+        ],
+        witness: DisjointWitness::ExteriorAxial,
+    },
+    DisjointCylinderCase {
+        name: "axial gap with coincident radial supports",
+        cylinders: [
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, -1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [1.0, 2.0],
+            },
+        ],
+        witness: DisjointWitness::ExteriorAxial,
+    },
+];
+
+const DISJOINT_CASES: [DisjointCylinderCase; 5] = [
+    RADIAL_DISJOINT,
+    AXIAL_DISJOINT[0],
+    AXIAL_DISJOINT[1],
+    AXIAL_DISJOINT[2],
+    AXIAL_DISJOINT[3],
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetOperation {
+    Intersect,
     Unite,
-    Subtract { swapped: bool },
+    Subtract,
 }
 
 impl SetOperation {
     const fn operation(self) -> BooleanOperation {
         match self {
+            Self::Intersect => BooleanOperation::Intersect,
             Self::Unite => BooleanOperation::Unite,
-            Self::Subtract { .. } => BooleanOperation::Subtract,
-        }
-    }
-
-    const fn swapped(self) -> bool {
-        match self {
-            Self::Unite => false,
-            Self::Subtract { swapped } => swapped,
+            Self::Subtract => BooleanOperation::Subtract,
         }
     }
 
     const fn result_body_count(self) -> usize {
         match self {
+            Self::Intersect => 0,
             Self::Unite => 2,
-            Self::Subtract { .. } => 1,
+            Self::Subtract => 1,
         }
     }
 
     const fn realization_work(self) -> u64 {
         match self {
+            Self::Intersect => 0,
             Self::Unite => TWO_CYLINDER_COPY_WORK,
-            Self::Subtract { .. } => ONE_CYLINDER_COPY_WORK,
+            Self::Subtract => ONE_CYLINDER_COPY_WORK,
         }
     }
 }
 
-struct CreatedEvidence {
+const SET_OPERATIONS: [SetOperation; 3] = [
+    SetOperation::Intersect,
+    SetOperation::Unite,
+    SetOperation::Subtract,
+];
+
+struct OperationEvidence {
     exports: Vec<Vec<u8>>,
     report: kernel::OperationReport,
 }
 
-fn fixture(placement: Placement, antiparallel: bool) -> Fixture {
-    let distance_squared = DISJOINT.radial_offset[0].powi(2) + DISJOINT.radial_offset[1].powi(2);
-    assert!(distance_squared > (DISJOINT.radii[0] + DISJOINT.radii[1]).powi(2));
+fn assert_certified_disjoint(case: DisjointCylinderCase) {
+    let [first, second] = case.cylinders;
+    assert!(first.radius > 0.0 && second.radius > 0.0, "{}", case.name);
+    assert!(first.axial[0] < first.axial[1], "{}", case.name);
+    assert!(second.axial[0] < second.axial[1], "{}", case.name);
+    match case.witness {
+        DisjointWitness::ExteriorRadial => {
+            let dx = second.radial_center[0] - first.radial_center[0];
+            let dy = second.radial_center[1] - first.radial_center[1];
+            assert!(
+                dx.powi(2) + dy.powi(2) > (first.radius + second.radius).powi(2),
+                "{}",
+                case.name
+            );
+        }
+        DisjointWitness::ExteriorAxial => assert!(
+            first.axial[1] < second.axial[0] || second.axial[1] < first.axial[0],
+            "{}",
+            case.name
+        ),
+    }
+}
 
+fn fixture(case: DisjointCylinderCase, placement: Placement, antiparallel: bool) -> Fixture {
     let frame = shared_frame(placement);
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
     let (outer, inner) = {
         let mut edit = session.edit_part(part_id.clone()).unwrap();
-        let outer = edit
-            .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(0.0, 0.0, -1.0)),
-                DISJOINT.radii[0],
-                2.0,
-            ))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .body();
-        let inner_origin = frame.point_at(
-            DISJOINT.radial_offset[0],
-            DISJOINT.radial_offset[1],
-            if antiparallel { 1.0 } else { -1.0 },
-        );
-        let inner_frame = if antiparallel {
-            Frame::new(inner_origin, -frame.z(), frame.x()).unwrap()
-        } else {
-            frame.with_origin(inner_origin)
-        };
-        let inner = edit
-            .create_cylinder(CylinderRequest::new(inner_frame, DISJOINT.radii[1], 2.0))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .body();
-        (outer, inner)
+        let mut bodies = Vec::with_capacity(2);
+        for (index, cylinder) in case.cylinders.into_iter().enumerate() {
+            let reversed = index == 1 && antiparallel;
+            let authored_start = cylinder.axial[usize::from(reversed)];
+            let origin = frame.point_at(
+                cylinder.radial_center[0],
+                cylinder.radial_center[1],
+                authored_start,
+            );
+            let cylinder_frame = if reversed {
+                Frame::new(origin, -frame.z(), frame.x()).unwrap()
+            } else {
+                frame.with_origin(origin)
+            };
+            bodies.push(
+                edit.create_cylinder(CylinderRequest::new(
+                    cylinder_frame,
+                    cylinder.radius,
+                    cylinder.axial[1] - cylinder.axial[0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body(),
+            );
+        }
+        (bodies.remove(0), bodies.remove(0))
     };
     Fixture {
         session,
@@ -110,7 +234,7 @@ fn fixture(placement: Placement, antiparallel: bool) -> Fixture {
 
 fn run_set_operation(
     fixture: &mut Fixture,
-    operation: BooleanOperation,
+    operation: SetOperation,
     swapped: bool,
     settings: OperationSettings,
 ) -> OperationOutcome<BooleanOutcome> {
@@ -124,10 +248,23 @@ fn run_set_operation(
         .edit_part(fixture.part_id.clone())
         .unwrap()
         .boolean_bodies(
-            BooleanBodiesRequest::new(operation, bodies[0].clone(), bodies[1].clone())
+            BooleanBodiesRequest::new(operation.operation(), bodies[0].clone(), bodies[1].clone())
                 .with_settings(settings),
         )
         .unwrap()
+}
+
+fn usage_at(
+    outcome: &OperationOutcome<BooleanOutcome>,
+    stage: kernel::StageId,
+    resource: ResourceKind,
+) -> Option<u64> {
+    outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == stage && usage.resource == resource)
+        .map(|usage| usage.consumed)
 }
 
 fn assert_full_valid(created: &kernel::BooleanCreatedResult) {
@@ -244,19 +381,25 @@ fn source_copy_lineage(fixture: &Fixture, created: &kernel::BooleanCreatedResult
     body_pairs.into_iter().map(|(_, source)| source).collect()
 }
 
-fn assert_analytic_cylinder(fixture: &Fixture, body: BodyId, source: BodyId) {
-    let (radius, centroid) = if source == fixture.outer {
-        (DISJOINT.radii[0], fixture.frame.origin())
+fn assert_analytic_cylinder(
+    fixture: &Fixture,
+    case: DisjointCylinderCase,
+    body: BodyId,
+    source: BodyId,
+) {
+    let cylinder = if source == fixture.outer {
+        case.cylinders[0]
     } else if source == fixture.inner {
-        (
-            DISJOINT.radii[1],
-            fixture
-                .frame
-                .point_at(DISJOINT.radial_offset[0], DISJOINT.radial_offset[1], 0.0),
-        )
+        case.cylinders[1]
     } else {
         panic!("whole-cylinder result escaped both source bodies")
     };
+    let height = cylinder.axial[1] - cylinder.axial[0];
+    let centroid = fixture.frame.point_at(
+        cylinder.radial_center[0],
+        cylinder.radial_center[1],
+        (cylinder.axial[0] + cylinder.axial[1]) / 2.0,
+    );
     let part = fixture.session.part(fixture.part_id.clone()).unwrap();
     assert_eq!(body_topology(&part, body.clone()), CYLINDER_TOPOLOGY);
     let outcome = part
@@ -273,12 +416,13 @@ fn assert_analytic_cylinder(fixture: &Fixture, body: BodyId, source: BodyId) {
     assert_eq!(full_check.outcome(), CheckOutcome::Valid);
     assert_scalar_matches_analytic(
         properties.volume(),
-        2.0 * core::f64::consts::PI * radius.powi(2),
+        core::f64::consts::PI * cylinder.radius.powi(2) * height,
         "whole-cylinder volume",
     );
     assert_scalar_matches_analytic(
         properties.surface_area(),
-        4.0 * core::f64::consts::PI * radius + 2.0 * core::f64::consts::PI * radius.powi(2),
+        2.0 * core::f64::consts::PI * cylinder.radius * height
+            + 2.0 * core::f64::consts::PI * cylinder.radius.powi(2),
         "whole-cylinder surface area",
     );
     assert_point_matches_analytic(properties.centroid(), centroid);
@@ -311,39 +455,73 @@ fn deterministic_exports(fixture: &mut Fixture, bodies: &[BodyId]) -> Vec<Vec<u8
     exports
 }
 
-fn assert_created(
+fn assert_success(
     fixture: &mut Fixture,
-    outcome: OperationOutcome<BooleanOutcome>,
+    case: DisjointCylinderCase,
     operation: SetOperation,
-) -> CreatedEvidence {
+    swapped: bool,
+    before: FixtureSignature,
+    outcome: OperationOutcome<BooleanOutcome>,
+) -> OperationEvidence {
+    assert_eq!(
+        usage_at(&outcome, BOOLEAN_BSP_WORK, ResourceKind::Work),
+        Some(DISJOINT_RELATION_WORK),
+        "{} {operation:?}",
+        case.name
+    );
+    let realization_work = usage_at(&outcome, BOOLEAN_POST_SELECTION_WORK, ResourceKind::Work);
+    let realized_vertices = usage_at(&outcome, BOOLEAN_REALIZED_VERTICES, ResourceKind::Items);
     let report = outcome.report().clone();
     let result = outcome.into_result().unwrap();
+    if operation == SetOperation::Intersect {
+        let BooleanOutcome::Success(BooleanResult::ProvenEmpty) = result else {
+            panic!("{} Intersect returned {result:#?}", case.name)
+        };
+        assert_eq!(realization_work, Some(0), "{}", case.name);
+        assert_eq!(realized_vertices, Some(0), "{}", case.name);
+        assert_eq!(fixture_signature(fixture), before, "{}", case.name);
+        assert_source_bodies_preserved(fixture, 2);
+        return OperationEvidence {
+            exports: Vec::new(),
+            report,
+        };
+    }
+
     let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
-        panic!("radially disjoint {operation:?} returned {result:#?}")
+        panic!("{} {operation:?} returned {result:#?}", case.name)
     };
+    assert_eq!(
+        realization_work,
+        Some(operation.realization_work()),
+        "{} {operation:?}",
+        case.name
+    );
+    assert_eq!(realized_vertices, Some(0), "{} {operation:?}", case.name);
     assert_eq!(created.bodies().len(), operation.result_body_count());
     assert_full_valid(&created);
     let sources = source_copy_lineage(fixture, &created);
     match operation {
+        SetOperation::Intersect => unreachable!(),
         SetOperation::Unite => {
             assert_eq!(sources, [fixture.outer.clone(), fixture.inner.clone()]);
         }
-        SetOperation::Subtract { swapped: false } => {
-            assert_eq!(sources, [fixture.outer.clone()]);
-        }
-        SetOperation::Subtract { swapped: true } => {
+        SetOperation::Subtract if swapped => {
             assert_eq!(sources, [fixture.inner.clone()]);
+        }
+        SetOperation::Subtract => {
+            assert_eq!(sources, [fixture.outer.clone()]);
         }
     }
     let bodies = created.bodies().to_vec();
     for (body, source) in bodies.iter().cloned().zip(sources) {
-        assert_analytic_cylinder(fixture, body, source);
+        assert_analytic_cylinder(fixture, case, body, source);
     }
     let exports = deterministic_exports(fixture, &bodies);
-    CreatedEvidence { exports, report }
+    assert_source_bodies_preserved(fixture, 2 + operation.result_body_count());
+    OperationEvidence { exports, report }
 }
 
-fn assert_same_evidence(actual: &CreatedEvidence, expected: &CreatedEvidence, label: &str) {
+fn assert_same_evidence(actual: &OperationEvidence, expected: &OperationEvidence, label: &str) {
     assert_eq!(actual.report, expected.report, "{label}: report changed");
     assert_eq!(actual.exports.len(), expected.exports.len(), "{label}");
     for (actual, expected) in actual.exports.iter().zip(&expected.exports) {
@@ -351,76 +529,128 @@ fn assert_same_evidence(actual: &CreatedEvidence, expected: &CreatedEvidence, la
     }
 }
 
-#[test]
-fn exterior_radial_miss_unite_and_ordered_subtract_copy_whole_sources_deterministically() {
-    let mut executions = 0_usize;
-    for placement in [Placement::World, Placement::Oblique] {
-        for antiparallel in [false, true] {
-            let mut canonical_unite = None;
-            for swapped in [false, true] {
-                for repeat in 0..2 {
-                    let mut fixture = fixture(placement, antiparallel);
-                    assert_source_bodies_preserved(&fixture, 2);
-                    let outcome = run_set_operation(
-                        &mut fixture,
-                        BooleanOperation::Unite,
-                        swapped,
-                        OperationSettings::new(),
-                    );
-                    let evidence = assert_created(&mut fixture, outcome, SetOperation::Unite);
-                    assert_source_bodies_preserved(&fixture, 4);
-                    if let Some(canonical) = canonical_unite.as_ref() {
-                        assert_same_evidence(
-                            &evidence,
-                            canonical,
-                            &format!(
-                                "{placement:?} antiparallel={antiparallel} Unite swapped={swapped} repeat={repeat}"
-                            ),
-                        );
-                    } else {
-                        canonical_unite = Some(evidence);
-                    }
-                    executions += 1;
+fn exercise_success_matrix(
+    case: DisjointCylinderCase,
+    placement: Placement,
+    antiparallel: bool,
+) -> usize {
+    assert_certified_disjoint(case);
+    let mut executions = 0;
+    for operation in SET_OPERATIONS {
+        let mut canonical: [Option<OperationEvidence>; 2] = [None, None];
+        for swapped in [false, true] {
+            let canonical_index = usize::from(operation == SetOperation::Subtract && swapped);
+            for repeat in 0..2 {
+                let mut fixture = fixture(case, placement, antiparallel);
+                let before = fixture_signature(&fixture);
+                assert_source_bodies_preserved(&fixture, 2);
+                let outcome =
+                    run_set_operation(&mut fixture, operation, swapped, OperationSettings::new());
+                let evidence =
+                    assert_success(&mut fixture, case, operation, swapped, before, outcome);
+                let label = format!(
+                    "{} {placement:?} antiparallel={antiparallel} {operation:?} swapped={swapped} repeat={repeat}",
+                    case.name
+                );
+                if let Some(expected) = canonical[canonical_index].as_ref() {
+                    assert_same_evidence(&evidence, expected, &label);
+                } else {
+                    canonical[canonical_index] = Some(evidence);
                 }
-            }
-
-            for swapped in [false, true] {
-                let mut canonical_subtract = None;
-                for repeat in 0..2 {
-                    let operation = SetOperation::Subtract { swapped };
-                    let mut fixture = fixture(placement, antiparallel);
-                    assert_source_bodies_preserved(&fixture, 2);
-                    let outcome = run_set_operation(
-                        &mut fixture,
-                        operation.operation(),
-                        operation.swapped(),
-                        OperationSettings::new(),
-                    );
-                    let evidence = assert_created(&mut fixture, outcome, operation);
-                    assert_source_bodies_preserved(&fixture, 3);
-                    if let Some(canonical) = canonical_subtract.as_ref() {
-                        assert_same_evidence(
-                            &evidence,
-                            canonical,
-                            &format!(
-                                "{placement:?} antiparallel={antiparallel} Subtract swapped={swapped} repeat={repeat}"
-                            ),
-                        );
-                    } else {
-                        canonical_subtract = Some(evidence);
-                    }
-                    executions += 1;
-                }
+                executions += 1;
             }
         }
     }
-    assert_eq!(executions, 32);
+    executions
 }
 
-fn settings_at_realization_work(allowed: u64) -> OperationSettings {
+#[test]
+fn certified_radial_and_axial_disjointness_realize_the_same_deterministic_set_contract() {
+    let mut executions = 0;
+    for case in DISJOINT_CASES {
+        for placement in [Placement::World, Placement::Oblique] {
+            for antiparallel in [false, true] {
+                executions += exercise_success_matrix(case, placement, antiparallel);
+            }
+        }
+    }
+    assert_eq!(executions, 240);
+}
+
+fn axial_boundary_case(name: &'static str, second_lower: f64) -> DisjointCylinderCase {
+    DisjointCylinderCase {
+        name,
+        cylinders: [
+            CylinderSpec {
+                radius: 2.0,
+                radial_center: [0.0, 0.0],
+                axial: [0.0, 1.0],
+            },
+            CylinderSpec {
+                radius: 0.5,
+                radial_center: [0.3, 0.4],
+                axial: [second_lower, 3.0],
+            },
+        ],
+        witness: DisjointWitness::ExteriorAxial,
+    }
+}
+
+fn assert_refusal_matrix(case: DisjointCylinderCase, antiparallel: bool) -> usize {
+    let mut executions = 0;
+    for operation in SET_OPERATIONS {
+        let mut canonical: [Option<kernel::OperationReport>; 2] = [None, None];
+        for swapped in [false, true] {
+            let canonical_index = usize::from(operation == SetOperation::Subtract && swapped);
+            for repeat in 0..2 {
+                let mut fixture = fixture(case, Placement::World, antiparallel);
+                let before = fixture_signature(&fixture);
+                let outcome =
+                    run_set_operation(&mut fixture, operation, swapped, OperationSettings::new());
+                let report = outcome.report().clone();
+                let result = outcome.into_result().unwrap();
+                assert!(
+                    matches!(result, BooleanOutcome::Refused(_)),
+                    "{} antiparallel={antiparallel} {operation:?} swapped={swapped} repeat={repeat} returned {result:#?}",
+                    case.name
+                );
+                assert_eq!(fixture_signature(&fixture), before, "{}", case.name);
+                assert_source_bodies_preserved(&fixture, 2);
+                if let Some(expected) = canonical[canonical_index].as_ref() {
+                    assert_eq!(&report, expected, "{} report changed", case.name);
+                } else {
+                    canonical[canonical_index] = Some(report);
+                }
+                executions += 1;
+            }
+        }
+    }
+    executions
+}
+
+#[test]
+fn exact_axial_boundary_admits_one_ulp_gap_but_not_contact_or_overlap() {
+    let boundary = 1.0_f64;
+    let gap = axial_boundary_case("one ULP axial gap", boundary.next_up());
+    let contact = axial_boundary_case("exact axial contact", boundary);
+    let overlap = axial_boundary_case("one ULP axial overlap", boundary.next_down());
+    assert!(gap.cylinders[0].axial[1] < gap.cylinders[1].axial[0]);
+    assert_eq!(contact.cylinders[0].axial[1], contact.cylinders[1].axial[0]);
+    assert!(overlap.cylinders[0].axial[1] > overlap.cylinders[1].axial[0]);
+
+    let mut executions = 0;
+    for antiparallel in [false, true] {
+        executions += exercise_success_matrix(gap, Placement::World, antiparallel);
+        executions += assert_refusal_matrix(contact, antiparallel);
+        executions += assert_refusal_matrix(overlap, antiparallel);
+    }
+    assert_eq!(executions, 72);
+}
+
+fn settings_at(stage: kernel::StageId, allowed: u64) -> OperationSettings {
     OperationSettings::new().with_budget_overrides(
         BudgetPlan::new([LimitSpec::new(
-            BOOLEAN_POST_SELECTION_WORK,
+            stage,
             ResourceKind::Work,
             AccountingMode::Cumulative,
             allowed,
@@ -429,102 +659,144 @@ fn settings_at_realization_work(allowed: u64) -> OperationSettings {
     )
 }
 
-fn realization_work(outcome: &OperationOutcome<BooleanOutcome>) -> u64 {
-    outcome
+fn assert_limit(
+    outcome: &OperationOutcome<BooleanOutcome>,
+    stage: kernel::StageId,
+    expected_work: u64,
+) {
+    let limit = *outcome
         .report()
-        .usage()
-        .iter()
-        .find(|usage| {
-            usage.stage == BOOLEAN_POST_SELECTION_WORK && usage.resource == ResourceKind::Work
-        })
-        .expect("radial-miss set operation did not charge realization work")
-        .consumed
-}
-
-fn realized_vertices(outcome: &OperationOutcome<BooleanOutcome>) -> u64 {
-    outcome
-        .report()
-        .usage()
-        .iter()
-        .find(|usage| {
-            usage.stage == BOOLEAN_REALIZED_VERTICES && usage.resource == ResourceKind::Items
-        })
-        .expect("radial-miss set operation did not report realized vertices")
-        .consumed
+        .limit_events()
+        .first()
+        .expect("disjoint-cylinder N-1 refusal recorded no limit event");
+    assert_eq!(limit.stage, stage);
+    assert_eq!(limit.resource, ResourceKind::Work);
+    assert_eq!(limit.allowed, expected_work - 1);
+    assert_eq!(limit.consumed, expected_work);
+    assert_eq!(outcome.result().unwrap_err().limit(), Some(limit));
+    assert_eq!(outcome.report().limit_events(), &[limit]);
 }
 
 #[test]
-fn exterior_radial_miss_whole_copy_work_accepts_n_and_refuses_n_minus_one_atomically() {
-    let operations = [
-        SetOperation::Unite,
-        SetOperation::Subtract { swapped: false },
-        SetOperation::Subtract { swapped: true },
-    ];
-    for antiparallel in [false, true] {
-        for operation in operations {
-            let expected_work = operation.realization_work();
-            let mut baseline = fixture(Placement::World, antiparallel);
+fn disjoint_relation_work_accepts_n_and_refuses_n_minus_one_atomically() {
+    for case in [RADIAL_DISJOINT, AXIAL_DISJOINT[1]] {
+        for antiparallel in [false, true] {
+            let mut baseline = fixture(case, Placement::World, antiparallel);
+            let before = fixture_signature(&baseline);
             let outcome = run_set_operation(
                 &mut baseline,
-                operation.operation(),
-                operation.swapped(),
+                SetOperation::Intersect,
+                false,
                 OperationSettings::new(),
             );
             assert_eq!(
-                outcome
-                    .report()
-                    .usage()
-                    .iter()
-                    .find(|usage| {
-                        usage.stage == BOOLEAN_BSP_WORK && usage.resource == ResourceKind::Work
-                    })
-                    .expect("radial-miss set operation did not report relation work")
-                    .consumed,
-                RADIAL_MISS_RELATION_WORK,
-                "{operation:?}"
+                usage_at(&outcome, BOOLEAN_BSP_WORK, ResourceKind::Work),
+                Some(DISJOINT_RELATION_WORK),
+                "{}",
+                case.name
             );
-            assert_eq!(realization_work(&outcome), expected_work, "{operation:?}");
-            assert_eq!(realized_vertices(&outcome), 0, "{operation:?}");
             assert!(matches!(
                 outcome.into_result().unwrap(),
-                BooleanOutcome::Success(BooleanResult::Created(_))
+                BooleanOutcome::Success(BooleanResult::ProvenEmpty)
             ));
-            assert_source_bodies_preserved(&baseline, 2 + operation.result_body_count());
+            assert_eq!(fixture_signature(&baseline), before);
 
-            let mut admitted = fixture(Placement::World, antiparallel);
+            let mut admitted = fixture(case, Placement::World, antiparallel);
+            let before = fixture_signature(&admitted);
             let outcome = run_set_operation(
                 &mut admitted,
-                operation.operation(),
-                operation.swapped(),
-                settings_at_realization_work(expected_work),
+                SetOperation::Intersect,
+                false,
+                settings_at(BOOLEAN_BSP_WORK, DISJOINT_RELATION_WORK),
             );
             assert!(matches!(
                 outcome.into_result().unwrap(),
-                BooleanOutcome::Success(BooleanResult::Created(_))
+                BooleanOutcome::Success(BooleanResult::ProvenEmpty)
             ));
-            assert_source_bodies_preserved(&admitted, 2 + operation.result_body_count());
+            assert_eq!(fixture_signature(&admitted), before);
 
-            let mut denied = fixture(Placement::World, antiparallel);
+            let mut denied = fixture(case, Placement::World, antiparallel);
             let before = fixture_signature(&denied);
             let outcome = run_set_operation(
                 &mut denied,
-                operation.operation(),
-                operation.swapped(),
-                settings_at_realization_work(expected_work - 1),
+                SetOperation::Intersect,
+                false,
+                settings_at(BOOLEAN_BSP_WORK, DISJOINT_RELATION_WORK - 1),
             );
-            let limit = *outcome
-                .report()
-                .limit_events()
-                .first()
-                .expect("radial-miss N-1 refusal recorded no limit event");
-            assert_eq!(limit.stage, BOOLEAN_POST_SELECTION_WORK);
-            assert_eq!(limit.resource, ResourceKind::Work);
-            assert_eq!(limit.allowed, expected_work - 1);
-            assert_eq!(limit.consumed, expected_work);
-            assert_eq!(outcome.result().unwrap_err().limit(), Some(limit));
-            assert_eq!(outcome.report().limit_events(), &[limit]);
+            assert_limit(&outcome, BOOLEAN_BSP_WORK, DISJOINT_RELATION_WORK);
             assert_eq!(fixture_signature(&denied), before);
             assert_source_bodies_preserved(&denied, 2);
+        }
+    }
+}
+
+#[test]
+fn disjoint_whole_copy_work_accepts_n_and_refuses_n_minus_one_atomically() {
+    for case in [RADIAL_DISJOINT, AXIAL_DISJOINT[1]] {
+        for antiparallel in [false, true] {
+            for operation in [SetOperation::Unite, SetOperation::Subtract] {
+                for swapped in [false, true] {
+                    if operation == SetOperation::Unite && swapped {
+                        continue;
+                    }
+                    let expected_work = operation.realization_work();
+                    let mut baseline = fixture(case, Placement::World, antiparallel);
+                    let outcome = run_set_operation(
+                        &mut baseline,
+                        operation,
+                        swapped,
+                        OperationSettings::new(),
+                    );
+                    assert_eq!(
+                        usage_at(&outcome, BOOLEAN_BSP_WORK, ResourceKind::Work),
+                        Some(DISJOINT_RELATION_WORK),
+                        "{} {operation:?}",
+                        case.name
+                    );
+                    assert_eq!(
+                        usage_at(&outcome, BOOLEAN_POST_SELECTION_WORK, ResourceKind::Work),
+                        Some(expected_work),
+                        "{} {operation:?}",
+                        case.name
+                    );
+                    assert_eq!(
+                        usage_at(&outcome, BOOLEAN_REALIZED_VERTICES, ResourceKind::Items),
+                        Some(0),
+                        "{} {operation:?}",
+                        case.name
+                    );
+                    assert!(matches!(
+                        outcome.into_result().unwrap(),
+                        BooleanOutcome::Success(BooleanResult::Created(_))
+                    ));
+                    assert_source_bodies_preserved(&baseline, 2 + operation.result_body_count());
+
+                    let mut admitted = fixture(case, Placement::World, antiparallel);
+                    let outcome = run_set_operation(
+                        &mut admitted,
+                        operation,
+                        swapped,
+                        settings_at(BOOLEAN_POST_SELECTION_WORK, expected_work),
+                    );
+                    assert!(matches!(
+                        outcome.into_result().unwrap(),
+                        BooleanOutcome::Success(BooleanResult::Created(_))
+                    ));
+                    assert_source_bodies_preserved(&admitted, 2 + operation.result_body_count());
+
+                    let mut denied = fixture(case, Placement::World, antiparallel);
+                    let before = fixture_signature(&denied);
+                    let outcome = run_set_operation(
+                        &mut denied,
+                        operation,
+                        swapped,
+                        settings_at(BOOLEAN_POST_SELECTION_WORK, expected_work - 1),
+                    );
+                    assert_limit(&outcome, BOOLEAN_POST_SELECTION_WORK, expected_work);
+                    assert_eq!(fixture_signature(&denied), before);
+                    assert_source_bodies_preserved(&denied, 2);
+                }
+            }
         }
     }
 }
