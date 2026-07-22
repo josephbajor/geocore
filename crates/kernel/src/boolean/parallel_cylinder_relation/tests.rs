@@ -7,6 +7,8 @@ use kgeom::frame::Frame;
 use kgeom::surface::Plane;
 use kgeom::vec::{Point2, Point3, Vec3};
 
+use super::super::axial_interval_sweep::plan_axial_interval_sweep;
+use super::super::boundary_select::RegularizedBooleanOperation;
 use super::*;
 use crate::{
     BodyId, CylinderRequest, FaceId, Kernel, PartId, SectionBodiesRequest, SectionCompletion,
@@ -190,6 +192,21 @@ fn axially_separated_fixture(placement: Placement, reverse_second_axis: bool) ->
     )
 }
 
+fn common_support_fixture(
+    first: (f64, f64),
+    second: (f64, f64),
+    reverse_second_axis: bool,
+) -> Fixture {
+    fixture_with_geometry(
+        Placement::World,
+        first,
+        second,
+        reverse_second_axis,
+        [0.0, 0.0],
+        [1.0, 1.0],
+    )
+}
+
 fn section(fixture: &Fixture, swapped: bool) -> BodySectionGraph {
     let (first, second) = if swapped {
         (fixture.inner.clone(), fixture.outer.clone())
@@ -359,6 +376,15 @@ fn certified_axial_contact(
     match outcome {
         ParallelCylinderRelationOutcome::CertifiedAxialContact(certificate) => *certificate,
         other => panic!("{context}: expected certified axial contact, got {other:?}"),
+    }
+}
+
+fn certified_common_support(
+    outcome: ParallelCylinderRelationOutcome,
+) -> CertifiedParallelCylinderCommonSupport {
+    match outcome {
+        ParallelCylinderRelationOutcome::CertifiedCommonSupport(certificate) => *certificate,
+        other => panic!("expected certified common support, got {other:?}"),
     }
 }
 
@@ -829,6 +855,103 @@ fn exact_axial_contact_is_radial_independent_replay_and_swap_deterministic() {
 }
 
 #[test]
+fn exact_common_support_retains_all_four_boundaries_and_endpoint_equalities() {
+    let cases = [
+        ("nested", (-2.0, 4.0), (-1.0, 2.0), [1, 1]),
+        ("crossing", (-2.0, 3.0), (-1.0, 3.0), [1, 1]),
+        ("shared low", (-2.0, 4.0), (-2.0, 2.0), [2, 1]),
+        ("shared high", (-2.0, 2.0), (-1.0, 1.0), [1, 2]),
+        ("equal", (-2.0, 2.0), (-2.0, 2.0), [2, 2]),
+    ];
+    for (name, first, second, intersection_end_contributors) in cases {
+        for reverse_second_axis in [false, true] {
+            let fixture = common_support_fixture(first, second, reverse_second_axis);
+            for swapped in [false, true] {
+                let graph = section(&fixture, swapped);
+                let replay = section(&fixture, swapped);
+                let sources = sources(&fixture, swapped);
+                let relation = certified_common_support(
+                    certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+                );
+                let replayed = certified_common_support(
+                    certify(&fixture, &replay, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+                );
+                assert_eq!(relation, replayed, "{name} swapped={swapped}");
+
+                for (index, witness) in relation.boundaries().iter().enumerate() {
+                    let operand = index / 2;
+                    let boundary = index % 2;
+                    assert_eq!(witness.operand(), operand, "{name} swapped={swapped}");
+                    assert_eq!(witness.boundary(), boundary, "{name} swapped={swapped}");
+                    assert_eq!(
+                        witness.cap_face(),
+                        sources[operand].boundaries()[boundary].cap_face(),
+                        "{name} swapped={swapped}",
+                    );
+                    assert_eq!(
+                        witness.edge(),
+                        sources[operand].boundaries()[boundary].edge(),
+                        "{name} swapped={swapped}",
+                    );
+                }
+
+                let plan = plan_axial_interval_sweep(
+                    RegularizedBooleanOperation::Intersect,
+                    relation.preorder(),
+                );
+                let [span] = plan.spans() else {
+                    panic!("{name} swapped={swapped}: intersection must have one span")
+                };
+                assert_eq!(
+                    [span.low().iter().count(), span.high().iter().count()],
+                    intersection_end_contributors,
+                    "{name} antiparallel={reverse_second_axis} swapped={swapped}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_common_support_preserves_gap_contact_precedence_and_rejects_ring_drift() {
+    for reverse_second_axis in [false, true] {
+        let gap = common_support_fixture((-2.0, 1.0), (1.0, 1.0), reverse_second_axis);
+        let graph = section(&gap, false);
+        let gap_sources = sources(&gap, false);
+        assert!(matches!(
+            certify(&gap, &graph, &gap_sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+            ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
+        ));
+
+        let contact = common_support_fixture((-1.0, 1.0), (0.0, 1.0), reverse_second_axis);
+        let graph = section(&contact, false);
+        let contact_sources = sources(&contact, false);
+        assert!(matches!(
+            certify(
+                &contact,
+                &graph,
+                &contact_sources,
+                PARALLEL_CYLINDER_RELATION_WORK,
+            )
+            .unwrap(),
+            ParallelCylinderRelationOutcome::CertifiedAxialContact(_)
+        ));
+    }
+
+    let mut drifted = common_support_fixture((-2.0, 4.0), (-1.0, 2.0), false);
+    let body = drifted.inner.clone();
+    perturb_side_height_within_full_tolerance(&mut drifted, &body, 1);
+    let graph = section(&drifted, false);
+    let sources = sources(&drifted, false);
+    assert_eq!(
+        certify(&drifted, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+        ParallelCylinderRelationOutcome::Indeterminate(
+            ParallelCylinderRelationGap::SourceBoundaryBinding,
+        ),
+    );
+}
+
+#[test]
 fn exterior_radial_separation_precedes_exact_axial_contact() {
     for placement in [Placement::World, Placement::Oblique] {
         for reverse_second_axis in [false, true] {
@@ -1214,6 +1337,8 @@ fn relation_work_accepts_exact_n_and_refuses_n_minus_one() {
         axially_separated_fixture(Placement::World, true),
         exact_axial_contact_fixture(Placement::World, false, 1.0, [1.0, 1.0]),
         exact_axial_contact_fixture(Placement::World, true, 1.0, [1.0, 1.0]),
+        common_support_fixture((-2.0, 4.0), (-1.0, 2.0), false),
+        common_support_fixture((-2.0, 4.0), (-1.0, 2.0), true),
     ] {
         let graph = section(&fixture, false);
         let sources = sources(&fixture, false);
@@ -1222,6 +1347,7 @@ fn relation_work_accepts_exact_n_and_refuses_n_minus_one() {
             ParallelCylinderRelationOutcome::Certified(_)
                 | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
                 | ParallelCylinderRelationOutcome::CertifiedAxialContact(_)
+                | ParallelCylinderRelationOutcome::CertifiedCommonSupport(_)
         ));
 
         let error = certify(

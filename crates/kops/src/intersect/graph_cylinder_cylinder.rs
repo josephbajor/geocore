@@ -5,8 +5,10 @@
 //! branches) or an exact proof that the two infinite radial supports are
 //! exterior-disjoint. The latter is the only successful empty result in this
 //! closed admission, so generic empty or axially clipped lower results cannot
-//! masquerade as radial separation. Tangencies, internal misses, coincident
-//! regions, skew axes, and every incomplete family remain explicit typed gaps.
+//! masquerade as radial separation. The proof-only classifier additionally
+//! exposes exact external tangency and common-cylinder support without admitting
+//! either as a graph intersection. Internal misses, skew axes, and every
+//! incomplete family remain explicit typed gaps.
 
 use super::bounded_polynomial::ExactScalar;
 use kcore::predicates::{Orientation, orient3d};
@@ -57,14 +59,16 @@ impl ParallelCylinderExteriorRadialSeparation {
 /// This is a proof-only classification of the two infinite radial supports;
 /// it does not inspect or make any claim about bounded axial windows.
 /// [`Self::Unresolved`] is deliberately broad and includes radial overlap,
-/// containment, coincident support, nonparallel axes, and arithmetic outside
-/// the bounded exact-expansion envelope.
+/// containment, nonparallel axes, and arithmetic outside the bounded
+/// exact-expansion envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelCylinderRadialRelation {
     /// The radial supports are separated by a strict positive clearance.
     StrictExterior,
     /// The radial supports have exactly zero external clearance.
     ExactExternalTangent,
+    /// Both cylinders have the same infinite radial support.
+    ExactCommonSupport,
     /// Neither supported proof completed; this is not a geometric relation.
     Unresolved,
 }
@@ -163,10 +167,12 @@ pub(super) fn intersect_certified_parallel_cylinders(
 /// Every source `f64` is treated as its exact dyadic value. Checked expansion
 /// arithmetic fails closed outside its fixed safe envelope. The same sign is
 /// required with both stored axes, making the result independent of operand
-/// order without assuming either axis has exact unit length. Exact tangency
-/// additionally requires the mathematical radius sum to be represented by the
-/// rounded `f64` sum without error; this prevents a rounded sum from becoming
-/// false equality evidence.
+/// order without assuming either axis has exact unit length. Common support
+/// requires zero transverse distance under both axes and exactly equal positive
+/// radii; axial displacement and azimuth chart orientation are irrelevant.
+/// Exact tangency additionally requires the mathematical radius sum to be
+/// represented by the rounded `f64` sum without error; this prevents a rounded
+/// sum from becoming false equality evidence.
 pub fn classify_parallel_cylinder_radial_relation(
     cylinders: [Cylinder; 2],
 ) -> ParallelCylinderRadialRelation {
@@ -179,6 +185,21 @@ pub fn classify_parallel_cylinder_radial_relation(
     ) else {
         return ParallelCylinderRadialRelation::Unresolved;
     };
+
+    let [Some(first_metric), Some(second_metric)] = cylinders
+        .map(|cylinder| exact_parallel_radial_metric(&offset, cylinder.frame().z().to_array()))
+    else {
+        return ParallelCylinderRadialRelation::Unresolved;
+    };
+    let metrics = [first_metric, second_metric];
+    if cylinders[0].radius() == cylinders[1].radius()
+        && metrics
+            .iter()
+            .all(|metric| metric.transverse_squared.is_zero())
+    {
+        return ParallelCylinderRadialRelation::ExactCommonSupport;
+    }
+
     let Some(radius_sum) = exact(cylinders[0].radius())
         .and_then(|first| exact(cylinders[1].radius()).and_then(|second| first.add(&second).ok()))
     else {
@@ -188,13 +209,9 @@ pub fn classify_parallel_cylinder_radial_relation(
         return ParallelCylinderRadialRelation::Unresolved;
     };
 
-    let [Some(first_clearance), Some(second_clearance)] = cylinders.map(|cylinder| {
-        exact_parallel_radial_clearance(
-            &offset,
-            cylinder.frame().z().to_array(),
-            &radius_sum_squared,
-        )
-        .map(|clearance| clearance.sign())
+    let [Some(first_clearance), Some(second_clearance)] = metrics.map(|metric| {
+        exact_parallel_radial_clearance(&metric, &radius_sum_squared)
+            .map(|clearance| clearance.sign())
     }) else {
         return ParallelCylinderRadialRelation::Unresolved;
     };
@@ -219,17 +236,30 @@ fn exact_strict_exterior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
         == ParallelCylinderRadialRelation::StrictExterior
 }
 
-fn exact_parallel_radial_clearance(
+struct ExactParallelRadialMetric {
+    transverse_squared: ExactScalar,
+    axis_squared: ExactScalar,
+}
+
+fn exact_parallel_radial_metric(
     offset: &[ExactScalar; 3],
     axis: [f64; 3],
-    radius_sum_squared: &ExactScalar,
-) -> Option<ExactScalar> {
+) -> Option<ExactParallelRadialMetric> {
     let axis = exact_vector(axis)?;
     let cross = exact_cross(offset, &axis)?;
-    let cross_squared = exact_norm_squared(&cross)?;
-    let axis_squared = exact_norm_squared(&axis)?;
-    cross_squared
-        .sub(&radius_sum_squared.mul(&axis_squared).ok()?)
+    Some(ExactParallelRadialMetric {
+        transverse_squared: exact_norm_squared(&cross)?,
+        axis_squared: exact_norm_squared(&axis)?,
+    })
+}
+
+fn exact_parallel_radial_clearance(
+    metric: &ExactParallelRadialMetric,
+    radius_sum_squared: &ExactScalar,
+) -> Option<ExactScalar> {
+    metric
+        .transverse_squared
+        .sub(&radius_sum_squared.mul(&metric.axis_squared).ok()?)
         .ok()
 }
 

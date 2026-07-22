@@ -19,6 +19,7 @@ use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
 };
 use super::parallel_cylinder_contact::execute_parallel_cylinder_contact_unite;
+use super::parallel_cylinder_interval::execute_parallel_cylinder_common_support;
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCoincidentCapRelation,
     CertifiedParallelCylinderLensRelation, ParallelCylinderRelationOutcome,
@@ -68,6 +69,16 @@ pub(super) fn execute_parallel_cylinder_boolean(
                 [&first, &second],
                 &graph,
                 &contact,
+                linear,
+                scope,
+            )
+        }
+        ParallelCylinderRelationOutcome::CertifiedCommonSupport(relation) => {
+            execute_parallel_cylinder_common_support(
+                edit,
+                operation,
+                [&first, &second],
+                &relation,
                 linear,
                 scope,
             )

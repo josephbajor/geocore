@@ -15,6 +15,10 @@ fn cylinder(origin: Point3, axis: Vec3, radius: f64) -> Cylinder {
     Cylinder::new(Frame::new(origin, axis, x_hint).unwrap(), radius).unwrap()
 }
 
+fn cylinder_with_chart(origin: Point3, axis: Vec3, x_hint: Vec3, radius: f64) -> Cylinder {
+    Cylinder::new(Frame::new(origin, axis, x_hint).unwrap(), radius).unwrap()
+}
+
 fn world_cylinder(x: f64, z: f64, radius: f64) -> Cylinder {
     cylinder(Point3::new(x, 0.0, z), Vec3::new(0.0, 0.0, 1.0), radius)
 }
@@ -27,6 +31,93 @@ fn assert_relation(expected: ParallelCylinderRadialRelation, first: Cylinder, se
     assert_eq!(
         classify_parallel_cylinder_radial_relation([second, first]),
         expected
+    );
+}
+
+#[test]
+fn exact_common_support_is_axial_direction_and_chart_independent() {
+    let world_first = cylinder_with_chart(
+        Point3::new(5.0, -2.0, -4096.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        1.25,
+    );
+    let world_second = cylinder_with_chart(
+        Point3::new(5.0, -2.0, 8192.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        1.25,
+    );
+    assert_relation(
+        ParallelCylinderRadialRelation::ExactCommonSupport,
+        world_first,
+        world_second,
+    );
+
+    let oblique_first = cylinder_with_chart(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 3.0, 4.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        0.75,
+    );
+    let axis = oblique_first.frame().z();
+    let oblique_second = cylinder_with_chart(
+        Point3::new(axis.x, axis.y, axis.z),
+        -axis,
+        Vec3::new(0.0, 0.8, -0.6),
+        0.75,
+    );
+    assert_relation(
+        ParallelCylinderRadialRelation::ExactCommonSupport,
+        oblique_first,
+        oblique_second,
+    );
+}
+
+#[test]
+fn common_support_rejects_one_ulp_radius_and_radial_differences() {
+    let first = world_cylinder(1.0, -4.0, 1.0);
+    assert_relation(
+        ParallelCylinderRadialRelation::Unresolved,
+        first,
+        world_cylinder(1.0, 8.0, 1.0_f64.next_up()),
+    );
+    assert_relation(
+        ParallelCylinderRadialRelation::Unresolved,
+        first,
+        world_cylinder(1.0_f64.next_up(), 8.0, 1.0),
+    );
+}
+
+#[test]
+fn common_support_rejects_near_parallel_unsafe_and_rounded_oblique_lines() {
+    let first = world_cylinder(0.0, 0.0, 1.0);
+    let near_parallel = cylinder(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(2.0_f64.powi(-40), 0.0, 1.0),
+        1.0,
+    );
+    assert_relation(
+        ParallelCylinderRadialRelation::Unresolved,
+        first,
+        near_parallel,
+    );
+
+    let unsafe_scale = 2.0_f64.powi(600);
+    assert_relation(
+        ParallelCylinderRadialRelation::Unresolved,
+        first,
+        world_cylinder(unsafe_scale, 0.0, 1.0),
+    );
+
+    let translated_origin = Point3::new(1.0, 1.0, 1.0);
+    let oblique_first = cylinder(translated_origin, Vec3::new(0.6, 0.0, 0.8), 1.0);
+    let rounded_axial_origin = translated_origin + oblique_first.frame().z();
+    let rounded_oblique = cylinder(rounded_axial_origin, oblique_first.frame().z(), 1.0);
+    assert_relation(
+        ParallelCylinderRadialRelation::Unresolved,
+        oblique_first,
+        rounded_oblique,
     );
 }
 

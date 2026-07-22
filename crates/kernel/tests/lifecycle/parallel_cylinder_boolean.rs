@@ -13,6 +13,8 @@ mod axial_contact_unite;
 mod coincident_cap_setops;
 #[path = "parallel_cylinder_boolean/coincident_caps.rs"]
 mod coincident_caps;
+#[path = "parallel_cylinder_boolean/common_support_setops.rs"]
+mod common_support_setops;
 #[path = "parallel_cylinder_boolean/radial_miss.rs"]
 mod radial_miss;
 #[path = "parallel_cylinder_boolean/radial_miss_setops.rs"]

@@ -35,6 +35,9 @@ pub(super) use coincident_caps::{
     CertifiedParallelCylinderCoincidentCapRelation, ParallelCylinderCoincidentCapEndWitness,
     ParallelCylinderSourceRootWitness,
 };
+#[path = "parallel_cylinder_relation/common_support.rs"]
+mod common_support;
+pub(super) use common_support::CertifiedParallelCylinderCommonSupport;
 
 /// Fixed proof work charged before the first semantic exit.
 ///
@@ -55,6 +58,8 @@ pub(super) enum ParallelCylinderRelationGap {
     AxesNotExactlyParallel,
     /// The radial circles are not certified as a strict two-root secant.
     RadialSecancyNotStrict,
+    /// The four exact axial endpoint comparisons did not form one total preorder.
+    AxialEndpointOrder,
     /// A source's authored cap interval is not strictly positive on its own axis.
     SourceAxialOrder,
     /// A cap plane/ring cannot be proof-bound to its finite-cylinder support.
@@ -277,6 +282,9 @@ pub(super) enum ParallelCylinderRelationOutcome {
     CertifiedAxialSeparation(Box<CertifiedParallelCylinderAxialSeparation>),
     /// Exact live cap/ring supports prove one zero axial gap.
     CertifiedAxialContact(Box<CertifiedParallelCylinderAxialContact>),
+    /// Exact common radial support and all four live source boundaries prove a
+    /// strict positive axial-overlap interval relation.
+    CertifiedCommonSupport(Box<CertifiedParallelCylinderCommonSupport>),
     /// Every analytic, topology, and provenance obligation was discharged.
     Certified(Box<CertifiedParallelCylinderLensRelation>),
     /// The operation-local incomplete-Section theorem for one or two shared
@@ -329,6 +337,15 @@ pub(super) fn certify_parallel_cylinder_relation(
         return Ok(ParallelCylinderRelationOutcome::CertifiedAxialContact(
             Box::new(certificate),
         ));
+    }
+    match common_support::certify_common_support(cylinders, &normalized) {
+        Ok(Some(certificate)) => {
+            return Ok(ParallelCylinderRelationOutcome::CertifiedCommonSupport(
+                Box::new(certificate),
+            ));
+        }
+        Ok(None) => {}
+        Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
     }
     match certify_external_radial_tangency(cylinders, &normalized) {
         Ok(Some(certificate)) => {
