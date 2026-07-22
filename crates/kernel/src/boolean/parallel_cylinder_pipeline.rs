@@ -59,7 +59,7 @@ pub(super) fn execute_parallel_cylinder_boolean(
             execute_disjoint_source_boolean(edit, operation, &bodies, [&first, &second], scope)
         }
         ParallelCylinderRelationOutcome::CertifiedAxialContact(_) => {
-            refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
+            execute_axial_contact_boolean(edit, operation, &bodies, [&first, &second], scope)
         }
         ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
             edit,
@@ -106,6 +106,31 @@ fn execute_disjoint_source_boolean(
             ],
             scope,
         ),
+        PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
+            edit,
+            &[(bodies[0].clone(), cylinders[0])],
+            scope,
+        ),
+    }
+}
+
+/// Consume exact cap contact under regularized-solid semantics.
+///
+/// Contact has no three-dimensional intersection interior, and subtracting a
+/// boundary-only contact leaves the minuend unchanged. Unite still requires
+/// proof-owned removal of the shared cap interface and therefore fails closed.
+fn execute_axial_contact_boolean(
+    edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
+    bodies: &[BodyId; 2],
+    cylinders: [&CertifiedCylinderSource; 2],
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    match operation {
+        PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
+        PlanarBooleanOperation::Unite => {
+            refused(CurvedBooleanPipelineRefusal::ClassificationBoundaryContact)
+        }
         PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
             edit,
             &[(bodies[0].clone(), cylinders[0])],
