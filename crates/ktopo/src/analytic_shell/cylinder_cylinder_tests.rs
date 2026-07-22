@@ -23,6 +23,7 @@ const E4: AnalyticEdgeKey = AnalyticEdgeKey::new(4);
 const E5: AnalyticEdgeKey = AnalyticEdgeKey::new(5);
 const E6: AnalyticEdgeKey = AnalyticEdgeKey::new(6);
 const E7: AnalyticEdgeKey = AnalyticEdgeKey::new(7);
+const E8: AnalyticEdgeKey = AnalyticEdgeKey::new(8);
 
 #[derive(Clone, Copy)]
 struct LensGeometry {
@@ -37,11 +38,14 @@ fn map(scale: f64, offset: f64) -> AffineParamMap1d {
 }
 
 fn lens_geometry() -> LensGeometry {
+    lens_geometry_in(Frame::world())
+}
+
+fn lens_geometry_in(first_frame: Frame) -> LensGeometry {
     let angle = core::f64::consts::PI / 3.0;
-    let first_frame = Frame::world();
-    let second_frame = first_frame.with_origin(Point3::new(1.0, 0.0, 0.0));
-    let top_first = first_frame.with_origin(Point3::new(0.0, 0.0, 1.0));
-    let top_second = second_frame.with_origin(Point3::new(1.0, 0.0, 1.0));
+    let second_frame = first_frame.with_origin(first_frame.point_at(1.0, 0.0, 0.0));
+    let top_first = first_frame.with_origin(first_frame.point_at(0.0, 0.0, 1.0));
+    let top_second = second_frame.with_origin(first_frame.point_at(1.0, 0.0, 1.0));
     let circles = [
         Circle::new(first_frame, 1.0).unwrap(),
         Circle::new(top_first, 1.0).unwrap(),
@@ -66,6 +70,15 @@ fn lens_geometry() -> LensGeometry {
 }
 
 fn cylinder_arc(edge: AnalyticEdgeKey, sense: Sense, height: f64) -> AnalyticShellFin {
+    cylinder_arc_chart(edge, sense, height, 0)
+}
+
+fn cylinder_arc_chart(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    height: f64,
+    chart: i32,
+) -> AnalyticShellFin {
     AnalyticShellFin::new(
         edge,
         sense,
@@ -74,11 +87,17 @@ fn cylinder_arc(edge: AnalyticEdgeKey, sense: Sense, height: f64) -> AnalyticShe
                 Line2d::new(Point2::new(0.0, height), Vec2::new(1.0, 0.0)).unwrap(),
             ),
             map(1.0, 0.0),
-        ),
+        )
+        .with_chart(crate::entity::PcurveChart::shifted([chart, 0])),
     )
 }
 
-fn cylinder_ruling(edge: AnalyticEdgeKey, sense: Sense, longitude: f64) -> AnalyticShellFin {
+fn cylinder_ruling_chart(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    longitude: f64,
+    chart: i32,
+) -> AnalyticShellFin {
     AnalyticShellFin::new(
         edge,
         sense,
@@ -87,8 +106,13 @@ fn cylinder_ruling(edge: AnalyticEdgeKey, sense: Sense, longitude: f64) -> Analy
                 Line2d::new(Point2::new(longitude, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
             ),
             map(1.0, 0.0),
-        ),
+        )
+        .with_chart(crate::entity::PcurveChart::shifted([chart, 0])),
     )
+}
+
+fn cylinder_ruling(edge: AnalyticEdgeKey, sense: Sense, longitude: f64) -> AnalyticShellFin {
+    cylinder_ruling_chart(edge, sense, longitude, 0)
 }
 
 fn cap_arc(
@@ -154,13 +178,13 @@ fn lens_edges(geometry: LensGeometry) -> Vec<AnalyticShellEdge> {
         AnalyticShellEdge::new(
             E4,
             [V0, V2],
-            AnalyticShellCurve::Line(Line::new(lower, Vec3::new(0.0, 0.0, 1.0)).unwrap()),
+            AnalyticShellCurve::Line(Line::new(lower, geometry.cylinders[0].frame().z()).unwrap()),
             ParamRange::new(0.0, 1.0),
         ),
         AnalyticShellEdge::new(
             E5,
             [V1, V3],
-            AnalyticShellCurve::Line(Line::new(upper, Vec3::new(0.0, 0.0, 1.0)).unwrap()),
+            AnalyticShellCurve::Line(Line::new(upper, geometry.cylinders[0].frame().z()).unwrap()),
             ParamRange::new(0.0, 1.0),
         ),
         AnalyticShellEdge::new(
@@ -336,6 +360,135 @@ pub(crate) fn unsplit_parallel_cylinder_lens_input() -> AnalyticShellInput {
         edges,
         faces,
     )
+}
+
+/// Structural finite host band after one strict-secant circular product
+/// notch reaches its upper cap. This fixture is shared with the shell theorem
+/// tests so incidence, chart lifting, and assembly are exercised together.
+pub(crate) fn cap_reaching_cylinder_notch_input(
+    frame: Frame,
+    permuted: bool,
+) -> AnalyticShellInput {
+    let geometry = lens_geometry_in(frame);
+    let a = geometry.angle;
+    let tau = core::f64::consts::TAU;
+    let host_frame = *geometry.cylinders[0].frame();
+    let bottom_origin = host_frame.point_at(0.0, 0.0, -1.0);
+    let bottom_circle = Circle::new(host_frame.with_origin(bottom_origin), 1.0).unwrap();
+    let bottom_plane =
+        Plane::new(Frame::new(bottom_origin, -host_frame.z(), host_frame.x()).unwrap());
+    let inner_plane = Plane::new(host_frame);
+    let reached_plane = Plane::new(host_frame.with_origin(host_frame.point_at(0.0, 0.0, 1.0)));
+
+    let mut edges = lens_edges(geometry);
+    edges.truncate(6);
+    edges[1] = AnalyticShellEdge::new(
+        E1,
+        [V3, V2],
+        AnalyticShellCurve::Circle(geometry.circles[1]),
+        ParamRange::new(a, tau - a),
+    );
+
+    let host_u = [a - 2.0 * tau, (a - 2.0 * tau) + tau];
+    let host_ring = AnalyticShellFin::new(
+        E8,
+        Sense::Forward,
+        AnalyticPcurveUse::new(
+            AnalyticShellPcurve::Line(
+                Line2d::new(Point2::new(0.0, -1.0), Vec2::new(1.0, 0.0)).unwrap(),
+            ),
+            map(1.0, 0.0),
+        )
+        .with_closure_winding([1, 0]),
+    );
+    let bottom_cap_use = cap_arc(E8, Sense::Reversed, Point2::new(0.0, 0.0), -1.0);
+    let bottom_cap_ring = AnalyticShellFin::new(
+        bottom_cap_use.edge(),
+        bottom_cap_use.sense(),
+        bottom_cap_use.pcurve().with_closure_winding([0, 0]),
+    );
+
+    let mut input = AnalyticShellInput::new(
+        vec![
+            AnalyticShellVertex::new(V0, geometry.points[0]),
+            AnalyticShellVertex::new(V1, geometry.points[1]),
+            AnalyticShellVertex::new(V2, geometry.points[2]),
+            AnalyticShellVertex::new(V3, geometry.points[3]),
+        ],
+        edges,
+        vec![
+            AnalyticShellFace::new(
+                AnalyticFaceKey::new(0),
+                AnalyticShellSurface::Cylinder(geometry.cylinders[0]),
+                Sense::Forward,
+                FaceDomain::from_bounds(host_u[0], host_u[1], -1.0, 1.0).unwrap(),
+                vec![
+                    AnalyticShellLoop::new(vec![host_ring]),
+                    AnalyticShellLoop::new(vec![
+                        cylinder_arc_chart(E0, Sense::Reversed, 0.0, -1),
+                        cylinder_ruling_chart(E4, Sense::Forward, -a, -1),
+                        cylinder_arc_chart(E1, Sense::Reversed, 1.0, -2),
+                        cylinder_ruling_chart(E5, Sense::Reversed, a, -2),
+                    ]),
+                ],
+            ),
+            AnalyticShellFace::new(
+                AnalyticFaceKey::new(1),
+                AnalyticShellSurface::Cylinder(geometry.cylinders[1]),
+                Sense::Reversed,
+                FaceDomain::from_bounds(2.0 * a, 4.0 * a, 0.0, 1.0).unwrap(),
+                vec![AnalyticShellLoop::new(vec![
+                    cylinder_ruling(E4, Sense::Reversed, 4.0 * a),
+                    cylinder_arc(E2, Sense::Reversed, 0.0),
+                    cylinder_ruling(E5, Sense::Forward, 2.0 * a),
+                    cylinder_arc(E3, Sense::Forward, 1.0),
+                ])],
+            ),
+            AnalyticShellFace::new(
+                AnalyticFaceKey::new(2),
+                AnalyticShellSurface::Plane(bottom_plane),
+                Sense::Forward,
+                FaceDomain::from_bounds(-1.1, 1.1, -1.1, 1.1).unwrap(),
+                vec![AnalyticShellLoop::new(vec![bottom_cap_ring])],
+            ),
+            AnalyticShellFace::new(
+                AnalyticFaceKey::new(3),
+                AnalyticShellSurface::Plane(inner_plane),
+                Sense::Forward,
+                FaceDomain::from_bounds(-0.1, 1.1, -1.0, 1.0).unwrap(),
+                vec![AnalyticShellLoop::new(vec![
+                    cap_arc(E0, Sense::Forward, Point2::new(0.0, 0.0), 1.0),
+                    cap_arc(E2, Sense::Forward, Point2::new(1.0, 0.0), 1.0),
+                ])],
+            ),
+            AnalyticShellFace::new(
+                AnalyticFaceKey::new(4),
+                AnalyticShellSurface::Plane(reached_plane),
+                Sense::Forward,
+                FaceDomain::from_bounds(-1.1, 1.1, -1.1, 1.1).unwrap(),
+                vec![AnalyticShellLoop::new(vec![
+                    cap_arc(E1, Sense::Forward, Point2::new(0.0, 0.0), 1.0),
+                    cap_arc(E3, Sense::Reversed, Point2::new(1.0, 0.0), 1.0),
+                ])],
+            ),
+        ],
+    )
+    .with_closed_edges(vec![AnalyticShellClosedEdge::new(
+        E8,
+        AnalyticShellCurve::Circle(bottom_circle),
+        ParamRange::new(host_u[0], host_u[1]),
+    )]);
+    if permuted {
+        input.vertices.reverse();
+        input.edges.rotate_left(3);
+        input.faces.reverse();
+        for face in &mut input.faces {
+            for loop_ in &mut face.loops {
+                loop_.fins.rotate_left(1);
+            }
+        }
+    }
+    input
 }
 
 #[test]

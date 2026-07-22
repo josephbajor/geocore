@@ -15,6 +15,9 @@
 //! bounded-loop proof, and contact, overlap, nesting, unsupported winding, or
 //! unresolved arithmetic fails closed.
 
+use super::periodic_line_loop::{
+    certify_piecewise_periodic_line_loop, periodic_line_loop_proof_work,
+};
 use super::{
     BoundedLoopSpan, LoopSimplicity, Segment2, certify_bounded_analytic_loop_orientation,
     certify_convex_polygon_circle_containment, certify_loop_orientation, certify_loop_simplicity,
@@ -58,16 +61,21 @@ pub(crate) fn face_loop_containment_budget() -> BudgetPlan {
     .expect("valid face-loop containment budget")
 }
 
-/// Exact structural work charged before allocating proof scratch.
+/// Deterministic structural allowance for one scoped face-layout proof.
 pub(crate) fn face_loop_containment_work(loop_count: usize, fin_count: usize) -> Option<u64> {
     let loops = u64::try_from(loop_count).ok()?;
     let fins = u64::try_from(fin_count).ok()?;
     let loop_pairs = loops.checked_mul(loops.saturating_sub(1))?.checked_div(2)?;
-    // One loop record, one fin record plus the maximum complete interval
-    // cover for each analytic span, every unordered peer comparison, and one
-    // candidate-outer comparison slot per ordered loop pair.
+    let periodic_line_work = periodic_line_loop_proof_work(fin_count)?;
+    // One loop record; one fin record plus its maximum complete interval
+    // cover; three conservative base-fin pair passes for periodic edge/tail
+    // identity plus cross-boundary identity; every pair in the three-layer
+    // periodic universal cover; every unordered loop pair; and one
+    // candidate-outer slot per ordered loop pair. This also dominates the
+    // repeated bounded-simplicity consumers on nonperiodic branches.
     loops
-        .checked_add(fins.checked_mul(1 + MAX_CIRCLE_CHUNKS as u64)?)?
+        .checked_add(fins.checked_mul(MAX_CIRCLE_CHUNKS as u64)?)?
+        .checked_add(periodic_line_work)?
         .checked_add(loop_pairs)?
         .checked_add(loops.checked_mul(loops)?)
 }
@@ -106,9 +114,10 @@ struct LoopEnvelope {
     full_circle: Option<FullCircle>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PeriodicRing {
-    edge: EdgeId,
+    loop_id: LoopId,
+    edges: Vec<EdgeId>,
     height: Interval,
 }
 
@@ -187,6 +196,14 @@ fn certify_cylinder_layout(store: &Store, face_id: crate::entity::FaceId) -> Res
             rings.push(ring);
             continue;
         }
+        if let Some(ring) = certify_piecewise_periodic_line_loop(store, face_id, loop_id)? {
+            rings.push(PeriodicRing {
+                loop_id,
+                edges: ring.edges().to_vec(),
+                height: ring.height(),
+            });
+            continue;
+        }
         let Some(envelope) = prepare_bounded_envelope(store, face_id, loop_id)? else {
             return Ok(false);
         };
@@ -195,7 +212,8 @@ fn certify_cylinder_layout(store: &Store, face_id: crate::entity::FaceId) -> Res
     let [first, second] = rings.as_slice() else {
         return Ok(false);
     };
-    if first.edge == second.edge {
+    if first.loop_id == second.loop_id || first.edges.iter().any(|edge| second.edges.contains(edge))
+    {
         return Ok(false);
     }
     let hole_bounds = holes.iter().map(|hole| hole.bounds).collect::<Vec<_>>();
@@ -363,7 +381,8 @@ fn prepare_periodic_ring(
         return Ok(None);
     }
     Ok(Some(PeriodicRing {
-        edge: fin.edge,
+        loop_id,
+        edges: vec![fin.edge],
         height,
     }))
 }
@@ -770,7 +789,7 @@ mod tests {
     #[test]
     fn work_formula_accepts_exact_n_and_rejects_n_minus_one() {
         let required = face_loop_containment_work(4, 10).unwrap();
-        assert_eq!(required, 4 + 650 + 6 + 16);
+        assert_eq!(required, 4 + 650 + 3 * 45 + 435 + 6 + 16);
 
         let exact_session = session_with_limit(required);
         let exact_context = kcore::operation::OperationContext::new(

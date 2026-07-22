@@ -2376,6 +2376,7 @@ mod tests {
                     306,
                     4096
                 ),
+                proof_snapshot(crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
@@ -2444,6 +2445,7 @@ mod tests {
                     4096
                 ),
                 snapshot(CALLER_STAGE, ResourceKind::Work, 3, 5),
+                proof_snapshot(crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),

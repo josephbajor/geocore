@@ -101,6 +101,107 @@ fn periodic_window_fails_closed_when_bounded_intervals_cover_every_seam() {
     );
 }
 
+fn bounded_periodic_line(origin: Point2, direction: Vec2) -> AnalyticPcurveUse {
+    AnalyticPcurveUse::new(
+        AnalyticShellPcurve::Line(Line2d::new(origin, direction).unwrap()),
+        AffineParamMap1d::new(1.0, 0.0).unwrap(),
+    )
+}
+
+fn normalize_bounded_periodic_face(
+    surface: AnalyticShellSurface,
+    authored: ParamRange,
+    uses: &[(AnalyticPcurveUse, ParamRange)],
+) -> Result<(ParamRange, ktopo::entity::FaceDomain), MixedShellMaterializationError> {
+    let period = surface_periodicity(surface)[0]
+        .ok_or(MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+    let intervals = uses
+        .iter()
+        .map(|(pcurve, range)| {
+            pcurve_bounds(surface, *pcurve, *range).map(|(min, max)| (min.x, max.x))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let window = select_common_periodic_window(period, authored, &intervals)?;
+    let mut bounds = None;
+    for (pcurve, range) in uses {
+        let normalized = normalize_periodic_pcurve_chart(surface, window, *pcurve, *range)?;
+        include_pcurve_bounds(&mut bounds, pcurve_bounds(surface, normalized, *range)?);
+    }
+    let (min, max) = bounds.ok_or(MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+    let domain = ktopo::entity::FaceDomain::from_bounds(min.x, max.x, min.y, max.y)
+        .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+    Ok((window, domain))
+}
+
+#[test]
+fn bounded_only_periodic_face_normalization_is_permutation_stable_and_fails_closed() {
+    let period = core::f64::consts::TAU;
+    let surface =
+        AnalyticShellSurface::Cylinder(kgeom::surface::Cylinder::new(Frame::world(), 1.0).unwrap());
+    let authored = ParamRange::new(0.0, period);
+    let lower = period / 6.0;
+    let split = 5.0 * period / 6.0;
+    let upper = lower + period;
+    assert_eq!(upper - lower, period);
+    // A bounded four-edge Cylinder loop with two horizontal arcs authored on
+    // opposite lifts. The arcs are complementary and the two axial rulings
+    // join their shared fibers, so the noncontractible loop spans one period.
+    let uses = vec![
+        (
+            bounded_periodic_line(Point2::new(0.0, -1.0), Vec2::new(1.0, 0.0)),
+            ParamRange::new(split, upper),
+        ),
+        (
+            bounded_periodic_line(Point2::new(upper, -1.0), Vec2::new(0.0, 1.0)),
+            ParamRange::new(0.0, 2.0),
+        ),
+        (
+            bounded_periodic_line(Point2::new(0.0, 1.0), Vec2::new(1.0, 0.0)),
+            ParamRange::new(lower, split),
+        ),
+        (
+            bounded_periodic_line(Point2::new(split, -1.0), Vec2::new(0.0, 1.0)),
+            ParamRange::new(0.0, 2.0),
+        ),
+    ];
+    let expected = normalize_bounded_periodic_face(surface, authored, &uses).unwrap();
+    assert_eq!(expected.1.u, expected.0);
+    assert_eq!(expected.0.width(), period);
+    assert_eq!(expected.1.u.width(), period);
+
+    let mut permuted = uses.clone();
+    permuted.reverse();
+    assert_eq!(
+        normalize_bounded_periodic_face(surface, authored, &permuted).unwrap(),
+        expected
+    );
+
+    let shifts = [-2, 1, 3, -1];
+    let mut shifted_permutation = uses
+        .iter()
+        .zip(shifts)
+        .map(|((pcurve, range), shift)| {
+            (pcurve.with_chart(PcurveChart::shifted([shift, 0])), *range)
+        })
+        .collect::<Vec<_>>();
+    shifted_permutation.rotate_left(1);
+    shifted_permutation.reverse();
+    let actual = normalize_bounded_periodic_face(surface, authored, &shifted_permutation).unwrap();
+    assert_eq!(actual.1, expected.1);
+    assert_eq!(actual.0.width(), period);
+    assert_eq!(actual.1.u.width(), period);
+    let chart_epsilon = 256.0 * f64::EPSILON * actual.0.hi.abs().max(1.0);
+    assert!(actual.1.u.lo >= actual.0.lo - chart_epsilon);
+    assert!(actual.1.u.hi <= actual.0.hi + chart_epsilon);
+
+    let mut tampered = uses;
+    tampered[0].1 = ParamRange::new(split, split + period + 0.25);
+    assert_eq!(
+        normalize_bounded_periodic_face(surface, authored, &tampered),
+        Err(MixedShellMaterializationError::NoCommonPeriodicWindow)
+    );
+}
+
 fn horizontal_ring_use(scale: f64, winding: [i32; 2]) -> AnalyticPcurveUse {
     AnalyticPcurveUse::new(
         AnalyticShellPcurve::Line(Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
@@ -146,6 +247,36 @@ fn endpoint_free_periodic_use_requires_exact_horizontal_full_winding() {
 }
 
 #[test]
+fn periodic_window_work_preserves_source_store_errors() {
+    let mut source_store = Store::new();
+    let body = ktopo::make::block(&mut source_store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let raw_face = source_store.faces_of_body(body).unwrap()[0];
+    let mut session = crate::Kernel::new().create_session();
+    let part = session.create_part();
+    let plan = MixedShellProofPlan {
+        faces: vec![MixedShellFacePlan {
+            source: source(),
+            source_face: crate::FaceId::new(part, raw_face),
+            selected_orientation: SelectedOrientation::Preserved,
+            loops: Vec::new(),
+        }],
+        section_edges: Vec::new(),
+        bounded_source_spans: Vec::new(),
+        cap_rings: Vec::new(),
+        materialization: RetainedMaterializationEvidence {
+            source_spans: Vec::new(),
+            section_trims: Vec::new(),
+        },
+        materialization_gaps: Vec::new(),
+    };
+
+    assert_eq!(
+        prepare_mixed_shell_materialization(&plan, &Store::new()),
+        Err(MixedShellMaterializationError::StoreRead)
+    );
+}
+
+#[test]
 fn periodic_window_ceiling_accepts_n_and_refuses_n_minus_one_or_one_more_candidate() {
     use crate::boolean::pipeline::PLANAR_BOOLEAN_REALIZATION_WORK;
     use kcore::operation::{
@@ -154,8 +285,10 @@ fn periodic_window_ceiling_accepts_n_and_refuses_n_minus_one_or_one_more_candida
     };
 
     let exact = periodic_face_window_work(5, 3, 2).unwrap();
+    let bounded_only = periodic_face_window_work(4, 4, 0).unwrap();
     let one_more_candidate = periodic_face_window_work(6, 4, 2).unwrap();
     assert!(one_more_candidate > exact);
+    assert_eq!(bounded_only, 289);
     assert_eq!(periodic_window_application_work(10, 3), Some(19));
     assert_eq!(periodic_window_application_work(10, 4), Some(26));
     let ledger_at = |allowed| {
@@ -174,6 +307,10 @@ fn periodic_window_ceiling_accepts_n_and_refuses_n_minus_one_or_one_more_candida
     admitted
         .charge(PLANAR_BOOLEAN_REALIZATION_WORK, exact)
         .unwrap();
+    let mut bounded_admitted = ledger_at(bounded_only);
+    bounded_admitted
+        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, bounded_only)
+        .unwrap();
 
     let assert_refusal = |allowed, consumed| {
         let mut ledger = ledger_at(allowed);
@@ -188,5 +325,6 @@ fn periodic_window_ceiling_accepts_n_and_refuses_n_minus_one_or_one_more_candida
         );
     };
     assert_refusal(exact - 1, exact);
+    assert_refusal(bounded_only - 1, bounded_only);
     assert_refusal(exact, one_more_candidate);
 }

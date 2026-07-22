@@ -25,6 +25,7 @@ use super::mixed_profile_prism_proof::{
 
 #[path = "portal_cylinder_shell_proof/profile_radial_proof.rs"]
 mod profile_radial_proof;
+pub(super) use profile_radial_proof::circle_secant_span_side;
 use profile_radial_proof::{profile_radial_bounds, profile_radial_side};
 
 /// Cumulative deterministic work for portal-cylinder shell proofs.
@@ -67,7 +68,7 @@ struct OuterBoundary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RadialSide {
+pub(super) enum RadialSide {
     Inside,
     Outside,
 }

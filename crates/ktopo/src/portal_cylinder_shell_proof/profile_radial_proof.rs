@@ -82,7 +82,7 @@ fn circle_radial_side(cylinder: Cylinder, use_: CapUse, portal: CapUse) -> Optio
     )
 }
 
-fn circle_secant_span_side(
+pub(in crate::shell_proof) fn circle_secant_span_side(
     cylinder: Cylinder,
     circle: kgeom::curve::Circle,
     range: ParamRange,

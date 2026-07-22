@@ -18,7 +18,10 @@ use crate::check::{
 use crate::entity::{BodyId, BodyKind, FaceId, LoopId, Sense};
 use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::loop_proof::bounded_pcurve_integral::BoundedPcurveSpan;
-use crate::loop_proof::prepare_bounded_analytic_loop;
+use crate::loop_proof::{
+    certify_piecewise_periodic_line_spans, periodic_line_loop_proof_work,
+    prepare_bounded_analytic_loop,
+};
 use crate::store::Store;
 use kcore::error::{Error, Result};
 use kcore::interval::Interval;
@@ -300,6 +303,7 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
     let faces = store.faces_of_body(body)?;
     let mut loops = 0_u64;
     let mut span_work = 0_u64;
+    let mut periodic_proof_work = 0_u64;
     for face_id in &faces {
         let face = store.get(*face_id)?;
         loops = loops
@@ -313,7 +317,19 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
             })?;
         let surface = store.get(face.surface)?;
         for &loop_id in &face.loops {
-            for &fin_id in &store.get(loop_id)?.fins {
+            let loop_ = store.get(loop_id)?;
+            if matches!(surface, SurfaceGeom::Cylinder(_)) && loop_.fins.len() >= 2 {
+                periodic_proof_work = periodic_proof_work
+                    .checked_add(periodic_line_loop_proof_work(loop_.fins.len()).ok_or(
+                        Error::InvalidGeometry {
+                            reason: "body-properties periodic proof work overflow",
+                        },
+                    )?)
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "body-properties periodic proof work overflow",
+                    })?;
+            }
+            for &fin_id in &loop_.fins {
                 let fin = store.get(fin_id)?;
                 let cost = match fin.pcurve.and_then(|use_| store.get(use_.curve()).ok()) {
                     Some(Curve2dGeom::Line(_)) => match surface {
@@ -343,6 +359,7 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
         })?)
         .and_then(|work| work.checked_add(loops.checked_mul(8)?))
         .and_then(|work| work.checked_add(span_work))
+        .and_then(|work| work.checked_add(periodic_proof_work))
         .ok_or(Error::InvalidGeometry {
             reason: "body-properties analytic work overflow",
         })
@@ -673,10 +690,21 @@ fn prepare_property_loop<'a>(
         .get(loop_id)
         .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
     if loop_.fins.len() >= 2 {
-        let prepared = prepare_bounded_analytic_loop(store, face_id, loop_id)
+        if let Some(prepared) = prepare_bounded_analytic_loop(store, face_id, loop_id)
             .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
-            .ok_or(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id })?;
-        return Ok(prepared.into_iter().map(|span| span.geometry()).collect());
+        {
+            return Ok(prepared.into_iter().map(|span| span.geometry()).collect());
+        }
+        // A bounded noncontractible Cylinder loop has no zero-winding chart
+        // closure. Consume the loop theorem's certified universal-cover
+        // traversal instead of re-deriving lifts in the integrator.
+        if matches!(surface, SurfaceGeom::Cylinder(_))
+            && let Some(prepared) = certify_piecewise_periodic_line_spans(store, face_id, loop_id)
+                .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
+        {
+            return Ok(prepared);
+        }
+        return Err(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id });
     }
 
     let [fin_id] = loop_.fins.as_slice() else {

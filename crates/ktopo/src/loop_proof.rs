@@ -13,6 +13,7 @@ pub(crate) mod bounded_pcurve_integral;
 pub(crate) mod bounded_pcurve_simplicity;
 #[cfg(test)]
 mod periodic_lift_tests;
+mod periodic_line_loop;
 
 #[cfg(test)]
 pub(crate) use analytic_face_layout::FACE_LOOP_CONTAINMENT_WORK;
@@ -25,6 +26,10 @@ use self::bounded_pcurve_integral::{
 use self::bounded_pcurve_simplicity::{
     BoundedLoopSimplicity, BoundedLoopSpan, CertifiedBoundedLoopJoin,
     certify_bounded_loop_simplicity,
+};
+use self::periodic_line_loop::certify_piecewise_periodic_line_loop;
+pub(crate) use self::periodic_line_loop::{
+    certify_piecewise_periodic_line_spans, periodic_line_loop_proof_work,
 };
 use crate::entity::{Edge, FinPcurve, LoopId, Sense, VertexId};
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
@@ -108,6 +113,9 @@ pub(crate) fn certify_loop_orientation(
     }
     if let Some(orientation) = certify_bounded_analytic_loop_orientation(store, face_id, loop_id)? {
         return Ok(Some(orientation));
+    }
+    if let Some(periodic) = certify_piecewise_periodic_line_loop(store, face_id, loop_id)? {
+        return Ok(Some(periodic.orientation()));
     }
     let [fin_id] = loop_.fins.as_slice() else {
         return Ok(None);
@@ -584,7 +592,13 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
     let Some(segments) = planar_segment_ring(store, loop_id)? else {
         let face_id = loop_.face;
         let Some(spans) = prepare_bounded_analytic_loop(store, face_id, loop_id)? else {
-            return Ok(LoopSimplicity::Indeterminate);
+            return Ok(
+                if certify_piecewise_periodic_line_loop(store, face_id, loop_id)?.is_some() {
+                    LoopSimplicity::Certified
+                } else {
+                    LoopSimplicity::Indeterminate
+                },
+            );
         };
         return Ok(match certify_bounded_loop_simplicity(&spans) {
             BoundedLoopSimplicity::Certified => LoopSimplicity::Certified,

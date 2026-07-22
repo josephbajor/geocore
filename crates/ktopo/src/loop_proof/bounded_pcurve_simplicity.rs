@@ -148,6 +148,37 @@ pub(crate) fn certify_bounded_loop_simplicity<K: Copy + Eq>(
         return BoundedLoopSimplicity::Indeterminate(gap);
     }
 
+    certify_span_pairs(spans)
+}
+
+/// Certify a finite family of already-lifted analytic spans pairwise simple.
+///
+/// Unlike [`certify_bounded_loop_simplicity`], this entry point does not
+/// require the family itself to be one cyclic topology sequence. Shared
+/// endpoint keys and join tokens still authorize only roots confined to the
+/// corresponding endpoint neighborhoods. It is used for adjacent layers of
+/// a periodic universal cover, where the finite family is an open chain.
+pub(super) fn certify_bounded_span_family_simplicity<K: Copy + Eq>(
+    spans: &[BoundedLoopSpan<'_, K>],
+) -> BoundedLoopSimplicity {
+    if spans.len() < 2 {
+        return BoundedLoopSimplicity::Indeterminate(BoundedLoopSimplicityGap::TooFewSpans);
+    }
+    if spans
+        .len()
+        .checked_mul(spans.len().saturating_sub(1))
+        .and_then(|work| work.checked_div(2))
+        .is_none()
+    {
+        return BoundedLoopSimplicity::Indeterminate(BoundedLoopSimplicityGap::PairWorkOverflow);
+    }
+    if let Err(gap) = validate_span_geometry(spans) {
+        return BoundedLoopSimplicity::Indeterminate(gap);
+    }
+    certify_span_pairs(spans)
+}
+
+fn certify_span_pairs<K: Copy + Eq>(spans: &[BoundedLoopSpan<'_, K>]) -> BoundedLoopSimplicity {
     let mut first_gap = None;
     for left in 0..spans.len() {
         for right in left + 1..spans.len() {
@@ -184,6 +215,24 @@ pub(crate) fn certify_bounded_loop_simplicity<K: Copy + Eq>(
 fn validate_loop<K: Copy + Eq>(
     spans: &[BoundedLoopSpan<'_, K>],
 ) -> core::result::Result<(), BoundedLoopSimplicityGap> {
+    let endpoints = validate_span_geometry(spans)?;
+    for index in 0..spans.len() {
+        let next = (index + 1) % spans.len();
+        if spans[index].head != spans[next].tail {
+            return Err(BoundedLoopSimplicityGap::TopologyDiscontinuity { span_index: index });
+        }
+        if !points_bit_equal(endpoints[index].1, endpoints[next].0)
+            && spans[index].head_join.is_none()
+        {
+            return Err(BoundedLoopSimplicityGap::ChartDiscontinuity { span_index: index });
+        }
+    }
+    Ok(())
+}
+
+fn validate_span_geometry<K: Copy + Eq>(
+    spans: &[BoundedLoopSpan<'_, K>],
+) -> core::result::Result<Vec<(Point2, Point2)>, BoundedLoopSimplicityGap> {
     let mut endpoints = Vec::with_capacity(spans.len());
     for (index, span) in spans.iter().copied().enumerate() {
         let geometry = span.geometry;
@@ -209,18 +258,7 @@ fn validate_loop<K: Copy + Eq>(
             .ok_or(BoundedLoopSimplicityGap::NonFiniteInput { span_index: index })?;
         endpoints.push((start, end));
     }
-    for index in 0..spans.len() {
-        let next = (index + 1) % spans.len();
-        if spans[index].head != spans[next].tail {
-            return Err(BoundedLoopSimplicityGap::TopologyDiscontinuity { span_index: index });
-        }
-        if !points_bit_equal(endpoints[index].1, endpoints[next].0)
-            && spans[index].head_join.is_none()
-        {
-            return Err(BoundedLoopSimplicityGap::ChartDiscontinuity { span_index: index });
-        }
-    }
-    Ok(())
+    Ok(endpoints)
 }
 
 fn pair_relation<K: Copy + Eq>(

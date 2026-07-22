@@ -717,16 +717,24 @@ fn periodic_window_application_work(edge_count: usize, endpoint_free_edges: usiz
     edges.checked_add(rings.checked_mul(rings)?)
 }
 
+fn work_count<T>(value: Option<T>) -> Result<T, MixedShellMaterializationError> {
+    value.ok_or(MixedShellMaterializationError::WorkCountOverflow)
+}
+
 fn periodic_window_work(
     plan: &MixedShellProofPlan,
     physical_edges: &[PhysicalEdge],
-) -> Option<u64> {
+    store: &Store,
+) -> Result<u64, MixedShellMaterializationError> {
     let edge_count = physical_edges.len();
     let endpoint_free_edges = physical_edges
         .iter()
         .filter(|edge| edge.endpoints.is_none())
         .count();
-    let mut work = periodic_window_application_work(edge_count, endpoint_free_edges)?;
+    let mut work = work_count(periodic_window_application_work(
+        edge_count,
+        endpoint_free_edges,
+    ))?;
     let mut total_uses = 0_usize;
     let mut planar_uses = 0_usize;
     let mut section_uses = 0_usize;
@@ -736,47 +744,59 @@ fn periodic_window_work(
         let mut bounded = 0_usize;
         let mut endpoint_free = 0_usize;
         for use_ in face.loops().iter().flat_map(|loop_| loop_.uses()) {
-            uses = uses.checked_add(1)?;
+            uses = work_count(uses.checked_add(1))?;
             match use_.edge() {
                 MixedShellEdgeKey::PlanarSource { .. } => {
-                    planar_uses = planar_uses.checked_add(1)?;
-                    bounded = bounded.checked_add(1)?;
+                    planar_uses = work_count(planar_uses.checked_add(1))?;
+                    bounded = work_count(bounded.checked_add(1))?;
                 }
                 MixedShellEdgeKey::SectionFragment(_) => {
-                    section_uses = section_uses.checked_add(1)?;
-                    bounded = bounded.checked_add(1)?;
+                    section_uses = work_count(section_uses.checked_add(1))?;
+                    bounded = work_count(bounded.checked_add(1))?;
                 }
                 MixedShellEdgeKey::PeriodicSource { .. } => {
-                    endpoint_free_uses = endpoint_free_uses.checked_add(1)?;
-                    endpoint_free = endpoint_free.checked_add(1)?;
+                    endpoint_free_uses = work_count(endpoint_free_uses.checked_add(1))?;
+                    endpoint_free = work_count(endpoint_free.checked_add(1))?;
                 }
             }
         }
-        total_uses = total_uses.checked_add(uses)?;
-        // Every face pays for the initial endpoint-free detection scan. Plane
-        // caps stop after this scan; periodic faces continue under the ceiling.
-        work = work.checked_add(u64::try_from(uses).ok()?)?;
-        if endpoint_free != 0 {
-            work = work.checked_add(periodic_face_window_work(uses, bounded, endpoint_free)?)?;
+        total_uses = work_count(total_uses.checked_add(uses))?;
+        // Preserve the initial all-face scan ceiling. Only an analytic
+        // periodic face pays the common-window proof, including bounded-only
+        // faces with no endpoint-free ring.
+        let uses_u64 =
+            u64::try_from(uses).map_err(|_| MixedShellMaterializationError::WorkCountOverflow)?;
+        work = work_count(work.checked_add(uses_u64))?;
+        let (surface, _, _) = source_face_geometry(face, store)?;
+        if matches!(surface, AnalyticShellSurface::Cylinder(_))
+            && (bounded != 0 || endpoint_free != 0)
+        {
+            let face_work = work_count(periodic_face_window_work(uses, bounded, endpoint_free))?;
+            work = work_count(work.checked_add(face_work))?;
         }
     }
-    let uses = u64::try_from(total_uses).ok()?;
-    let edges = u64::try_from(edge_count).ok()?;
-    let planar = u64::try_from(planar_uses).ok()?;
-    let retained_spans = u64::try_from(plan.materialization.source_spans.len()).ok()?;
-    let section = u64::try_from(section_uses).ok()?;
-    let section_edges = u64::try_from(plan.section_edges.len()).ok()?;
-    let endpoint_free = u64::try_from(endpoint_free_uses).ok()?;
-    let cap_rings = u64::try_from(plan.cap_rings().len()).ok()?;
+    let as_work =
+        |value| u64::try_from(value).map_err(|_| MixedShellMaterializationError::WorkCountOverflow);
+    let uses = as_work(total_uses)?;
+    let edges = as_work(edge_count)?;
+    let planar = as_work(planar_uses)?;
+    let retained_spans = as_work(plan.materialization.source_spans.len())?;
+    let section = as_work(section_uses)?;
+    let section_edges = as_work(plan.section_edges.len())?;
+    let endpoint_free = as_work(endpoint_free_uses)?;
+    let cap_rings = as_work(plan.cap_rings().len())?;
     // Every use resolves its physical edge by scanning E edges and their two
     // uses. Lineage resolution then scans the relevant retained source spans,
     // section edges, or endpoint-free cap-ring bindings.
-    work = work
-        .checked_add(uses.checked_mul(edges)?.checked_mul(2)?)?
-        .checked_add(planar.checked_mul(retained_spans)?)?
-        .checked_add(section.checked_mul(section_edges)?)?
-        .checked_add(endpoint_free.checked_mul(cap_rings)?)?;
-    Some(work)
+    let identity_work = work_count(
+        uses.checked_mul(edges)
+            .and_then(|value| value.checked_mul(2)),
+    )?;
+    work = work_count(work.checked_add(identity_work))?;
+    work = work_count(work.checked_add(work_count(planar.checked_mul(retained_spans))?))?;
+    work = work_count(work.checked_add(work_count(section.checked_mul(section_edges))?))?;
+    work = work_count(work.checked_add(work_count(endpoint_free.checked_mul(cap_rings))?))?;
+    Ok(work)
 }
 
 fn endpoint_free_ring(
@@ -1015,8 +1035,7 @@ pub(crate) fn prepare_mixed_shell_materialization(
         .and_then(|value| value.checked_add(u64::try_from(planar_use_count).ok()?))
         .and_then(|value| value.checked_add(u64::try_from(plan.section_edges.len()).ok()?))
         .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
-    let periodic_window_work = periodic_window_work(plan, &edges)
-        .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
+    let periodic_window_work = periodic_window_work(plan, &edges, store)?;
     let work = base_work
         .checked_add(periodic_window_work)
         .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
@@ -1607,7 +1626,7 @@ fn prepare_periodic_face_windows(
                 }
             }
         }
-        if endpoint_free_uses.is_empty() {
+        if endpoint_free_uses.is_empty() && bounded_intervals.is_empty() {
             continue;
         }
         let window = select_common_periodic_window(period, source_domain.u, &bounded_intervals)?;
@@ -1771,12 +1790,7 @@ fn build_mixed_shell_input_from_blueprint(
     let mut analytic_faces = Vec::with_capacity(plan.faces.len());
     for (face_index, face) in plan.faces.iter().enumerate() {
         let (surface, sense, source_domain) = source_face_geometry(face, store)?;
-        let contains_endpoint_free_ring = face
-            .loops()
-            .iter()
-            .flat_map(|loop_| loop_.uses())
-            .any(|use_| matches!(use_.edge(), MixedShellEdgeKey::PeriodicSource { .. }));
-        let periodic_window = periodic_face_windows[face_index].unwrap_or(source_domain.u);
+        let periodic_window = periodic_face_windows[face_index];
         let mut derived_bounds = None;
         let mut loops = Vec::with_capacity(face.loops().len());
         for (loop_index, loop_) in face.loops().iter().enumerate() {
@@ -1796,7 +1810,7 @@ fn build_mixed_shell_input_from_blueprint(
                 let pcurve = materialized_pcurve_for_use(
                     plan, store, face_index, loop_index, use_index, use_, physical,
                 )?;
-                let pcurve = if contains_endpoint_free_ring {
+                let pcurve = if let Some(periodic_window) = periodic_window {
                     normalize_periodic_pcurve_chart(
                         surface,
                         periodic_window,

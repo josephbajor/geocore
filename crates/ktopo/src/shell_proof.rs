@@ -31,6 +31,8 @@ use kgeom::frame::Frame;
 use kgeom::surface::Cylinder;
 use kgeom::vec::{Point2, Point3, Vec3};
 
+#[path = "cap_reaching_cylinder_shell_proof.rs"]
+mod cap_reaching_cylinder_shell_proof;
 #[path = "chord_portal_shell_proof.rs"]
 mod chord_portal_shell_proof;
 #[path = "convex_cylindrical_shell_proof.rs"]
@@ -41,6 +43,8 @@ mod cylindrical_host_proof;
 mod mixed_profile_prism_proof;
 #[path = "portal_cylinder_shell_proof.rs"]
 mod portal_cylinder_shell_proof;
+#[cfg(test)]
+pub(crate) use cap_reaching_cylinder_shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use chord_portal_shell_proof::CHORD_PORTAL_SHELL_WORK;
 #[cfg(test)]
@@ -72,6 +76,7 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         .overlaid(&cylindrical_host_proof::cylindrical_host_proof_budget())
         .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
+        .overlaid(&cap_reaching_cylinder_shell_proof::cap_reaching_cylinder_proof_budget())
         .overlaid(&chord_portal_shell_proof::chord_portal_shell_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
@@ -182,6 +187,15 @@ fn certify_shell_impl(
         shell_id,
         scope.as_deref_mut(),
     )? {
+        return Ok(certification);
+    }
+    if let Some(certification) =
+        cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell(
+            store,
+            shell_id,
+            scope.as_deref_mut(),
+        )?
+    {
         return Ok(certification);
     }
     if let Some(certification) = portal_cylinder_shell_proof::certify_portal_cylinder_shell(
