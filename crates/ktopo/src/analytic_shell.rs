@@ -8,9 +8,10 @@
 //! combinatorics.
 //!
 //! Every edge is proved from its two face uses.  The admitted proof families
-//! are Plane/Plane lines, transverse Plane/Cylinder rulings, and transverse
-//! Plane/Cylinder circles.  These are representation families, not shell
-//! layouts: unsupported analytic pairings fail closed with a typed error.
+//! are Plane/Plane lines, transverse Plane/Cylinder rulings, transverse
+//! Cylinder/Cylinder rulings, and transverse Plane/Cylinder circles. These are
+//! representation families, not shell layouts: unsupported analytic pairings
+//! fail closed with a typed error.
 
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -28,10 +29,12 @@ use kgeom::surface::{Cylinder, Plane, Surface};
 use kgeom::vec::{Point2, Point3};
 use kgraph::{
     AffineParamMap1d, CylinderLongitudeTrace, CylinderRulingTrace, IntersectionCertificateError,
-    PairedPlaneCylinderCircleResidualCertificate, PairedPlaneCylinderRulingResidualCertificate,
-    PairedPlaneLineResidualCertificate, PlaneCircleTrace, PlaneCylinderCircleTrace,
-    PlaneCylinderRulingTrace, PlaneRulingTrace, certify_paired_plane_cylinder_circle_residuals,
-    certify_paired_plane_cylinder_ruling_residuals, certify_paired_plane_line_residuals,
+    PairedCylinderCylinderRulingResidualCertificate, PairedPlaneCylinderCircleResidualCertificate,
+    PairedPlaneCylinderRulingResidualCertificate, PairedPlaneLineResidualCertificate,
+    PlaneCircleTrace, PlaneCylinderCircleTrace, PlaneCylinderRulingTrace, PlaneRulingTrace,
+    certify_paired_cylinder_cylinder_ruling_residuals,
+    certify_paired_plane_cylinder_circle_residuals, certify_paired_plane_cylinder_ruling_residuals,
+    certify_paired_plane_line_residuals,
 };
 
 mod assemble;
@@ -41,6 +44,8 @@ pub use lineage_ruling::SourceLineagePlaneCylinderRulingResidualCertificate;
 
 #[cfg(test)]
 mod assemble_tests;
+#[cfg(test)]
+mod cylinder_cylinder_tests;
 
 macro_rules! stable_key {
     ($name:ident, $doc:literal) => {
@@ -515,6 +520,8 @@ pub enum AnalyticEdgeProof {
     /// A finite transverse cylinder ruling whose plane-family witness comes
     /// from two whole-fin signed-axis lines on the lineaged source face.
     SourceLineagePlaneCylinderRuling(SourceLineagePlaneCylinderRulingResidualCertificate),
+    /// A finite strict-secant ruling lifted through two cylindrical pcurves.
+    CylinderCylinderRuling(PairedCylinderCylinderRulingResidualCertificate),
     /// A circle whose complete period is proved on a plane and cylinder.
     PlaneCylinderCircle(PairedPlaneCylinderCircleResidualCertificate),
 }
@@ -1391,6 +1398,11 @@ fn certify_edge_pair(
             AnalyticShellSurface::Plane(_),
         ) => certify_ruling(carrier, edge.logical_range(), uses, store, tolerance),
         (
+            AnalyticShellCurve::Line(carrier),
+            AnalyticShellSurface::Cylinder(_),
+            AnalyticShellSurface::Cylinder(_),
+        ) => certify_cylinder_cylinder_ruling(carrier, edge.logical_range(), uses, tolerance),
+        (
             AnalyticShellCurve::Circle(carrier),
             AnalyticShellSurface::Plane(plane),
             AnalyticShellSurface::Cylinder(cylinder),
@@ -1403,6 +1415,30 @@ fn certify_edge_pair(
         _ => return Err(AnalyticShellPlanError::UnsupportedPairing(key)),
     };
     certified.map_err(|source| AnalyticShellPlanError::PairingCertification { edge: key, source })
+}
+
+fn certify_cylinder_cylinder_ruling(
+    carrier: Line,
+    range: ParamRange,
+    uses: [UseCandidate; 2],
+    tolerance: f64,
+) -> Result<AnalyticEdgeProof, IntersectionCertificateError> {
+    let traces = uses.map(|use_| {
+        let AnalyticShellSurface::Cylinder(cylinder) = use_.surface else {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        };
+        let AnalyticShellPcurve::Line(pcurve) = use_.pcurve.curve else {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        };
+        Ok(CylinderRulingTrace::new(
+            cylinder,
+            pcurve,
+            use_.pcurve.edge_to_pcurve,
+        ))
+    });
+    let [first, second] = traces;
+    certify_paired_cylinder_cylinder_ruling_residuals(carrier, range, [first?, second?], tolerance)
+        .map(AnalyticEdgeProof::CylinderCylinderRuling)
 }
 
 fn certify_ruling(

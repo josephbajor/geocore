@@ -4,9 +4,10 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use super::{
-    AnalyticEdgeDeclaration, AnalyticEdgeKey, AnalyticEdgeProof, AnalyticFaceKey,
-    AnalyticShellCurve, AnalyticShellInput, AnalyticShellPcurve, AnalyticShellPlanError,
-    AnalyticShellSurface, AnalyticVertexKey, PreparedAnalyticShell, prepare_analytic_shell,
+    AnalyticEdgeDeclaration, AnalyticEdgeKey, AnalyticEdgeProof, AnalyticEdgeUseRef,
+    AnalyticFaceKey, AnalyticPcurveUse, AnalyticShellCurve, AnalyticShellInput,
+    AnalyticShellPcurve, AnalyticShellPlanError, AnalyticShellSurface, AnalyticVertexKey,
+    PreparedAnalyticShell, prepare_analytic_shell,
 };
 use crate::entity::{
     BodyId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinPcurve, Loop, ParamMap1d, ShellId,
@@ -15,7 +16,12 @@ use crate::entity::{
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::transaction::Transaction;
 use kcore::error::Error;
+use kgeom::curve::Line;
 use kgeom::param::ParamRange;
+use kgraph::{
+    CylinderRulingTrace, PairedCylinderCylinderRulingResidualCertificate,
+    certify_paired_cylinder_cylinder_ruling_residuals,
+};
 
 /// Stable topology handles produced by analytic-shell assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +173,14 @@ impl Transaction<'_> {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn allocate_prepared_analytic_shell_for_test(
+        &mut self,
+        prepared: &PreparedAnalyticShell,
+    ) -> Result<AnalyticShellOutput, AnalyticShellAssemblyError> {
+        self.allocate_prepared_analytic_shell(prepared)
+    }
+
     fn allocate_vertices(
         &mut self,
         prepared: &PreparedAnalyticShell,
@@ -285,6 +299,17 @@ impl Transaction<'_> {
                         certificate,
                     )?
                 }
+                AnalyticEdgeProof::CylinderCylinderRuling(certificate) => {
+                    let carrier = self.recertify_cylinder_cylinder_ruling(
+                        prepared,
+                        declaration,
+                        uses,
+                        surfaces,
+                        pcurves,
+                        certificate,
+                    )?;
+                    self.store_mut().insert_curve(CurveGeom::Line(carrier))?
+                }
                 AnalyticEdgeProof::PlaneCylinderRuling(_)
                 | AnalyticEdgeProof::SourceLineagePlaneCylinderRuling(_)
                 | AnalyticEdgeProof::PlaneCylinderCircle(_) => {
@@ -315,6 +340,63 @@ impl Transaction<'_> {
             edges.insert(key, handle);
         }
         Ok(edges)
+    }
+
+    fn recertify_cylinder_cylinder_ruling(
+        &self,
+        prepared: &PreparedAnalyticShell,
+        declaration: AnalyticEdgeDeclaration,
+        uses: [AnalyticEdgeUseRef; 2],
+        surfaces: &BTreeMap<AnalyticFaceKey, crate::entity::SurfaceId>,
+        pcurves: &BTreeMap<UseKey, crate::entity::Curve2dId>,
+        certificate: PairedCylinderCylinderRulingResidualCertificate,
+    ) -> Result<Line, Error> {
+        let AnalyticShellCurve::Line(carrier) = declaration.carrier() else {
+            return Err(Error::InvalidGeometry {
+                reason: "prepared Cylinder/Cylinder ruling lost its line carrier",
+            });
+        };
+        let traces: [Result<CylinderRulingTrace, Error>; 2] = uses.map(|use_| {
+            let surface = surfaces
+                .get(&use_.face())
+                .and_then(|handle| self.store().surface(*handle).ok())
+                .and_then(SurfaceGeom::as_cylinder)
+                .copied()
+                .ok_or(Error::InvalidGeometry {
+                    reason: "prepared Cylinder/Cylinder ruling lost a cylinder source",
+                })?;
+            let key = (use_.face(), use_.loop_index(), use_.fin_index());
+            let pcurve = pcurves
+                .get(&key)
+                .and_then(|handle| self.store().pcurve(*handle).ok())
+                .and_then(Curve2dGeom::as_line)
+                .copied()
+                .ok_or(Error::InvalidGeometry {
+                    reason: "prepared Cylinder/Cylinder ruling lost a line trace",
+                })?;
+            let parameter_map = prepared_pcurve_use(prepared, use_)
+                .ok_or(Error::InvalidGeometry {
+                    reason: "prepared Cylinder/Cylinder ruling lost its source use",
+                })?
+                .edge_to_pcurve();
+            Ok(CylinderRulingTrace::new(surface, pcurve, parameter_map))
+        });
+        let [first, second] = traces;
+        let recertified = certify_paired_cylinder_cylinder_ruling_residuals(
+            carrier,
+            declaration.logical_range(),
+            [first?, second?],
+            certificate.tolerance(),
+        )
+        .map_err(|_| Error::InvalidGeometry {
+            reason: "materialized Cylinder/Cylinder ruling failed exact residual recertification",
+        })?;
+        if recertified != certificate {
+            return Err(Error::InvalidGeometry {
+                reason: "materialized Cylinder/Cylinder ruling changed its exact source binding",
+            });
+        }
+        Ok(carrier)
     }
 
     fn allocate_loops_and_fins(
@@ -395,4 +477,20 @@ impl Transaction<'_> {
             }
         }
     }
+}
+
+fn prepared_pcurve_use(
+    prepared: &PreparedAnalyticShell,
+    use_: AnalyticEdgeUseRef,
+) -> Option<AnalyticPcurveUse> {
+    let face_index = prepared
+        .faces()
+        .binary_search_by_key(&use_.face(), |face| face.key())
+        .ok()?;
+    prepared.faces()[face_index]
+        .loops()
+        .get(use_.loop_index())?
+        .fins()
+        .get(use_.fin_index())
+        .map(|fin| fin.pcurve())
 }
