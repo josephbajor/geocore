@@ -13,6 +13,8 @@ mod coincident_cap_setops;
 mod coincident_caps;
 #[path = "parallel_cylinder_boolean/radial_miss.rs"]
 mod radial_miss;
+#[path = "parallel_cylinder_boolean/radial_miss_setops.rs"]
+mod radial_miss_setops;
 
 const RADIUS: f64 = 1.0;
 const AXIS_OFFSET: f64 = 0.5;

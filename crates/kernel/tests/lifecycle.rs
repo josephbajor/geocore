@@ -1,21 +1,21 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    AccountingMode, BOOLEAN_BSP_WORK, BOOLEAN_POST_SELECTION_WORK, BlockRequest, BodyId, BodyKind,
-    BodyTessellationBudgetProfile, BooleanBodiesRequest, BooleanOperation, BooleanOutcome,
-    BooleanRefusal, BooleanResult, BoundedCurve, BoundedPcurve, BudgetPlan, CheckBodyRequest,
-    CheckLevel, CheckOutcome, ClassifyPointInBodyRequest, CreateSeedBodyRequest,
-    CreateStrutRequest, CylinderRequest, EntityKind, Error, ExecutionPolicy, ExportXtRequest,
-    ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame, FullCommitRequirement,
-    GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, JournalEntity,
-    Kernel, LimitSpec, LineageView, MergeFaceAsHoleRequest, MutationKind, NumericalPolicy,
-    OperationSettings, ParamRange, PartId, PcurveChart, PcurveEndpointKind, PcurveMetadata,
-    PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion, RegionKind, RemoveBridgeRequest,
-    RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind, SectionBodiesRequest,
-    SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session, SessionPolicy,
-    SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
-    SurfaceParameter, TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
-    Tolerances, Vec3,
+    AccountingMode, BOOLEAN_BSP_WORK, BOOLEAN_POST_SELECTION_WORK, BOOLEAN_REALIZED_VERTICES,
+    BlockRequest, BodyId, BodyKind, BodyTessellationBudgetProfile, BooleanBodiesRequest,
+    BooleanOperation, BooleanOutcome, BooleanRefusal, BooleanResult, BoundedCurve, BoundedPcurve,
+    BudgetPlan, CheckBodyRequest, CheckLevel, CheckOutcome, ClassifyPointInBodyRequest,
+    CreateSeedBodyRequest, CreateStrutRequest, CylinderRequest, EntityKind, Error, ExecutionPolicy,
+    ExportXtRequest, ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame,
+    FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest,
+    JoinRingRequest, JournalEntity, Kernel, LimitSpec, LineageView, MergeFaceAsHoleRequest,
+    MutationKind, NumericalPolicy, OperationSettings, ParamRange, PartId, PcurveChart,
+    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion,
+    RegionKind, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind,
+    SectionBodiesRequest, SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session,
+    SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
+    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
+    ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
 };
 
 #[path = "lifecycle/body_distance.rs"]

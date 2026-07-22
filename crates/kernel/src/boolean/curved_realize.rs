@@ -106,6 +106,36 @@ pub(super) fn realize_selected_result(
     commit_proposals(edit, proposals, scope)
 }
 
+/// Copy proof-certified finite cylinders as one atomic, Full-certified result.
+///
+/// Source order is caller-owned and becomes public result-body/report order.
+/// Each source body is first bound to its Full-checked finite-cylinder shell;
+/// this keeps the exact structural copy bound local to the topology class for
+/// which it is established. The bound is charged before the single transaction
+/// is opened, and every copied entity retains source lineage. An empty slice
+/// represents no selected boundary and returns `ProvenEmpty` without mutation.
+pub(super) fn realize_certified_cylinder_source_copies(
+    edit: &mut PartEdit<'_>,
+    sources: &[(BodyId, &CertifiedCylinderSource)],
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    if sources.is_empty() {
+        return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+    }
+    let store = &edit.state.store;
+    for (body, source) in sources {
+        let shell = store.get(source.shell())?;
+        let region = store.get(shell.region())?;
+        if region.body() != body.raw() {
+            return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
+                "certified cylinder source was not owned by its realization body",
+            ));
+        }
+    }
+    let sources = sources.iter().map(|(body, _)| body.raw()).collect();
+    commit_proposals(edit, PreparedCurvedResult::WholeSources(sources), scope)
+}
+
 /// Realize one completely authored bounded analytic shell atomically.
 ///
 /// All deterministic post-selection work and the exact proposed vertex

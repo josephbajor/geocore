@@ -9,6 +9,7 @@ use super::curved_pipeline::{
     adapt_operation, extract_cylinder_operand, mixed_boundary_failure, mixed_plan_failure,
     realize_mixed_shell, refused,
 };
+use super::curved_realize::realize_certified_cylinder_source_copies;
 use super::curved_source::CertifiedCylinderSource;
 use super::mixed_shell_plan::{
     MixedBoundedSourceRoot, MixedShellProofPlan, plan_mixed_shell,
@@ -51,13 +52,19 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
     let relation = certify_parallel_cylinder_relation(&graph, [&first, &second], scope)?;
     match relation {
-        ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation => {
-            if operation == PlanarBooleanOperation::Intersect {
-                Ok(CurvedBooleanPipelineOutcome::ProvenEmpty)
-            } else {
-                refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
-            }
-        }
+        ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation => match operation {
+            PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
+            PlanarBooleanOperation::Unite => realize_certified_cylinder_source_copies(
+                edit,
+                &[(bodies[0].clone(), &first), (bodies[1].clone(), &second)],
+                scope,
+            ),
+            PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
+                edit,
+                &[(bodies[0].clone(), &first)],
+                scope,
+            ),
+        },
         ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
             edit,
             operation,
