@@ -43,7 +43,8 @@ The current facade supports:
   Subtract crescent prisms across world/oblique frames, plus exact axial-contact
   Unite for strict disk containment (5F/4E/0V), coincident support (3F/2E/0V),
   and equal/unequal-radius strict secancy (6F/6E/2V), with complete lineage,
-  independent properties, deterministic export/self-import, and rollback;
+  independent properties, deterministic export/self-import, and rollback,
+  plus exact external tangency as two copied 3F/2E/0V bodies;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
@@ -59,7 +60,8 @@ the facade compatibility promise. Parallel-cylinder CSG covers strict overlaps,
 coincident caps, strict separations, and exact zero-gap cap contact. At contact,
 Intersect is ProvenEmpty, Subtract is an ordered whole-minuend copy, and Unite
 commits the certified containment, coincidence, and strict-secancy families
-above. External tangency remains boundary-only.
+above. Exact external tangency returns two independent source copies; internal
+or unresolved tangency remains boundary-only.
 
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic

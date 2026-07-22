@@ -10,11 +10,14 @@
 //!
 //! Strict secancy binds Section's two proof-joined inside arcs to the source
 //! rings, completes each ring with its exact outside arc, and assembles the
-//! two shared-cap crescents. Tangency remains a typed contact refusal.
+//! two shared-cap crescents. Exact external tangency retains both source
+//! shells as independent regularized-solid components; every other
+//! boundary-only radial relation remains a typed contact refusal.
 
+use kcore::expansion::two_sum;
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
-use kcore::predicates::{Orientation, affine_dot3, orient3d};
+use kcore::predicates::{Orientation, affine_dot3, orient3d, squared_distance_difference3};
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve};
 use kgeom::curve2d::{Circle2d, Line2d};
@@ -34,7 +37,9 @@ use ktopo::store::Store;
 use super::curved_pipeline::{
     CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, StageResult, refused,
 };
-use super::curved_realize::realize_analytic_shell_input;
+use super::curved_realize::{
+    realize_analytic_shell_input, realize_certified_cylinder_source_copies,
+};
 use super::curved_source::{CertifiedCylinderBoundary, CertifiedCylinderSource};
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, ParallelCylinderAxialBoundaryWitness,
@@ -53,7 +58,13 @@ enum ContactRadialRelation {
     StrictSecant,
     StrictInternal { outer: usize },
     Coincident,
+    ExactExternalTangent,
     BoundaryContact,
+}
+
+enum PreparedContactUnite {
+    Shell(AnalyticShellInput),
+    ExactExternalTangent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,18 +82,22 @@ struct ContactSource<'a> {
     far_boundary: usize,
 }
 
-/// Realize exactly classified positive-area axial contact.
+/// Realize an exactly classified axial-contact union.
+///
+/// Positive-area disk relations produce one authored analytic shell. Exact
+/// external tangency instead copies both source shells atomically as two
+/// independent regularized-solid components.
 pub(super) fn execute_parallel_cylinder_contact_unite(
     edit: &mut PartEdit<'_>,
-    _bodies: &[BodyId; 2],
+    bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
     graph: &BodySectionGraph,
     contact: &CertifiedParallelCylinderAxialContact,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
-    let input = match prepare_contact_unite(&edit.state.store, cylinders, graph, contact) {
-        Ok(input) => input,
+    let prepared = match prepare_contact_unite(&edit.state.store, cylinders, graph, contact) {
+        Ok(prepared) => prepared,
         Err(ContactPlanGap::BoundaryContact) => {
             return refused(CurvedBooleanPipelineRefusal::ClassificationBoundaryContact);
         }
@@ -94,7 +109,19 @@ pub(super) fn execute_parallel_cylinder_contact_unite(
             return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
         }
     };
-    realize_analytic_shell_input(edit, &input, linear, scope)
+    match prepared {
+        PreparedContactUnite::Shell(input) => {
+            realize_analytic_shell_input(edit, &input, linear, scope)
+        }
+        PreparedContactUnite::ExactExternalTangent => realize_certified_cylinder_source_copies(
+            edit,
+            &[
+                (bodies[0].clone(), cylinders[0]),
+                (bodies[1].clone(), cylinders[1]),
+            ],
+            scope,
+        ),
+    }
 }
 
 fn prepare_contact_unite(
@@ -102,15 +129,21 @@ fn prepare_contact_unite(
     cylinders: [&CertifiedCylinderSource; 2],
     graph: &BodySectionGraph,
     contact: &CertifiedParallelCylinderAxialContact,
-) -> Result<AnalyticShellInput, ContactPlanGap> {
+) -> Result<PreparedContactUnite, ContactPlanGap> {
     let sources = bind_contact_sources(cylinders, contact)?;
     match classify_radial_contact(store, &sources)? {
         ContactRadialRelation::StrictInternal { outer } => {
-            prepare_internal_contact_shell(store, &sources, outer)
+            prepare_internal_contact_shell(store, &sources, outer).map(PreparedContactUnite::Shell)
         }
-        ContactRadialRelation::Coincident => prepare_coincident_contact_shell(store, &sources),
+        ContactRadialRelation::Coincident => {
+            prepare_coincident_contact_shell(store, &sources).map(PreparedContactUnite::Shell)
+        }
         ContactRadialRelation::StrictSecant => {
             secant::prepare_strict_secant_contact_shell(store, graph, &sources)
+                .map(PreparedContactUnite::Shell)
+        }
+        ContactRadialRelation::ExactExternalTangent => {
+            Ok(PreparedContactUnite::ExactExternalTangent)
         }
         ContactRadialRelation::BoundaryContact => Err(ContactPlanGap::BoundaryContact),
     }
@@ -163,7 +196,8 @@ fn contact_source<'a>(
 
 /// Classify disk support from outward enclosures of the authored dyadic
 /// inputs. Rounded sums, differences, and center deltas are never decision
-/// authority. Boundary-touching or overlapping enclosures fail closed.
+/// authority. Exact external tangency has a dedicated predicate; every other
+/// boundary-touching or overlapping enclosure fails closed.
 fn classify_radial_contact(
     store: &Store,
     sources: &[ContactSource<'_>; 2],
@@ -218,9 +252,44 @@ fn classify_radial_contact(
         } else {
             Ok(ContactRadialRelation::BoundaryContact)
         }
+    } else if exact_external_tangency(centers, radii) {
+        Ok(ContactRadialRelation::ExactExternalTangent)
     } else {
         Ok(ContactRadialRelation::BoundaryContact)
     }
+}
+
+/// Prove `|center[1] - center[0]| == radius[0] + radius[1]` over the exact
+/// dyadic source values.
+///
+/// The squared-distance predicate owns the exact comparison and never sees a
+/// tolerance. Its radius argument is admitted only when error-free `TwoSum`
+/// proves that the rounded `f64` sum is the exact sum of the two source radii.
+/// If that sum is not exactly representable, this narrow production rung
+/// leaves the boundary relation unresolved rather than comparing against the
+/// rounded sum.
+fn exact_external_tangency(centers: [Point3; 2], radii: [f64; 2]) -> bool {
+    let Some(radius_sum) = exactly_representable_sum(radii[0], radii[1]) else {
+        return false;
+    };
+    squared_distance_difference3(
+        centers[1].to_array(),
+        centers[0].to_array(),
+        0.0,
+        radius_sum,
+    )
+    .is_some_and(|difference| difference.sign() == Orientation::Zero)
+}
+
+/// Return `first + second` only when Knuth's error-free `TwoSum` residual is
+/// exactly zero, making the rounded value an exact representation of the
+/// source-value sum.
+fn exactly_representable_sum(first: f64, second: f64) -> Option<f64> {
+    let (sum, residual) = two_sum(first, second);
+    if !first.is_finite() || !second.is_finite() || !sum.is_finite() {
+        return None;
+    }
+    (residual == 0.0).then_some(sum)
 }
 
 /// Coalescing replaces both side parameterizations by the first support. The
@@ -744,5 +813,47 @@ mod tests {
         assert!(frame.x().dot(frame.z()).abs() > 1.0e-10);
         assert!(oracle - legacy_projection > 1.0e-8);
         assert!(distance.lo() <= oracle && oracle <= distance.hi());
+    }
+
+    #[test]
+    fn external_tangency_requires_exact_center_distance_and_radius_sum() {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+
+        assert!(exact_external_tangency(
+            [origin, Point3::new(2.0, 2.0, 1.0)],
+            [2.0, 1.0],
+        ));
+        assert!(!exact_external_tangency(
+            [origin, Point3::new(1.0, 0.0, 0.0)],
+            [2.0, 1.0],
+        ));
+        assert!(!exact_external_tangency(
+            [
+                origin,
+                Point3::new(f64::from_bits(3.0_f64.to_bits() - 1), 0.0, 0.0)
+            ],
+            [2.0, 1.0],
+        ));
+        assert!(!exact_external_tangency(
+            [
+                origin,
+                Point3::new(f64::from_bits(3.0_f64.to_bits() + 1), 0.0, 0.0)
+            ],
+            [2.0, 1.0],
+        ));
+    }
+
+    #[test]
+    fn rounded_radius_sum_cannot_promote_boundary_contact() {
+        let rounded_sum = 0.1 + 0.2;
+        assert_eq!(two_sum(0.1, 0.2).0, rounded_sum);
+        assert_ne!(two_sum(0.1, 0.2).1, 0.0);
+        assert!(!exact_external_tangency(
+            [
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(rounded_sum, 0.0, 0.0)
+            ],
+            [0.1, 0.2],
+        ));
     }
 }
