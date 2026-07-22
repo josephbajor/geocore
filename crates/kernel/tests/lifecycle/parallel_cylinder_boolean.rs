@@ -11,6 +11,8 @@ use kernel::{
 mod coincident_cap_setops;
 #[path = "parallel_cylinder_boolean/coincident_caps.rs"]
 mod coincident_caps;
+#[path = "parallel_cylinder_boolean/radial_miss.rs"]
+mod radial_miss;
 
 const RADIUS: f64 = 1.0;
 const AXIS_OFFSET: f64 = 0.5;

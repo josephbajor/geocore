@@ -51,6 +51,13 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
     let relation = certify_parallel_cylinder_relation(&graph, [&first, &second], scope)?;
     match relation {
+        ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation => {
+            if operation == PlanarBooleanOperation::Intersect {
+                Ok(CurvedBooleanPipelineOutcome::ProvenEmpty)
+            } else {
+                refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
+            }
+        }
         ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
             edit,
             operation,

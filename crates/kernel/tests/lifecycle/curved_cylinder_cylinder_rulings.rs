@@ -21,12 +21,37 @@ enum Placement {
     Oblique,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AxisDirection {
+    Parallel,
+    Antiparallel,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RadialRelation {
+    ExteriorDiagonal,
+    ExteriorBroadPhase,
+    ExteriorOneUlp,
+    Tangent,
+    Internal,
+    Coincident,
+    Skew,
+}
+
 struct Fixture {
     session: Session,
     part_id: PartId,
     first: BodyId,
     second: BodyId,
     frame: Frame,
+    before: SourceSignature,
+}
+
+struct RelationFixture {
+    session: Session,
+    part_id: PartId,
+    first: BodyId,
+    second: BodyId,
     before: SourceSignature,
 }
 
@@ -107,6 +132,78 @@ fn fixture(placement: Placement) -> Fixture {
     }
 }
 
+fn relation_fixture(
+    placement: Placement,
+    direction: AxisDirection,
+    relation: RadialRelation,
+) -> RelationFixture {
+    let frame = shared_frame(placement);
+    let (first_radius, second_radius, radial_offset) = match relation {
+        // Both authored-frame support-axis projections overlap, so the
+        // side/side pair reaches the graph-aware Cylinder/Cylinder solver.
+        RadialRelation::ExteriorDiagonal => (1.0, 1.0, [1.5, 1.5]),
+        // This pair is already separated by the support-function broad phase;
+        // Section must still ask kops for analytic radial provenance.
+        RadialRelation::ExteriorBroadPhase => (1.0, 1.0, [3.0, 0.0]),
+        RadialRelation::ExteriorOneUlp => (1.0, 1.0, [2.0_f64.next_up(), 0.0]),
+        RadialRelation::Tangent => (1.0, 1.0, [2.0, 0.0]),
+        RadialRelation::Internal => (2.0, 0.5, [0.25, 0.0]),
+        RadialRelation::Coincident => (1.0, 1.0, [0.0, 0.0]),
+        RadialRelation::Skew => (1.0, 1.0, [0.75, 0.0]),
+    };
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, -LONG_HALF_HEIGHT)),
+                first_radius,
+                2.0 * LONG_HALF_HEIGHT,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_axial_origin = match direction {
+            AxisDirection::Parallel => -SHORT_HALF_HEIGHT,
+            AxisDirection::Antiparallel => SHORT_HALF_HEIGHT,
+        };
+        let second_origin = frame.point_at(radial_offset[0], radial_offset[1], second_axial_origin);
+        let second_frame = match relation {
+            RadialRelation::Skew => {
+                Frame::new(second_origin, frame.y() + frame.z(), frame.x()).unwrap()
+            }
+            _ => match direction {
+                AxisDirection::Parallel => frame.with_origin(second_origin),
+                AxisDirection::Antiparallel => {
+                    Frame::new(second_origin, -frame.z(), frame.x()).unwrap()
+                }
+            },
+        };
+        let second = edit
+            .create_cylinder(CylinderRequest::new(
+                second_frame,
+                second_radius,
+                2.0 * SHORT_HALF_HEIGHT,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    let before = source_signature(&session, &part_id, &first, &second);
+    assert_eq!(before, ([3, 2, 0], [3, 2, 0], 2));
+    RelationFixture {
+        session,
+        part_id,
+        first,
+        second,
+        before,
+    }
+}
+
 fn section(fixture: &Fixture, first: BodyId, second: BodyId) -> BodySectionGraph {
     fixture
         .session
@@ -116,6 +213,57 @@ fn section(fixture: &Fixture, first: BodyId, second: BodyId) -> BodySectionGraph
         .unwrap()
         .into_result()
         .unwrap()
+}
+
+fn relation_section(fixture: &RelationFixture, first: BodyId, second: BodyId) -> BodySectionGraph {
+    fixture
+        .session
+        .part(fixture.part_id.clone())
+        .unwrap()
+        .section_bodies(SectionBodiesRequest::new(first, second))
+        .unwrap()
+        .into_result()
+        .unwrap()
+}
+
+fn assert_exterior_radial_section(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    first: &BodyId,
+    second: &BodyId,
+) {
+    assert_eq!(graph.bodies(), &[first.clone(), second.clone()]);
+    assert_exterior_radial_separation(part, graph, first, second);
+    assert!(cylinder_cylinder_branch_indices(part, graph).is_empty());
+    assert!(graph.gaps().iter().all(|gap| {
+        gap.faces().len() != 2 || !gap.faces().iter().all(|face| face_is_cylinder(part, face))
+    }));
+}
+
+fn assert_exterior_radial_separation(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    first: &BodyId,
+    second: &BodyId,
+) {
+    let evidence = graph.cylinder_cylinder_exterior_radial_separations();
+    assert_eq!(evidence.len(), 1, "missing or duplicate radial evidence");
+    assert_eq!(
+        evidence[0].faces(),
+        &[
+            cylinder_face(part, first.clone()),
+            cylinder_face(part, second.clone()),
+        ]
+    );
+}
+
+fn cylinder_face(part: &kernel::Part<'_>, body: BodyId) -> kernel::FaceId {
+    part.body(body)
+        .unwrap()
+        .faces()
+        .unwrap()
+        .find(|face| face_is_cylinder(part, face))
+        .expect("cylinder body lost its analytic side face")
 }
 
 fn face_is_cylinder(part: &kernel::Part<'_>, face: &kernel::FaceId) -> bool {
@@ -435,58 +583,127 @@ fn certified_parallel_rulings_are_read_only_topology_owned_and_swap_deterministi
 }
 
 #[test]
-fn skew_cylinder_pair_is_one_typed_gap_without_a_planar_fallback_duplicate() {
-    let mut session = Kernel::new().create_session();
-    let part_id = session.create_part();
-    let (first, second) = {
-        let mut edit = session.edit_part(part_id.clone()).unwrap();
-        let first = edit
-            .create_cylinder(CylinderRequest::new(Frame::world(), 1.0, 3.0))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .body();
-        let skew = Frame::new(
-            Point3::new(0.75, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 1.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        )
-        .unwrap();
-        let second = edit
-            .create_cylinder(CylinderRequest::new(skew, 1.0, 3.0))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .body();
-        (first, second)
-    };
-    let before = source_signature(&session, &part_id, &first, &second);
-    let part = session.part(part_id.clone()).unwrap();
-    let request = SectionBodiesRequest::new(first.clone(), second.clone());
-    let graph = part
-        .section_bodies(request.clone())
-        .unwrap()
-        .into_result()
-        .unwrap();
-    let replay = part.section_bodies(request).unwrap().into_result().unwrap();
-    assert_eq!(graph, replay);
-    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
-    assert!(cylinder_cylinder_branch_indices(&part, &graph).is_empty());
-    let cylinder_pair_gaps = graph
-        .gaps()
-        .iter()
-        .filter(|gap| {
-            gap.faces().len() == 2 && gap.faces().iter().all(|face| face_is_cylinder(&part, face))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        cylinder_pair_gaps.len(),
-        1,
-        "the curved owner and planar fallback both reported the same pair: {:#?}",
-        graph.gaps()
-    );
-    assert_eq!(
-        source_signature(&session, &part_id, &first, &second),
-        before
-    );
+fn certified_exterior_radial_miss_retains_witness_under_rigid_and_order_transforms() {
+    for relation in [
+        RadialRelation::ExteriorDiagonal,
+        RadialRelation::ExteriorBroadPhase,
+    ] {
+        for placement in [Placement::World, Placement::Oblique] {
+            for direction in [AxisDirection::Parallel, AxisDirection::Antiparallel] {
+                let fixture = relation_fixture(placement, direction, relation);
+                let forward =
+                    relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+                let replay =
+                    relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+                let swapped =
+                    relation_section(&fixture, fixture.second.clone(), fixture.first.clone());
+                assert_eq!(
+                    forward, replay,
+                    "serial exterior-miss replay changed for {relation:?} {placement:?} {direction:?}"
+                );
+                let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+                assert_exterior_radial_section(&part, &forward, &fixture.first, &fixture.second);
+                assert_exterior_radial_section(&part, &swapped, &fixture.second, &fixture.first);
+                drop(part);
+                assert_eq!(
+                    source_signature(
+                        &fixture.session,
+                        &fixture.part_id,
+                        &fixture.first,
+                        &fixture.second,
+                    ),
+                    fixture.before,
+                    "exterior-miss Section mutated a source for {relation:?} {placement:?} {direction:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn one_ulp_exterior_radial_witness_survives_unrelated_section_gaps() {
+    for direction in [AxisDirection::Parallel, AxisDirection::Antiparallel] {
+        let fixture = relation_fixture(Placement::World, direction, RadialRelation::ExteriorOneUlp);
+        let forward = relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let replay = relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let swapped = relation_section(&fixture, fixture.second.clone(), fixture.first.clone());
+        assert_eq!(
+            forward, replay,
+            "serial one-ULP replay changed for {direction:?}"
+        );
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        assert_exterior_radial_section(&part, &forward, &fixture.first, &fixture.second);
+        assert_exterior_radial_section(&part, &swapped, &fixture.second, &fixture.first);
+        drop(part);
+        assert_eq!(
+            source_signature(
+                &fixture.session,
+                &fixture.part_id,
+                &fixture.first,
+                &fixture.second,
+            ),
+            fixture.before,
+            "one-ULP Section mutated a source for {direction:?}"
+        );
+    }
+}
+
+#[test]
+fn unsupported_cylinder_relations_remain_one_typed_gap_without_fallback_duplicates() {
+    for relation in [
+        RadialRelation::Tangent,
+        RadialRelation::Internal,
+        RadialRelation::Coincident,
+        RadialRelation::Skew,
+    ] {
+        let fixture = relation_fixture(Placement::World, AxisDirection::Parallel, relation);
+        let graph = relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let replay = relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let swapped = relation_section(&fixture, fixture.second.clone(), fixture.first.clone());
+        assert_eq!(graph, replay, "serial replay changed for {relation:?}");
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        for candidate in [&graph, &swapped] {
+            assert_eq!(
+                candidate.completion(),
+                SectionCompletion::Indeterminate,
+                "unsupported relation escaped as complete: {relation:?} {candidate:#?}"
+            );
+            assert!(cylinder_cylinder_branch_indices(&part, candidate).is_empty());
+            assert!(
+                candidate
+                    .cylinder_cylinder_exterior_radial_separations()
+                    .is_empty(),
+                "unsupported relation acquired exterior radial evidence: {relation:?}"
+            );
+            let cylinder_pair_gaps = candidate
+                .gaps()
+                .iter()
+                .filter(|gap| {
+                    gap.faces().len() == 2
+                        && gap.faces().iter().all(|face| face_is_cylinder(&part, face))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                cylinder_pair_gaps.len(),
+                1,
+                "the curved owner and planar fallback duplicated {relation:?}: {:#?}",
+                candidate.gaps()
+            );
+            assert_eq!(
+                cylinder_pair_gaps[0].reason(),
+                "a candidate face pair returned an indeterminate intersection result"
+            );
+        }
+        drop(part);
+        assert_eq!(
+            source_signature(
+                &fixture.session,
+                &fixture.part_id,
+                &fixture.first,
+                &fixture.second,
+            ),
+            fixture.before,
+            "unsupported Section mutated a source for {relation:?}"
+        );
+    }
 }

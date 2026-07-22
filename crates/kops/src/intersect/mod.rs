@@ -100,6 +100,7 @@ pub use error::{
     CURVE_CURVE_CLASS_PAIR, CURVE_SURFACE_CLASS_PAIR, IntersectionError, IntersectionResult,
     SURFACE_SURFACE_CLASS_PAIR, UNSUPPORTED_CLASS_PAIR,
 };
+pub use graph_cylinder_cylinder::ParallelCylinderExteriorRadialSeparation;
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
     GraphSurfaceIntersectionResult, GraphSurfaceSurfaceIntersections,

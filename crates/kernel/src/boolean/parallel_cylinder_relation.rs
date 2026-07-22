@@ -185,6 +185,9 @@ impl CertifiedParallelCylinderLensRelation {
 /// Certified relation or a typed fail-closed missing obligation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ParallelCylinderRelationOutcome {
+    /// Exact graph proof bound to both certified source side faces shows that
+    /// the infinite radial supports are strictly exterior-disjoint.
+    CertifiedExteriorRadialSeparation,
     /// Every analytic, topology, and provenance obligation was discharged.
     Certified(Box<CertifiedParallelCylinderLensRelation>),
     /// The operation-local incomplete-Section theorem for one or two shared
@@ -205,6 +208,10 @@ pub(super) fn certify_parallel_cylinder_relation(
         .ledger_mut()
         .charge(PLANAR_BOOLEAN_BSP_WORK, PARALLEL_CYLINDER_RELATION_WORK)
         .map_err(Error::from)?;
+
+    if certifies_exterior_radial_separation(graph, cylinders) {
+        return Ok(ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation);
+    }
 
     let overlap_ends = match certify_source_relation(cylinders) {
         Ok(relation) => relation,
@@ -230,6 +237,28 @@ pub(super) fn certify_parallel_cylinder_relation(
             Err(gap) => Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
         }
     }
+}
+
+/// Bind Section's non-forgeable analytic miss witness to the two Full-checked
+/// finite-cylinder sources consumed by this relation.
+///
+/// Global Section completion is intentionally irrelevant here: coincident cap
+/// support planes can retain unrelated trim gaps even though exact arithmetic
+/// has already proved the complete infinite radial supports disjoint. Requiring
+/// the unique witnessed pair to be the two extracted side faces prevents a
+/// proof from another face pair from escaping its source topology.
+fn certifies_exterior_radial_separation(
+    graph: &BodySectionGraph,
+    cylinders: [&CertifiedCylinderSource; 2],
+) -> bool {
+    let [separation] = graph.cylinder_cylinder_exterior_radial_separations() else {
+        return false;
+    };
+    separation
+        .faces()
+        .iter()
+        .zip(cylinders)
+        .all(|(face, cylinder)| face.raw() == cylinder.side_face())
 }
 
 fn certify_source_relation(

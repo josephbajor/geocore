@@ -83,8 +83,12 @@ pub(super) fn collect_certified_curved_branches(
                 .observe(SECTION_FACE_PAIRS, ResourceKind::Items, *examined)
                 .map_err(Error::from)?;
             charge(scope, 1)?;
-            if broad_phase::certifiably_disjoint(envelopes_a[a_index], envelopes_b[b_index], linear)
-            {
+            let broad_phase_empty = broad_phase::certifiably_disjoint(
+                envelopes_a[a_index],
+                envelopes_b[b_index],
+                linear,
+            );
+            if broad_phase_empty && pair_kind != CertifiedCurvedPair::CylinderCylinder {
                 continue;
             }
             let facades = [
@@ -92,6 +96,9 @@ pub(super) fn collect_certified_curved_branches(
                 FaceId::new(part_id.clone(), raw_b),
             ];
             let (Some(domain_a), Some(domain_b)) = (face_a.domain(), face_b.domain()) else {
+                if broad_phase_empty {
+                    continue;
+                }
                 acc.gaps.push(SectionGap {
                     reason: GAP_PAIR_UNRESOLVED,
                     faces: facades.to_vec(),
@@ -120,6 +127,14 @@ pub(super) fn collect_certified_curved_branches(
                 Err(error) => {
                     if let Some(error) = lift_limit_error(error.clone()) {
                         return Err(error);
+                    }
+                    // Cylinder/Cylinder queries that were independently
+                    // rejected by conservative source-face envelopes are
+                    // still offered to the analytic layer so exterior radial
+                    // provenance can be retained. Refusal cannot invalidate
+                    // that earlier complete-domain exclusion proof.
+                    if broad_phase_empty {
+                        continue;
                     }
                     let recovered = if pair_kind == CertifiedCurvedPair::PlaneCylinder {
                         semantic_ruling::recover(
@@ -156,6 +171,34 @@ pub(super) fn collect_certified_curved_branches(
                     continue;
                 }
             };
+            if intersections.raw.is_proven_empty() {
+                // `Ok` is the proof boundary: the graph-aware solver owns the
+                // complete-domain exclusion theorem for its admitted surface
+                // pair. In particular, its closed Cylinder/Cylinder admission
+                // is the only authority for an exterior radial miss; Section
+                // neither reconstructs nor tolerance-tests that relation.
+                // Require the verified graph payload to agree before
+                // publishing the result as a gap-free empty pair.
+                if intersections.branch_graph.vertices.is_empty()
+                    && intersections.branch_graph.edges.is_empty()
+                {
+                    if pair_kind == CertifiedCurvedPair::CylinderCylinder
+                        && intersections
+                            .parallel_cylinder_exterior_radial_separation()
+                            .is_some()
+                    {
+                        acc.cylinder_cylinder_exterior_radial_separations.push(
+                            SectionCylinderCylinderExteriorRadialSeparation { faces: facades },
+                        );
+                    }
+                    continue;
+                }
+                acc.gaps.push(SectionGap {
+                    reason: GAP_PAIR_UNRESOLVED,
+                    faces: facades.to_vec(),
+                });
+                continue;
+            }
             if !intersections.raw.is_complete()
                 || !intersections.raw.points.is_empty()
                 || !intersections.raw.regions.is_empty()

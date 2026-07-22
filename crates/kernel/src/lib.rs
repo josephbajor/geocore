@@ -341,14 +341,15 @@ pub use section::{
     SectionBranchTopology, SectionCarrier, SectionCarrierParameterInterval,
     SectionCarrierTrimScalarEvidence, SectionCompletion, SectionCurveComponent,
     SectionCurveEndpoint, SectionCurveEndpointTopology, SectionCurveFragment,
-    SectionCurveFragmentEnd, SectionCurveFragmentSpan, SectionCurveTrimProvenance, SectionEdge,
-    SectionEdgeParameterInterval, SectionFragmentSite, SectionGap, SectionLoop,
-    SectionPeriodicBoundaryRootEmbedding, SectionPeriodicBoundaryTraceEmbedding,
-    SectionPeriodicComponentEmbedding, SectionPeriodicCycleOrientation,
-    SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence,
-    SectionPeriodicFragmentEmbedding, SectionProjectiveParameterInterval, SectionRing,
-    SectionRulingFragmentEnd, SectionRulingTrimProvenance, SectionSite, SectionSourceParameterKey,
-    SectionUvCircle, SectionUvCurve, SectionUvLine, SectionUvParameterInterval, SectionVertex,
+    SectionCurveFragmentEnd, SectionCurveFragmentSpan, SectionCurveTrimProvenance,
+    SectionCylinderCylinderExteriorRadialSeparation, SectionEdge, SectionEdgeParameterInterval,
+    SectionFragmentSite, SectionGap, SectionLoop, SectionPeriodicBoundaryRootEmbedding,
+    SectionPeriodicBoundaryTraceEmbedding, SectionPeriodicComponentEmbedding,
+    SectionPeriodicCycleOrientation, SectionPeriodicEmbeddingGap,
+    SectionPeriodicFaceEmbeddingEvidence, SectionPeriodicFragmentEmbedding,
+    SectionProjectiveParameterInterval, SectionRing, SectionRulingFragmentEnd,
+    SectionRulingTrimProvenance, SectionSite, SectionSourceParameterKey, SectionUvCircle,
+    SectionUvCurve, SectionUvLine, SectionUvParameterInterval, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

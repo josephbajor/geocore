@@ -557,7 +557,7 @@ fn squared_tolerance(radius_a: f64, radius_b: f64, distance: f64, tolerances: To
     tolerances.linear() * (radius_a + radius_b + distance).max(1.0)
 }
 
-fn validate_ranges(a_range: [ParamRange; 2], b_range: [ParamRange; 2]) -> Result<()> {
+pub(super) fn validate_ranges(a_range: [ParamRange; 2], b_range: [ParamRange; 2]) -> Result<()> {
     if a_range
         .iter()
         .any(|range| !range.is_finite() || range.width() < 0.0)

@@ -8,7 +8,8 @@
 use super::error::IntersectionError;
 pub use super::graph_branch_certificate::IntersectionBranchCertificate;
 use super::graph_cylinder_cylinder::{
-    build_verified_cylinder_cylinder_ruling_branch, intersect_strict_parallel_cylinders,
+    ParallelCylinderExteriorRadialSeparation, build_verified_cylinder_cylinder_ruling_branch,
+    intersect_certified_parallel_cylinders,
 };
 use super::graph_plane_cylinder::{
     build_verified_plane_cylinder_circle_branch, build_verified_plane_cylinder_ruling_branch,
@@ -416,6 +417,22 @@ pub struct GraphSurfaceSurfaceIntersections {
     pub raw: SurfaceSurfaceIntersections,
     /// Verified operation-local branch graph derived from `raw`.
     pub branch_graph: IntersectionBranchGraph,
+    parallel_cylinder_exterior_radial_separation: Option<ParallelCylinderExteriorRadialSeparation>,
+}
+
+impl GraphSurfaceSurfaceIntersections {
+    /// Exact proof that a parallel or antiparallel Cylinder/Cylinder pair has
+    /// strictly exterior-disjoint infinite radial supports.
+    ///
+    /// `Some` is produced only when exact checked arithmetic proves
+    /// `d > radius_a + radius_b`. Generic complete-empty results, finite-window
+    /// clipping misses, strict secants, tangencies, internal misses, coincident
+    /// supports, and skew axes carry no such evidence.
+    pub const fn parallel_cylinder_exterior_radial_separation(
+        &self,
+    ) -> Option<ParallelCylinderExteriorRadialSeparation> {
+        self.parallel_cylinder_exterior_radial_separation
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -981,6 +998,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         }
         _ => return Err(unsupported()),
     };
+    let mut parallel_cylinder_exterior_radial_separation = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1041,11 +1059,12 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 surface: cylinder_b,
             },
         ] => {
-            let raw = intersect_strict_parallel_cylinders(
+            let (raw, separation) = intersect_certified_parallel_cylinders(
                 [cylinder_a, cylinder_b],
                 [range_a, range_b],
                 tolerances,
             )?;
+            parallel_cylinder_exterior_radial_separation = separation;
             (raw, None)
         }
         [
@@ -1218,7 +1237,11 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         tolerances.linear(),
         scope,
     )?;
-    Ok(GraphSurfaceSurfaceIntersections { raw, branch_graph })
+    Ok(GraphSurfaceSurfaceIntersections {
+        raw,
+        branch_graph,
+        parallel_cylinder_exterior_radial_separation,
+    })
 }
 
 /// Swap lower analytic/NURBS evidence while keeping every retained trace attached

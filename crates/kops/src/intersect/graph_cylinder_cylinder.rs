@@ -1,11 +1,14 @@
-//! Promotion of strict parallel Cylinder/Cylinder secants into paired rulings.
+//! Promotion of exact parallel Cylinder/Cylinder radial relations.
 //!
 //! The lower analytic solver owns finite-window discovery. This adapter admits
-//! only its complete strict-secant result: exactly two transverse ruling-line
-//! branches on exactly parallel or antiparallel cylinder axes. Tangencies,
-//! misses, coincident regions, skew axes, and every incomplete family remain
-//! explicit typed gaps rather than being promoted as certified branch graphs.
+//! either its complete strict-secant result (exactly two transverse ruling-line
+//! branches) or an exact proof that the two infinite radial supports are
+//! exterior-disjoint. The latter is the only successful empty result in this
+//! closed admission, so generic empty or axially clipped lower results cannot
+//! masquerade as radial separation. Tangencies, internal misses, coincident
+//! regions, skew axes, and every incomplete family remain explicit typed gaps.
 
+use super::bounded_polynomial::ExactScalar;
 use kcore::predicates::{Orientation, orient3d};
 use kgeom::curve::Line;
 use kgeom::curve2d::Line2d;
@@ -17,7 +20,9 @@ use kgraph::{
     certify_paired_cylinder_cylinder_ruling_residuals,
 };
 
-use super::cylinder_cylinder::{compare_cylinder_windows, intersect_bounded_cylinders};
+use super::cylinder_cylinder::{
+    compare_cylinder_windows, intersect_bounded_cylinders, validate_ranges,
+};
 use super::error::IntersectionError;
 use super::graph_plane_cylinder::canonical_line;
 use super::graph_surface::{
@@ -28,12 +33,29 @@ use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
 
-const STRICT_SECANT_REASON: &str = "Cylinder/Cylinder graph promotion requires exactly two transverse rulings on exact parallel axes";
+const SUPPORTED_PARALLEL_RESULT_REASON: &str = "Cylinder/Cylinder graph promotion requires either exactly two transverse rulings or proven strict exterior radial separation on exact parallel axes";
+
+/// Non-forgeable completion evidence for exact exterior radial separation of
+/// one parallel or antiparallel Cylinder/Cylinder graph query.
+///
+/// The private field prevents downstream code from manufacturing this witness.
+/// It is meaningful only while carried by the graph result that owns the source
+/// surface identities and complete-empty raw result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelCylinderExteriorRadialSeparation {
+    _private: (),
+}
+
+impl ParallelCylinderExteriorRadialSeparation {
+    pub(super) const fn certified() -> Self {
+        Self { _private: () }
+    }
+}
 
 fn unsupported() -> GraphSurfaceIntersectionError {
     GraphSurfaceIntersectionError::BranchCertificate(
         kgraph::IntersectionCertificateError::UnsupportedCarrierParameterization {
-            reason: STRICT_SECANT_REASON,
+            reason: SUPPORTED_PARALLEL_RESULT_REASON,
         },
     )
 }
@@ -58,18 +80,36 @@ pub(super) fn require_exact_parallel_cylinder_axes(
     }
 }
 
-/// Discover the strict result from one deterministic source order.
+/// Discover one admitted result from a deterministic source order.
+///
+/// Successful emptiness is reserved for the exact exterior radial predicate
+/// `d > radius_a + radius_b`. In particular, a complete-empty lower result
+/// caused only by disjoint axial windows is not admitted. The lower range
+/// validator runs before the global radial shortcut so malformed windows never
+/// become certified misses.
 ///
 /// The lower solver anchors each ruling carrier to its first cylinder. Sorting
 /// the complete cylinder/window values before dispatch makes that harmless:
 /// the same geometric query receives the same raw carriers under operand swap,
 /// while `swapped` restores the caller's pcurve provenance afterward.
-pub(super) fn intersect_strict_parallel_cylinders(
+pub(super) fn intersect_certified_parallel_cylinders(
     cylinders: [Cylinder; 2],
     ranges: [[ParamRange; 2]; 2],
     tolerances: kcore::tolerance::Tolerances,
-) -> GraphSurfaceIntersectionResult<SurfaceSurfaceIntersections> {
+) -> GraphSurfaceIntersectionResult<(
+    SurfaceSurfaceIntersections,
+    Option<ParallelCylinderExteriorRadialSeparation>,
+)> {
     require_exact_parallel_cylinder_axes(cylinders)?;
+    validate_ranges(ranges[0], ranges[1])
+        .map_err(IntersectionError::from)
+        .map_err(GraphSurfaceIntersectionError::Intersection)?;
+    if exact_strict_exterior_radial_miss(cylinders) {
+        return Ok((
+            SurfaceSurfaceIntersections::complete_empty(),
+            Some(ParallelCylinderExteriorRadialSeparation::certified()),
+        ));
+    }
     let reversed =
         compare_cylinder_windows(&cylinders[0], ranges[0], &cylinders[1], ranges[1]).is_gt();
     let result = if reversed {
@@ -93,7 +133,99 @@ pub(super) fn intersect_strict_parallel_cylinders(
     .map_err(IntersectionError::from)
     .map_err(GraphSurfaceIntersectionError::Intersection)?;
     require_strict_two_ruling_result(&result)?;
-    Ok(result)
+    Ok((result, None))
+}
+
+/// Prove strict separation of the two infinite radial supports.
+///
+/// For an axis vector `z` that is only floating-point normalized, the squared
+/// transverse distance comparison is division-free:
+///
+/// `|(origin_b - origin_a) x z|^2 > (radius_a + radius_b)^2 |z|^2`.
+///
+/// Every source `f64` is treated as its exact dyadic value. Checked expansion
+/// arithmetic fails closed outside its fixed safe envelope. Requiring the same
+/// positive sign with either stored axis makes the result independent of
+/// operand order without assuming either axis has exact unit length.
+fn exact_strict_exterior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
+    let Some(offset) = exact_vector_difference(
+        cylinders[1].frame().origin().to_array(),
+        cylinders[0].frame().origin().to_array(),
+    ) else {
+        return false;
+    };
+    let Some(radius_sum) = exact(cylinders[0].radius())
+        .and_then(|first| exact(cylinders[1].radius()).and_then(|second| first.add(&second).ok()))
+    else {
+        return false;
+    };
+    let Some(radius_sum_squared) = radius_sum.mul(&radius_sum).ok() else {
+        return false;
+    };
+
+    cylinders.into_iter().all(|cylinder| {
+        exact_exterior_clearance(
+            &offset,
+            cylinder.frame().z().to_array(),
+            &radius_sum_squared,
+        )
+        .is_some_and(|clearance| clearance.sign() > 0)
+    })
+}
+
+fn exact_exterior_clearance(
+    offset: &[ExactScalar; 3],
+    axis: [f64; 3],
+    radius_sum_squared: &ExactScalar,
+) -> Option<ExactScalar> {
+    let axis = exact_vector(axis)?;
+    let cross = exact_cross(offset, &axis)?;
+    let cross_squared = exact_norm_squared(&cross)?;
+    let axis_squared = exact_norm_squared(&axis)?;
+    cross_squared
+        .sub(&radius_sum_squared.mul(&axis_squared).ok()?)
+        .ok()
+}
+
+fn exact(value: f64) -> Option<ExactScalar> {
+    ExactScalar::from_f64(value).ok()
+}
+
+fn exact_vector(value: [f64; 3]) -> Option<[ExactScalar; 3]> {
+    Some([exact(value[0])?, exact(value[1])?, exact(value[2])?])
+}
+
+fn exact_vector_difference(point: [f64; 3], origin: [f64; 3]) -> Option<[ExactScalar; 3]> {
+    let point = exact_vector(point)?;
+    let origin = exact_vector(origin)?;
+    Some([
+        point[0].sub(&origin[0]).ok()?,
+        point[1].sub(&origin[1]).ok()?,
+        point[2].sub(&origin[2]).ok()?,
+    ])
+}
+
+fn exact_cross(first: &[ExactScalar; 3], second: &[ExactScalar; 3]) -> Option<[ExactScalar; 3]> {
+    let component = |a: usize, b: usize, c: usize, d: usize| {
+        first[a]
+            .mul(&second[b])
+            .ok()?
+            .sub(&first[c].mul(&second[d]).ok()?)
+            .ok()
+    };
+    Some([
+        component(1, 2, 2, 1)?,
+        component(2, 0, 0, 2)?,
+        component(0, 1, 1, 0)?,
+    ])
+}
+
+fn exact_norm_squared(vector: &[ExactScalar; 3]) -> Option<ExactScalar> {
+    let mut squared = ExactScalar::zero();
+    for component in vector {
+        squared = squared.add(&component.mul(component).ok()?).ok()?;
+    }
+    Some(squared)
 }
 
 /// Admit only a complete, positive-length strict two-ruling solver result.
