@@ -256,6 +256,36 @@ fn expected_subtract_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
     rotate_tensor(frame, local)
 }
 
+fn expected_outer_subtract_volume() -> f64 {
+    8.0 * core::f64::consts::PI / 3.0 + 3.0_f64.sqrt()
+}
+
+fn expected_outer_subtract_surface_area() -> f64 {
+    34.0 * core::f64::consts::PI / 3.0 - 3.0_f64.sqrt()
+}
+
+fn expected_outer_subtract_centroid_x() -> f64 {
+    -2.0 * core::f64::consts::PI / expected_outer_subtract_volume()
+}
+
+fn expected_outer_subtract_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
+    let pi = core::f64::consts::PI;
+    let root_three = 3.0_f64.sqrt();
+    let volume = expected_outer_subtract_volume();
+    // Subtract the height-two right-cylinder overlap from the height-four
+    // left cylinder. These are the remaining body's raw local moments.
+    let raw_x_squared = 4.0 * pi / 3.0 + 9.0 * root_three / 8.0;
+    let raw_y_squared = 2.0 * pi / 3.0 + 3.0 * root_three / 8.0;
+    let raw_z_squared = 44.0 * pi / 9.0 + root_three / 3.0;
+    let central_x_squared = raw_x_squared - 4.0 * pi.powi(2) / volume;
+    let local = [
+        [raw_y_squared + raw_z_squared, 0.0, 0.0],
+        [0.0, central_x_squared + raw_z_squared, 0.0],
+        [0.0, 0.0, central_x_squared + raw_y_squared],
+    ];
+    rotate_tensor(frame, local)
+}
+
 fn expected_unite_volume() -> f64 {
     14.0 * core::f64::consts::PI / 3.0 + 3.0_f64.sqrt()
 }
@@ -386,7 +416,7 @@ fn assert_xt_equal(actual: &[u8], expected: &[u8], message: &str) {
     );
 }
 
-fn assert_subtract_created(
+fn assert_inner_subtract_created(
     fixture: &Fixture,
     outcome: OperationOutcome<BooleanOutcome>,
 ) -> Vec<u8> {
@@ -439,6 +469,73 @@ fn assert_subtract_created(
         properties.centroidal_inertia().value(),
         properties.centroidal_inertia().error_bound(),
         expected_subtract_centroidal_inertia(fixture.frame),
+    );
+    let first = part
+        .export_xt(ExportXtRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let second = part
+        .export_xt(ExportXtRequest::new(result))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(first.bytes(), second.bytes());
+    first.bytes().to_vec()
+}
+
+fn assert_outer_subtract_created(
+    fixture: &Fixture,
+    outcome: OperationOutcome<BooleanOutcome>,
+) -> Vec<u8> {
+    let result = outcome.into_result().unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+        panic!("parallel-cylinder outer-minus-inner Subtract returned {result:#?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.reports().len(), 1);
+    assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
+    let result = created.bodies()[0].clone();
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    assert_eq!(body_topology(&part, result.clone()), [6, 8, 4]);
+    let full = part
+        .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
+    let BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = part
+        .body_properties(BodyPropertiesRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap()
+    else {
+        panic!("outer-minus-inner analytic properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    assert_scalar_matches_analytic(
+        properties.volume(),
+        expected_outer_subtract_volume(),
+        "volume",
+    );
+    assert_scalar_matches_analytic(
+        properties.surface_area(),
+        expected_outer_subtract_surface_area(),
+        "surface area",
+    );
+    assert_point_matches_analytic(
+        properties.centroid(),
+        fixture
+            .frame
+            .point_at(expected_outer_subtract_centroid_x(), 0.0, 0.0),
+    );
+    assert_inertia_matches_analytic(
+        properties.centroidal_inertia().value(),
+        properties.centroidal_inertia().error_bound(),
+        expected_outer_subtract_centroidal_inertia(fixture.frame),
     );
     let first = part
         .export_xt(ExportXtRequest::new(result.clone()))
@@ -638,7 +735,7 @@ fn parallel_cylinder_inner_minus_outer_full_commits_a_deterministic_crescent_pri
             let mut fixture = fixture(placement);
             assert_source_bodies_preserved(&fixture, 2);
             let outcome = run_subtract(&mut fixture, false, OperationSettings::new());
-            let bytes = assert_subtract_created(&fixture, outcome);
+            let bytes = assert_inner_subtract_created(&fixture, outcome);
             assert_source_bodies_preserved(&fixture, 3);
             if let Some(canonical) = canonical_bytes.as_ref() {
                 assert_xt_equal(&bytes, canonical, "repeat Subtract changed X_T bytes");
@@ -647,15 +744,26 @@ fn parallel_cylinder_inner_minus_outer_full_commits_a_deterministic_crescent_pri
             }
             assert_fast_self_import(&mut fixture.session, &bytes);
         }
+    }
+}
 
-        let mut reverse = fixture(placement);
-        let before = fixture_signature(&reverse);
-        let outcome = run_subtract(&mut reverse, true, OperationSettings::new());
-        assert!(matches!(
-            outcome.into_result().unwrap(),
-            BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
-        ));
-        assert_eq!(fixture_signature(&reverse), before);
+#[test]
+fn parallel_cylinder_outer_minus_inner_full_commits_a_deterministic_notched_cylinder() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let mut canonical_bytes: Option<Vec<u8>> = None;
+        for _ in 0..2 {
+            let mut fixture = fixture(placement);
+            assert_source_bodies_preserved(&fixture, 2);
+            let outcome = run_subtract(&mut fixture, true, OperationSettings::new());
+            let bytes = assert_outer_subtract_created(&fixture, outcome);
+            assert_source_bodies_preserved(&fixture, 3);
+            if let Some(canonical) = canonical_bytes.as_ref() {
+                assert_xt_equal(&bytes, canonical, "repeat Subtract changed X_T bytes");
+            } else {
+                canonical_bytes = Some(bytes.clone());
+            }
+            assert_fast_self_import(&mut fixture.session, &bytes);
+        }
     }
 }
 
@@ -664,6 +772,7 @@ enum RealizationCase {
     Intersection,
     Unite,
     InnerMinusOuter,
+    OuterMinusInner,
 }
 
 fn run_realization_case(
@@ -675,6 +784,7 @@ fn run_realization_case(
         RealizationCase::Intersection => run(fixture, false, settings),
         RealizationCase::Unite => run_unite(fixture, false, settings),
         RealizationCase::InnerMinusOuter => run_subtract(fixture, false, settings),
+        RealizationCase::OuterMinusInner => run_subtract(fixture, true, settings),
     }
 }
 
@@ -736,6 +846,7 @@ fn parallel_cylinder_realization_budget_accepts_n_and_refuses_n_minus_one_atomic
         RealizationCase::Intersection,
         RealizationCase::Unite,
         RealizationCase::InnerMinusOuter,
+        RealizationCase::OuterMinusInner,
     ] {
         assert_realization_budget_case(case);
     }

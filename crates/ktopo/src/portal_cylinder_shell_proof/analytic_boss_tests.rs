@@ -93,7 +93,7 @@ fn ring_plane_use(edge: u64, sense: Sense, plane: Plane, circle: Circle) -> Anal
     )
 }
 
-fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
+fn six_face_parallel_cylinder_attachment(side: RadialSide) -> AnalyticShellInput {
     let radius = 1.0;
     let host_low = -2.0;
     let boss_low = -1.0;
@@ -137,6 +137,10 @@ fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
         })
         .collect::<Vec<_>>();
 
+    let (attachment_vertices, attachment_range) = match side {
+        RadialSide::Outside => ([[0, 1], [2, 3]], ParamRange::new(angle, 5.0 * angle)),
+        RadialSide::Inside => ([[1, 0], [3, 2]], ParamRange::new(-angle, angle)),
+    };
     let mut edges = vec![
         AnalyticShellEdge::new(
             AnalyticEdgeKey::new(0),
@@ -152,15 +156,15 @@ fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
         ),
         AnalyticShellEdge::new(
             AnalyticEdgeKey::new(4),
-            [AnalyticVertexKey::new(0), AnalyticVertexKey::new(1)],
+            attachment_vertices[0].map(AnalyticVertexKey::new),
             AnalyticShellCurve::Circle(boss_bottom),
-            ParamRange::new(angle, 5.0 * angle),
+            attachment_range,
         ),
         AnalyticShellEdge::new(
             AnalyticEdgeKey::new(5),
-            [AnalyticVertexKey::new(2), AnalyticVertexKey::new(3)],
+            attachment_vertices[1].map(AnalyticVertexKey::new),
             AnalyticShellCurve::Circle(boss_top),
-            ParamRange::new(angle, 5.0 * angle),
+            attachment_range,
         ),
     ];
     for (key, vertices) in [(2, [0, 2]), (3, [1, 3])] {
@@ -183,16 +187,42 @@ fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
     );
     let host_high_plane =
         Plane::new(host_frame.with_origin(host_frame.point_at(0.0, 0.0, host_high)));
+    let attachment_low_normal = match side {
+        RadialSide::Outside => -world.z(),
+        RadialSide::Inside => world.z(),
+    };
+    let attachment_high_normal = -attachment_low_normal;
     let boss_low_plane = Plane::new(
         Frame::new(
             host_frame.point_at(0.0, 0.0, boss_low),
-            -world.z(),
+            attachment_low_normal,
             -world.x(),
         )
         .unwrap(),
     );
-    let boss_high_plane =
-        Plane::new(host_frame.with_origin(host_frame.point_at(0.0, 0.0, boss_high)));
+    let boss_high_plane = Plane::new(
+        Frame::new(
+            host_frame.point_at(0.0, 0.0, boss_high),
+            attachment_high_normal,
+            -world.x(),
+        )
+        .unwrap(),
+    );
+    let (low_plane_attachment_sense, high_plane_attachment_sense) = match side {
+        RadialSide::Outside => (Sense::Reversed, Sense::Forward),
+        RadialSide::Inside => (Sense::Forward, Sense::Reversed),
+    };
+    let (attachment_low_sense, attachment_high_sense, attachment_face_sense) = match side {
+        RadialSide::Outside => (Sense::Forward, Sense::Reversed, Sense::Forward),
+        RadialSide::Inside => (Sense::Reversed, Sense::Forward, Sense::Reversed),
+    };
+    let attachment_domain = match side {
+        RadialSide::Outside => {
+            FaceDomain::from_bounds(0.0, core::f64::consts::TAU, boss_low, boss_high)
+        }
+        RadialSide::Inside => FaceDomain::from_bounds(-angle, angle, boss_low, boss_high),
+    }
+    .unwrap();
     let planar_domain = || FaceDomain::from_bounds(-3.0, 3.0, -3.0, 3.0).unwrap();
 
     AnalyticShellInput::new(
@@ -250,7 +280,7 @@ fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
                 planar_domain(),
                 vec![AnalyticShellLoop::new(vec![
                     plane_circle_use(0, Sense::Forward, boss_low_plane, host_bottom),
-                    plane_circle_use(4, Sense::Reversed, boss_low_plane, boss_bottom),
+                    plane_circle_use(4, low_plane_attachment_sense, boss_low_plane, boss_bottom),
                 ])],
             ),
             AnalyticShellFace::new(
@@ -260,18 +290,25 @@ fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
                 planar_domain(),
                 vec![AnalyticShellLoop::new(vec![
                     plane_circle_use(1, Sense::Reversed, boss_high_plane, host_top),
-                    plane_circle_use(5, Sense::Forward, boss_high_plane, boss_top),
+                    plane_circle_use(5, high_plane_attachment_sense, boss_high_plane, boss_top),
                 ])],
             ),
             AnalyticShellFace::new(
                 AnalyticFaceKey::new(5),
                 AnalyticShellSurface::Cylinder(boss),
-                Sense::Forward,
-                FaceDomain::from_bounds(0.0, core::f64::consts::TAU, boss_low, boss_high).unwrap(),
+                attachment_face_sense,
+                attachment_domain,
                 vec![AnalyticShellLoop::new(vec![
-                    cylinder_arc_use(4, Sense::Forward, boss_low),
-                    cylinder_ruling_use(3, Sense::Forward, 5.0 * angle),
-                    cylinder_arc_use(5, Sense::Reversed, boss_high),
+                    cylinder_arc_use(4, attachment_low_sense, boss_low),
+                    cylinder_ruling_use(
+                        3,
+                        Sense::Forward,
+                        match side {
+                            RadialSide::Outside => 5.0 * angle,
+                            RadialSide::Inside => -angle,
+                        },
+                    ),
+                    cylinder_arc_use(5, attachment_high_sense, boss_high),
                     cylinder_ruling_use(2, Sense::Reversed, angle),
                 ])],
             ),
@@ -289,6 +326,14 @@ fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
             ParamRange::new(0.0, core::f64::consts::TAU),
         ),
     ])
+}
+
+fn six_face_parallel_cylinder_union() -> AnalyticShellInput {
+    six_face_parallel_cylinder_attachment(RadialSide::Outside)
+}
+
+fn six_face_parallel_cylinder_outer_minus_inner() -> AnalyticShellInput {
+    six_face_parallel_cylinder_attachment(RadialSide::Inside)
 }
 
 fn face_for_key(output: &crate::analytic_shell::AnalyticShellOutput, key: u64) -> FaceId {
@@ -331,6 +376,36 @@ fn six_face_parallel_cylinder_union_is_certified_and_checked() {
     );
     let report = check_body_report(transaction.store(), output.body(), CheckLevel::Full).unwrap();
     assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:?}");
+    transaction
+        .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+        .unwrap();
+}
+
+#[test]
+fn six_face_parallel_cylinder_outer_minus_inner_is_certified_checked_and_order_independent() {
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(&six_face_parallel_cylinder_outer_minus_inner(), 1.0e-12)
+        .unwrap();
+    assert_eq!(
+        transaction.store().get(output.shell()).unwrap().faces.len(),
+        6
+    );
+    assert_eq!(
+        certify_portal_cylinder_shell(transaction.store(), output.shell(), None).unwrap(),
+        positive()
+    );
+    let report = check_body_report(transaction.store(), output.body(), CheckLevel::Full).unwrap();
+    assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:?}");
+
+    let mut reordered = transaction.store().clone();
+    reordered.get_mut(output.shell()).unwrap().faces.reverse();
+    assert_eq!(
+        certify_portal_cylinder_shell(&reordered, output.shell(), None).unwrap(),
+        positive()
+    );
+
     transaction
         .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
         .unwrap();

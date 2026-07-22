@@ -23,8 +23,8 @@ use crate::session::PartEdit;
 /// shared arrangement, truth-selection, planning, and Full-check path.
 ///
 /// Intersect and Unite are commutative and receive a canonical source order.
-/// Subtract preserves caller order and is admitted only for axial-inner minus
-/// outer; the reverse topology needs a different realization theorem.
+/// Subtract preserves caller order; the certified relation identifies which
+/// operand owns the shorter axial band for either ordered material meaning.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -45,9 +45,6 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let ParallelCylinderRelationOutcome::Certified(relation) = relation else {
         return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
     };
-    if operation == PlanarBooleanOperation::Subtract && relation.inner_operand() != 0 {
-        return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
-    }
     let prepared = prepare_parallel_cylinder_boundary(
         &edit.as_part(),
         &graph,
