@@ -202,11 +202,10 @@ const AXIAL_CONTACT: [CylinderRelationCase; 4] = [
     },
 ];
 
-// Strict internal and coincident positive-area Unite are covered by the
-// dedicated axial-contact realization suite. Strict secancy remains
-// fail-closed until Boolean consumes Section's published dual-root arcs into
-// the shared-cap arrangement; tangency has no positive-area shared cap cell.
-const AXIAL_CONTACT_REFUSALS: [CylinderRelationCase; 2] = [AXIAL_CONTACT[0], AXIAL_CONTACT[2]];
+// All positive-area contact relations are covered by the dedicated
+// axial-contact realization suite. Tangency has no positive-area shared cap
+// cell and remains boundary-only.
+const AXIAL_CONTACT_REFUSALS: [CylinderRelationCase; 1] = [AXIAL_CONTACT[2]];
 
 const DISJOINT_CASES: [CylinderRelationCase; 5] = [
     RADIAL_DISJOINT,
@@ -943,7 +942,7 @@ fn exact_axial_contact_has_deterministic_operation_specific_facade_semantics() {
             }
         }
     }
-    assert_eq!(executions, 96);
+    assert_eq!(executions, 48);
 }
 
 fn axial_boundary_case(name: &'static str, second_lower: f64) -> CylinderRelationCase {

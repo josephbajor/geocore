@@ -8,10 +8,9 @@
 //! are authored only from live analytic/topological source evidence and are
 //! committed through the shared Full-checked analytic-shell path.
 //!
-//! Section publishes the two dual-ring roots for strict secancy, but Boolean
-//! still needs to bind their source orientations, arrange both shared-cap
-//! cells, and materialize the split rings. Until that proof chain lands,
-//! strict secancy and tangency remain typed contact refusals.
+//! Strict secancy binds Section's two proof-joined inside arcs to the source
+//! rings, completes each ring with its exact outside arc, and assembles the
+//! two shared-cap crescents. Tangency remains a typed contact refusal.
 
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
@@ -42,7 +41,10 @@ use super::parallel_cylinder_relation::{
     interval_axis_distance_squared,
 };
 use crate::BodyId;
+use crate::BodySectionGraph;
 use crate::session::PartEdit;
+
+mod secant;
 
 const PERIOD: f64 = core::f64::consts::TAU;
 
@@ -59,7 +61,6 @@ enum ContactPlanGap {
     RelationBinding,
     SourceTopology,
     ArithmeticGuard,
-    StrictSecantArrangementUnavailable,
     BoundaryContact,
 }
 
@@ -75,15 +76,14 @@ pub(super) fn execute_parallel_cylinder_contact_unite(
     edit: &mut PartEdit<'_>,
     _bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
     contact: &CertifiedParallelCylinderAxialContact,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
-    let input = match prepare_contact_unite(&edit.state.store, cylinders, contact) {
+    let input = match prepare_contact_unite(&edit.state.store, cylinders, graph, contact) {
         Ok(input) => input,
-        Err(
-            ContactPlanGap::BoundaryContact | ContactPlanGap::StrictSecantArrangementUnavailable,
-        ) => {
+        Err(ContactPlanGap::BoundaryContact) => {
             return refused(CurvedBooleanPipelineRefusal::ClassificationBoundaryContact);
         }
         Err(
@@ -100,6 +100,7 @@ pub(super) fn execute_parallel_cylinder_contact_unite(
 fn prepare_contact_unite(
     store: &Store,
     cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
     contact: &CertifiedParallelCylinderAxialContact,
 ) -> Result<AnalyticShellInput, ContactPlanGap> {
     let sources = bind_contact_sources(cylinders, contact)?;
@@ -109,7 +110,7 @@ fn prepare_contact_unite(
         }
         ContactRadialRelation::Coincident => prepare_coincident_contact_shell(store, &sources),
         ContactRadialRelation::StrictSecant => {
-            Err(ContactPlanGap::StrictSecantArrangementUnavailable)
+            secant::prepare_strict_secant_contact_shell(store, graph, &sources)
         }
         ContactRadialRelation::BoundaryContact => Err(ContactPlanGap::BoundaryContact),
     }

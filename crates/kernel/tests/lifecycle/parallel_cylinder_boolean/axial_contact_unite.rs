@@ -6,6 +6,8 @@ use super::*;
 const AXIAL_CONTACT_RELATION_WORK: u64 = 64;
 // `N = 1 + 5F + 8L + 8U = 22`; the theorem charges `N^2 + 32N`.
 const INTERNAL_CONTACT_SHELL_WORK: u64 = 1_188;
+// `N = 1 + 6F + 8L + 12U = 27`; the theorem charges `N^2 + 32N`.
+const STRICT_SECANT_CONTACT_SHELL_WORK: u64 = 1_593;
 // These heights and the contact-specific translated oblique origin below are
 // verified against the stored oblique axis: both cap reconstructions retain
 // one exact zero affine projection in every authored axis direction.
@@ -14,15 +16,16 @@ const UPPER_HEIGHT: f64 = 0.5;
 
 // Existing analytic-shell precharge is `N^2 + 16N`, where
 // `N = 1 + V + Eb + Ec + F + L + U`. The independent boundary inventories are:
-// internal `(0,0,4,5,8,8) => N=26` and coincident
-// `(0,0,2,3,4,4) => N=14`.
+// internal `(0,0,4,5,8,8) => N=26`, coincident `(0,0,2,3,4,4) => N=14`,
+// and strict secant `(2,4,2,6,8,12) => N=35`.
 
-fn internal_contact_shell_stage() -> kernel::StageId {
+fn contact_shell_stage() -> kernel::StageId {
     kernel::StageId::new("ktopo.check.parallel-cylinder-contact-shell-work").unwrap()
 }
 
 #[derive(Debug, Clone, Copy)]
 enum RadialOverlap {
+    StrictSecant,
     StrictInternal,
     Coincident,
 }
@@ -32,6 +35,7 @@ struct ContactCase {
     name: &'static str,
     radii: [f64; 2],
     upper_radial_scale: f64,
+    quarter_turn_upper_frame: bool,
     radial_overlap: RadialOverlap,
     topology: [usize; 3],
     source_face_counts: [usize; 2],
@@ -42,11 +46,12 @@ struct ContactCase {
 // Tangent disks have no positive-area shared cap cell. Their point-only union
 // cannot close one manifold shell and remains covered by the boundary-contact
 // refusal matrix in `radial_miss_setops`.
-const CONTACT_CASES: [ContactCase; 3] = [
+const CONTACT_CASES: [ContactCase; 5] = [
     ContactCase {
         name: "lower cap strictly contains upper cap",
         radii: [3.0, 0.5],
         upper_radial_scale: 2.0,
+        quarter_turn_upper_frame: false,
         radial_overlap: RadialOverlap::StrictInternal,
         topology: [5, 4, 0],
         source_face_counts: [3, 2],
@@ -57,6 +62,7 @@ const CONTACT_CASES: [ContactCase; 3] = [
         name: "upper cap strictly contains lower cap",
         radii: [0.5, 3.0],
         upper_radial_scale: 2.0,
+        quarter_turn_upper_frame: false,
         radial_overlap: RadialOverlap::StrictInternal,
         topology: [5, 4, 0],
         source_face_counts: [2, 3],
@@ -67,11 +73,34 @@ const CONTACT_CASES: [ContactCase; 3] = [
         name: "coincident shared cap",
         radii: [1.0, 1.0],
         upper_radial_scale: 0.0,
+        quarter_turn_upper_frame: false,
         radial_overlap: RadialOverlap::Coincident,
         topology: [3, 2, 0],
         source_face_counts: [2, 2],
         realization_work: 420,
         realized_vertices: 0,
+    },
+    ContactCase {
+        name: "equal-radius strict-secant shared cap with independent phase",
+        radii: [2.0, 2.0],
+        upper_radial_scale: 2.0,
+        quarter_turn_upper_frame: true,
+        radial_overlap: RadialOverlap::StrictSecant,
+        topology: [6, 6, 2],
+        source_face_counts: [3, 3],
+        realization_work: 1_785,
+        realized_vertices: 2,
+    },
+    ContactCase {
+        name: "unequal-radius strict-secant shared cap with independent phase",
+        radii: [2.0, 1.0],
+        upper_radial_scale: 2.0,
+        quarter_turn_upper_frame: true,
+        radial_overlap: RadialOverlap::StrictSecant,
+        topology: [6, 6, 2],
+        source_face_counts: [3, 3],
+        realization_work: 1_785,
+        realized_vertices: 2,
     },
 ];
 
@@ -132,6 +161,11 @@ fn contact_fixture(
     };
     let axis = frame.z();
     let radial = exact_radial_direction(frame) * case.upper_radial_scale;
+    let upper_x = if case.quarter_turn_upper_frame {
+        frame.y()
+    } else {
+        frame.x()
+    };
     let lower_contact = frame.origin();
     let upper_contact = translated(lower_contact, radial, 1.0);
     let lower_frame = if reversed_axes[0] {
@@ -143,9 +177,11 @@ fn contact_fixture(
         Frame::new(
             translated(upper_contact, axis, UPPER_HEIGHT),
             -axis,
-            frame.x(),
+            upper_x,
         )
         .unwrap()
+    } else if case.quarter_turn_upper_frame {
+        Frame::new(upper_contact, axis, upper_x).unwrap()
     } else {
         frame.with_origin(upper_contact)
     };
@@ -209,6 +245,10 @@ fn assert_positive_area_relation(case: ContactCase, fixture: &ContactFixture) {
     let distance = fixture.radial_distance;
     let [first, second] = case.radii;
     match case.radial_overlap {
+        RadialOverlap::StrictSecant => {
+            assert!(distance > (first - second).abs(), "{}", case.name);
+            assert!(distance < first + second, "{}", case.name);
+        }
         RadialOverlap::StrictInternal => {
             assert!(distance > 0.0, "{}", case.name);
             assert!(
@@ -224,9 +264,23 @@ fn assert_positive_area_relation(case: ContactCase, fixture: &ContactFixture) {
     }
 }
 
-fn disk_overlap_area(case: ContactCase) -> f64 {
+fn disk_overlap_area(case: ContactCase, fixture: &ContactFixture) -> f64 {
     let [first, second] = case.radii;
     match case.radial_overlap {
+        RadialOverlap::StrictSecant => {
+            let distance = fixture.radial_distance;
+            let first_angle = ((distance.powi(2) + first.powi(2) - second.powi(2))
+                / (2.0 * distance * first))
+                .acos();
+            let second_angle = ((distance.powi(2) + second.powi(2) - first.powi(2))
+                / (2.0 * distance * second))
+                .acos();
+            let radical = (-distance + first + second)
+                * (distance + first - second)
+                * (distance - first + second)
+                * (distance + first + second);
+            first.powi(2) * first_angle + second.powi(2) * second_angle - 0.5 * radical.sqrt()
+        }
         RadialOverlap::Coincident => core::f64::consts::PI * first.powi(2),
         RadialOverlap::StrictInternal => core::f64::consts::PI * first.min(second).powi(2),
     }
@@ -289,7 +343,7 @@ fn independent_union_oracle(case: ContactCase, fixture: &ContactFixture) -> Unio
     let centroid = union_centroid(cylinders);
     UnionOracle {
         volume,
-        surface_area: source_area.sum::<f64>() - 2.0 * disk_overlap_area(case),
+        surface_area: source_area.sum::<f64>() - 2.0 * disk_overlap_area(case, fixture),
         centroid,
         centroidal_inertia: union_centroidal_inertia(cylinders, centroid),
     }
@@ -367,6 +421,11 @@ fn assert_face_lineage(
     });
     let mut derived_faces = Vec::new();
     let mut derived_edges = Vec::new();
+    let mut split_edges = Vec::new();
+    let mut derived_edge_sources = Vec::new();
+    let mut split_edge_sources = Vec::new();
+    let mut derived_edge_source_owners = Vec::new();
+    let mut split_edge_source_owners = Vec::new();
     let mut face_sources = [0_usize; 2];
     for event in created.journal().lineage() {
         match event {
@@ -390,11 +449,72 @@ fn assert_face_lineage(
                 assert!(result_edges.contains(&derived), "{}", case.name);
                 assert!(!derived_edges.contains(&derived), "{}", case.name);
                 derived_edges.push(derived);
-                assert!(
-                    source_edges.iter().any(|edges| edges.contains(&source)),
+                let owner = source_edges
+                    .iter()
+                    .position(|edges| edges.contains(&source))
+                    .unwrap_or_else(|| panic!("{} edge lineage escaped both sources", case.name));
+                assert!(!derived_edge_sources.contains(&source), "{}", case.name);
+                derived_edge_sources.push(source);
+                derived_edge_source_owners.push(owner);
+            }
+            LineageView::Split { source, pieces } => {
+                assert!(matches!(case.radial_overlap, RadialOverlap::StrictSecant));
+                let JournalEntity::Edge(source) = source else {
+                    panic!("{} split source changed entity kind", case.name)
+                };
+                let owner = source_edges
+                    .iter()
+                    .position(|edges| edges.contains(&source))
+                    .unwrap_or_else(|| {
+                        panic!("{} split source escaped both source bodies", case.name)
+                    });
+                assert!(!split_edge_sources.contains(&source), "{}", case.name);
+                split_edge_sources.push(source);
+                split_edge_source_owners.push(owner);
+
+                let pieces = pieces.collect::<Vec<_>>();
+                assert_eq!(pieces.len(), 2, "{}", case.name);
+                let [JournalEntity::Edge(first), JournalEntity::Edge(second)] = pieces.as_slice()
+                else {
+                    panic!("{} split pieces changed entity kind", case.name)
+                };
+                for piece in [first, second] {
+                    assert!(result_edges.contains(piece), "{}", case.name);
+                    assert!(!derived_edges.contains(piece), "{}", case.name);
+                    assert!(!split_edges.contains(piece), "{}", case.name);
+                    split_edges.push(piece.clone());
+                }
+
+                // The explicit binary order is carrier order: the first arc
+                // ends at the second arc's start and the second closes back
+                // to the first. Reversing the semantic pieces breaks both
+                // the shared parameter seam and this directed vertex cycle.
+                let first_view = part.edge(first.clone()).unwrap();
+                let second_view = part.edge(second.clone()).unwrap();
+                let first_bounds = first_view.bounds().unwrap();
+                let second_bounds = second_view.bounds().unwrap();
+                assert_eq!(
+                    first_bounds.1.to_bits(),
+                    second_bounds.0.to_bits(),
                     "{}",
                     case.name
                 );
+                let full_period = second_bounds.1 - first_bounds.0;
+                let epsilon =
+                    256.0 * f64::EPSILON * second_bounds.1.abs().max(first_bounds.0.abs()).max(1.0);
+                assert!(
+                    (full_period - core::f64::consts::TAU).abs() <= epsilon,
+                    "{}",
+                    case.name
+                );
+                let [Some(first_tail), Some(first_head)] = first_view.vertices() else {
+                    panic!("{} first split piece lost endpoints", case.name)
+                };
+                let [Some(second_tail), Some(second_head)] = second_view.vertices() else {
+                    panic!("{} second split piece lost endpoints", case.name)
+                };
+                assert_eq!(first_head, second_tail, "{}", case.name);
+                assert_eq!(second_head, first_tail, "{}", case.name);
             }
             LineageView::Merge { sources, result } => {
                 assert!(matches!(case.radial_overlap, RadialOverlap::Coincident));
@@ -428,13 +548,44 @@ fn assert_face_lineage(
         }
     }
     assert_eq!(derived_faces.len(), result_faces.len(), "{}", case.name);
-    assert_eq!(derived_edges.len(), result_edges.len(), "{}", case.name);
-    assert_eq!(
-        created.journal().lineage_count(),
-        result_faces.len() + result_edges.len(),
+    let mut covered_edges = derived_edges.clone();
+    covered_edges.extend(split_edges.iter().cloned());
+    assert_eq!(covered_edges.len(), result_edges.len(), "{}", case.name);
+    assert!(
+        result_edges.iter().all(|edge| covered_edges.contains(edge)),
         "{}",
         case.name
     );
+    if matches!(case.radial_overlap, RadialOverlap::StrictSecant) {
+        assert_eq!(derived_edges.len(), 2, "{}", case.name);
+        assert_eq!(split_edges.len(), 4, "{}", case.name);
+        assert_eq!(split_edge_sources.len(), 2, "{}", case.name);
+        derived_edge_source_owners.sort_unstable();
+        split_edge_source_owners.sort_unstable();
+        assert_eq!(derived_edge_source_owners, [0, 1], "{}", case.name);
+        assert_eq!(split_edge_source_owners, [0, 1], "{}", case.name);
+        assert_eq!(created.journal().lineage_count(), 10, "{}", case.name);
+        let mut lineaged_sources = derived_edge_sources;
+        lineaged_sources.extend(split_edge_sources);
+        assert_eq!(lineaged_sources.len(), 4, "{}", case.name);
+        assert!(
+            source_edges
+                .iter()
+                .flatten()
+                .all(|source| lineaged_sources.contains(source)),
+            "{}",
+            case.name
+        );
+    } else {
+        assert!(split_edges.is_empty(), "{}", case.name);
+        assert_eq!(derived_edges.len(), result_edges.len(), "{}", case.name);
+        assert_eq!(
+            created.journal().lineage_count(),
+            result_faces.len() + result_edges.len(),
+            "{}",
+            case.name
+        );
+    }
     assert_eq!(face_sources, case.source_face_counts, "{}", case.name);
 }
 
@@ -736,7 +887,17 @@ fn strict_internal_axial_contact_unite_full_commits_both_containment_directions(
 
 #[test]
 fn coincident_axial_contact_unite_full_commits_the_exact_general_matrix() {
-    assert_exact_general_matrix(&CONTACT_CASES[2..]);
+    assert_exact_general_matrix(&CONTACT_CASES[2..3]);
+}
+
+#[test]
+fn equal_radius_strict_secant_axial_contact_unite_full_commits_the_exact_general_matrix() {
+    assert_exact_general_matrix(&CONTACT_CASES[3..4]);
+}
+
+#[test]
+fn unequal_radius_strict_secant_axial_contact_unite_full_commits_the_exact_general_matrix() {
+    assert_exact_general_matrix(&CONTACT_CASES[4..]);
 }
 
 #[test]
@@ -747,7 +908,7 @@ fn internal_axial_contact_unite_work_accepts_n_and_refuses_n_minus_one_atomicall
             assert_work_frontier(
                 case,
                 reversed_axes,
-                internal_contact_shell_stage(),
+                contact_shell_stage(),
                 INTERNAL_CONTACT_SHELL_WORK,
             );
         }
@@ -756,7 +917,22 @@ fn internal_axial_contact_unite_work_accepts_n_and_refuses_n_minus_one_atomicall
 
 #[test]
 fn coincident_axial_contact_unite_work_accepts_n_and_refuses_n_minus_one_atomically() {
-    assert_exact_work_frontiers(&CONTACT_CASES[2..]);
+    assert_exact_work_frontiers(&CONTACT_CASES[2..3]);
+}
+
+#[test]
+fn strict_secant_axial_contact_unite_work_accepts_n_and_refuses_n_minus_one_atomically() {
+    assert_exact_work_frontiers(&CONTACT_CASES[3..]);
+    for &case in &CONTACT_CASES[3..] {
+        for reversed_axes in [[false, false], [true, false]] {
+            assert_work_frontier(
+                case,
+                reversed_axes,
+                contact_shell_stage(),
+                STRICT_SECANT_CONTACT_SHELL_WORK,
+            );
+        }
+    }
 }
 
 #[test]
@@ -814,6 +990,7 @@ fn exact_internal_contact_keeps_session_resolution_under_loose_operation_toleran
         name: "sub-operation-tolerance internal annulus",
         radii: [2.0, 1.0],
         upper_radial_scale: 1.0 - 4.0 * resolution,
+        quarter_turn_upper_frame: false,
         radial_overlap: RadialOverlap::StrictInternal,
         topology: [5, 4, 0],
         source_face_counts: [3, 2],
@@ -841,4 +1018,34 @@ fn exact_internal_contact_keeps_session_resolution_under_loose_operation_toleran
         &baseline.xt,
         "loose operation tolerance changed an exact contact result",
     );
+}
+
+#[test]
+fn exact_strict_secant_contact_keeps_session_resolution_under_loose_operation_tolerance() {
+    for &case in &CONTACT_CASES[3..] {
+        let baseline = run_unite_case_with_settings(
+            case,
+            Placement::Oblique,
+            [false, true],
+            false,
+            OperationSettings::new(),
+        );
+        let loose = run_unite_case_with_settings(
+            case,
+            Placement::Oblique,
+            [false, true],
+            false,
+            OperationSettings::new().with_tolerances(Tolerances::with_linear(1.0e-6).unwrap()),
+        );
+
+        assert_eq!(loose.report, baseline.report, "{}", case.name);
+        assert_xt_equal(
+            &loose.xt,
+            &baseline.xt,
+            &format!(
+                "{}: loose operation tolerance changed an exact strict-secant result",
+                case.name
+            ),
+        );
+    }
 }

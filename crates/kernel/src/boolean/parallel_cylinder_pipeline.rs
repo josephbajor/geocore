@@ -65,6 +65,7 @@ pub(super) fn execute_parallel_cylinder_boolean(
                 operation,
                 &bodies,
                 [&first, &second],
+                &graph,
                 &contact,
                 linear,
                 scope,
@@ -134,15 +135,16 @@ fn execute_axial_contact_boolean(
     operation: PlanarBooleanOperation,
     bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
     contact: &CertifiedParallelCylinderAxialContact,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match operation {
         PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
-        PlanarBooleanOperation::Unite => {
-            execute_parallel_cylinder_contact_unite(edit, bodies, cylinders, contact, linear, scope)
-        }
+        PlanarBooleanOperation::Unite => execute_parallel_cylinder_contact_unite(
+            edit, bodies, cylinders, graph, contact, linear, scope,
+        ),
         PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
             edit,
             &[(bodies[0].clone(), cylinders[0])],

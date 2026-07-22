@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kcore::interval::Interval;
 use kgeom::curve::{Circle, Curve, Line};
-use kgeom::curve2d::{Circle2d, Curve2d, Line2d};
+#[cfg(test)]
+use kgeom::curve2d::Curve2d;
+use kgeom::curve2d::{Circle2d, Line2d};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
@@ -25,6 +27,7 @@ use ktopo::store::Store;
 
 use super::super::mixed_cap_boundary::MixedCylinderCapRing;
 use super::super::mixed_periodic_arrangement::PeriodicSourceLoopKey;
+use super::super::periodic_chart::{self, PeriodicChartError};
 use super::components::MixedShellComponent;
 use super::{
     ArrangementDirection, MixedArrangementBinding, MixedBoundedSourceSpanPlan, MixedPcurveLineage,
@@ -268,6 +271,19 @@ pub(crate) enum MixedShellMaterializationError {
     StoreRead,
     WorkCountOverflow,
     AnalyticPreflight(AnalyticShellPlanError),
+}
+
+impl From<PeriodicChartError> for MixedShellMaterializationError {
+    fn from(error: PeriodicChartError) -> Self {
+        match error {
+            PeriodicChartError::InvalidAnalyticGeometry => Self::InvalidAnalyticGeometry,
+            PeriodicChartError::InvalidEndpointFreePeriodicUse => {
+                Self::InvalidEndpointFreePeriodicUse
+            }
+            PeriodicChartError::NoCommonPeriodicWindow => Self::NoCommonPeriodicWindow,
+            PeriodicChartError::PeriodShiftOverflow => Self::PeriodShiftOverflow,
+        }
+    }
 }
 
 fn source_scalar_map(
@@ -1329,6 +1345,7 @@ fn source_face_geometry(
     Ok((surface, sense, domain))
 }
 
+#[cfg(test)]
 fn surface_periodicity(surface: AnalyticShellSurface) -> [Option<f64>; 2] {
     match surface {
         AnalyticShellSurface::Plane(surface) => surface.periodicity(),
@@ -1341,108 +1358,16 @@ fn pcurve_bounds(
     pcurve: AnalyticPcurveUse,
     edge_range: ParamRange,
 ) -> Result<(Point2, Point2), MixedShellMaterializationError> {
-    let map = pcurve.edge_to_pcurve();
-    let endpoints = [map.map(edge_range.lo), map.map(edge_range.hi)];
-    let active = ParamRange::new(
-        endpoints[0].min(endpoints[1]),
-        endpoints[0].max(endpoints[1]),
-    );
-    if !active.is_finite() || active.lo >= active.hi {
-        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
-    }
-    let bounds = match pcurve.curve() {
-        AnalyticShellPcurve::Line(curve) => curve.bounding_box(active),
-        AnalyticShellPcurve::Circle(curve) => curve.bounding_box(active),
-    };
-    let periods = surface_periodicity(surface);
-    let min = pcurve
-        .chart()
-        .apply(bounds.min, periods)
-        .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
-    let max = pcurve
-        .chart()
-        .apply(bounds.max, periods)
-        .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
-    Ok((min, max))
+    periodic_chart::pcurve_bounds(surface, pcurve, edge_range).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn periodic_interval_shift(
     period: f64,
     window: ParamRange,
     interval: (f64, f64),
 ) -> Result<i32, MixedShellMaterializationError> {
-    let (min, max) = interval;
-    if !period.is_finite()
-        || period <= 0.0
-        || !window.is_finite()
-        || window.lo >= window.hi
-        || window.width() != period
-        || !min.is_finite()
-        || !max.is_finite()
-        || min > max
-    {
-        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
-    }
-    let epsilon = 256.0
-        * f64::EPSILON
-        * window
-            .lo
-            .abs()
-            .max(window.hi.abs())
-            .max(min.abs())
-            .max(max.abs())
-            .max(period)
-            .max(1.0);
-    if max - min > period + epsilon {
-        return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
-    }
-    let delta_value = ((window.lo - min - epsilon) / period).ceil();
-    if !delta_value.is_finite()
-        || delta_value < f64::from(i32::MIN)
-        || delta_value > f64::from(i32::MAX)
-    {
-        return Err(MixedShellMaterializationError::PeriodShiftOverflow);
-    }
-    let delta = delta_value as i32;
-    let shifted_min = min + f64::from(delta) * period;
-    let shifted_max = max + f64::from(delta) * period;
-    if !shifted_min.is_finite()
-        || !shifted_max.is_finite()
-        || shifted_min < window.lo - epsilon
-        || shifted_max > window.hi + epsilon
-    {
-        return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
-    }
-    Ok(delta)
-}
-
-fn exact_period_window(lo: f64, period: f64) -> Option<ParamRange> {
-    let hi = lo + period;
-    (lo.is_finite() && hi.is_finite() && hi > lo && hi - lo == period)
-        .then_some(ParamRange::new(lo, hi))
-}
-
-fn centered_exact_period_window(seam: f64, period: f64) -> Option<ParamRange> {
-    let turns = (-seam / period).round();
-    if !turns.is_finite() {
-        return None;
-    }
-    exact_period_window(seam + turns * period, period)
-}
-
-fn canonical_periodic_seam(value: f64, origin: f64, period: f64) -> Option<f64> {
-    let turns = ((value - origin) / period).floor();
-    if !turns.is_finite() {
-        return None;
-    }
-    let mut seam = value - turns * period;
-    let upper = origin + period;
-    if seam < origin {
-        seam += period;
-    } else if seam >= upper {
-        seam -= period;
-    }
-    seam.is_finite().then_some(seam)
+    periodic_chart::periodic_interval_shift(period, window, interval).map_err(Into::into)
 }
 
 fn select_common_periodic_window(
@@ -1450,62 +1375,7 @@ fn select_common_periodic_window(
     authored: ParamRange,
     intervals: &[(f64, f64)],
 ) -> Result<ParamRange, MixedShellMaterializationError> {
-    if !period.is_finite()
-        || period <= 0.0
-        || !authored.is_finite()
-        || authored.lo >= authored.hi
-        || authored.width() != period
-    {
-        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
-    }
-    if intervals
-        .iter()
-        .all(|interval| periodic_interval_shift(period, authored, *interval).is_ok())
-    {
-        return Ok(authored);
-    }
-
-    let mut seams = intervals
-        .iter()
-        .flat_map(|&(lo, hi)| [lo, hi])
-        .map(|value| {
-            canonical_periodic_seam(value, authored.lo, period)
-                .ok_or(MixedShellMaterializationError::InvalidAnalyticGeometry)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    seams.sort_by(f64::total_cmp);
-    seams.dedup_by(|left, right| left.to_bits() == right.to_bits());
-    let mut interior_candidates = Vec::new();
-    if seams.len() == 1 {
-        interior_candidates.push(seams[0] + period / 2.0);
-    } else if seams.len() > 1 {
-        interior_candidates.extend(
-            seams
-                .windows(2)
-                .map(|pair| pair[0] + (pair[1] - pair[0]) / 2.0),
-        );
-        let wrap_hi = seams[0] + period;
-        interior_candidates.push(seams[seams.len() - 1] + (wrap_hi - seams[seams.len() - 1]) / 2.0);
-    }
-    interior_candidates.sort_by(f64::total_cmp);
-    interior_candidates.dedup_by(|left, right| left.to_bits() == right.to_bits());
-    // Prefer a seam in a certified open complement gap. Endpoint seams remain
-    // a deterministic fallback because closed interval containment proves no
-    // bounded pcurve crosses that face-chart boundary.
-    for candidates in [&interior_candidates, &seams] {
-        for &candidate in candidates {
-            let Some(window) = centered_exact_period_window(candidate, period) else {
-                continue;
-            };
-            if intervals
-                .iter()
-                .all(|interval| periodic_interval_shift(period, window, *interval).is_ok())
-            {
-                return Ok(window);
-            }
-        }
-    }
-    Err(MixedShellMaterializationError::NoCommonPeriodicWindow)
+    periodic_chart::select_common_periodic_window(period, authored, intervals).map_err(Into::into)
 }
 
 fn normalize_periodic_pcurve_chart(
@@ -1514,19 +1384,8 @@ fn normalize_periodic_pcurve_chart(
     pcurve: AnalyticPcurveUse,
     edge_range: ParamRange,
 ) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
-    let AnalyticShellSurface::Cylinder(_) = surface else {
-        return Ok(pcurve);
-    };
-    let Some(period) = surface_periodicity(surface)[0] else {
-        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
-    };
-    let (min, max) = pcurve_bounds(surface, pcurve, edge_range)?;
-    let delta = periodic_interval_shift(period, window, (min.x, max.x))?;
-    let [u, v] = pcurve.chart().period_shifts();
-    let u = u
-        .checked_add(delta)
-        .ok_or(MixedShellMaterializationError::PeriodShiftOverflow)?;
-    Ok(pcurve.with_chart(PcurveChart::shifted([u, v])))
+    periodic_chart::normalize_periodic_pcurve_chart(surface, window, pcurve, edge_range)
+        .map_err(Into::into)
 }
 
 fn include_pcurve_bounds(aggregate: &mut Option<(Point2, Point2)>, bounds: (Point2, Point2)) {
@@ -1713,37 +1572,9 @@ fn validate_endpoint_free_periodic_use(
     pcurve: AnalyticPcurveUse,
     edge_range: ParamRange,
 ) -> Result<(), MixedShellMaterializationError> {
-    let AnalyticShellSurface::Cylinder(cylinder) = surface else {
-        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
-    };
-    let Some(period) = cylinder.periodicity()[0] else {
-        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
-    };
-    let AnalyticShellPcurve::Line(line) = pcurve.curve() else {
-        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
-    };
-    let Some([winding @ (-1 | 1), 0]) = pcurve.closure_winding() else {
-        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
-    };
-    let map = pcurve.edge_to_pcurve();
-    let delta = line.dir() * (map.scale() * edge_range.width());
-    if !edge_range.is_finite()
-        || edge_range.lo >= edge_range.hi
-        || edge_range.width() != period
-        || !map.scale().is_finite()
-        || !map.offset().is_finite()
-        || line.dir().y != 0.0
-        || delta.y != 0.0
-        || delta.x != f64::from(winding) * period
-    {
-        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
-    }
-    let normalized = normalize_periodic_pcurve_chart(surface, edge_range, pcurve, edge_range)?;
-    let (min, max) = pcurve_bounds(surface, normalized, edge_range)?;
-    if periodic_interval_shift(period, edge_range, (min.x, max.x))? != 0 {
-        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
-    }
-    Ok(())
+    periodic_chart::shift_endpoint_free_periodic_ring(surface, pcurve, edge_range)
+        .map(|_| ())
+        .map_err(Into::into)
 }
 
 fn prepare_periodic_face_windows(

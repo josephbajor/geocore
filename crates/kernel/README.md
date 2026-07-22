@@ -40,7 +40,10 @@ The current facade supports:
   convex-certificate-independent mixed planning, typed empty/created/refused
   outcomes, and Full validation, plus Full-checked same-signed nested-height
   parallel-cylinder Intersect lens and ordered axial-inner-minus-outer
-  Subtract crescent prisms across world/oblique frames;
+  Subtract crescent prisms across world/oblique frames, plus exact axial-contact
+  Unite for strict disk containment (5F/4E/0V), coincident support (3F/2E/0V),
+  and equal/unequal-radius strict secancy (6F/6E/2V), with complete lineage,
+  independent properties, deterministic export/self-import, and rollback;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
@@ -52,10 +55,11 @@ The current facade supports:
 Broader modeling operations and additional semantic edits remain under active
 development. The facade is additive: lower crates remain available to kernel
 implementation and trusted adapter work, but their raw layouts are not part of
-the facade compatibility promise. Parallel-cylinder Booleans are deliberately
-limited to the certified strict-secant nested-height Intersect and ordered
-axial-inner-minus-outer Subtract families; Unite and reverse Subtract are not
-yet claimed.
+the facade compatibility promise. Parallel-cylinder CSG covers strict overlaps,
+coincident caps, strict separations, and exact zero-gap cap contact. At contact,
+Intersect is ProvenEmpty, Subtract is an ordered whole-minuend copy, and Unite
+commits the certified containment, coincidence, and strict-secancy families
+above. External tangency remains boundary-only.
 
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic

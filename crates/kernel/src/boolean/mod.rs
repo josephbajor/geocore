@@ -68,6 +68,8 @@ mod parallel_cylinder_pipeline;
 #[allow(dead_code)]
 mod parallel_cylinder_relation;
 #[allow(dead_code)]
+mod periodic_chart;
+#[allow(dead_code)]
 mod pipeline;
 #[allow(dead_code)]
 mod planar_bsp;
