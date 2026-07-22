@@ -291,6 +291,53 @@ fn parallel_cylinder_lens_input() -> AnalyticShellInput {
     )
 }
 
+pub(crate) fn unsplit_parallel_cylinder_lens_input() -> AnalyticShellInput {
+    let geometry = lens_geometry();
+    let mut edges = lens_edges(geometry);
+    edges.truncate(6);
+    let mut faces = lens_faces(geometry);
+    faces.truncate(2);
+    let bottom_frame = Frame::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let top_frame = Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0));
+    faces.extend([
+        AnalyticShellFace::new(
+            AnalyticFaceKey::new(2),
+            AnalyticShellSurface::Plane(Plane::new(bottom_frame)),
+            Sense::Forward,
+            FaceDomain::from_bounds(-0.1, 1.1, -1.0, 1.0).unwrap(),
+            vec![AnalyticShellLoop::new(vec![
+                cap_arc(E2, Sense::Reversed, Point2::new(1.0, 0.0), -1.0),
+                cap_arc(E0, Sense::Reversed, Point2::new(0.0, 0.0), -1.0),
+            ])],
+        ),
+        AnalyticShellFace::new(
+            AnalyticFaceKey::new(3),
+            AnalyticShellSurface::Plane(Plane::new(top_frame)),
+            Sense::Forward,
+            FaceDomain::from_bounds(-0.1, 1.1, -1.0, 1.0).unwrap(),
+            vec![AnalyticShellLoop::new(vec![
+                cap_arc(E1, Sense::Forward, Point2::new(0.0, 0.0), 1.0),
+                cap_arc(E3, Sense::Forward, Point2::new(1.0, 0.0), 1.0),
+            ])],
+        ),
+    ]);
+    AnalyticShellInput::new(
+        vec![
+            AnalyticShellVertex::new(V0, geometry.points[0]),
+            AnalyticShellVertex::new(V1, geometry.points[1]),
+            AnalyticShellVertex::new(V2, geometry.points[2]),
+            AnalyticShellVertex::new(V3, geometry.points[3]),
+        ],
+        edges,
+        faces,
+    )
+}
+
 #[test]
 fn parallel_cylinder_rulings_are_source_ordered_and_permutation_invariant() {
     let input = parallel_cylinder_lens_input();
@@ -428,6 +475,42 @@ fn materialization_rejects_swapped_proof_and_wrong_carrier_trace_or_source() {
     let mut wrong_source = prepared;
     wrong_source.faces[1].surface = wrong_source.faces[0].surface;
     assert_materialization_refuses(&wrong_source);
+}
+
+#[test]
+fn unsplit_lens_circle_arc_caps_and_shell_are_fully_certified() {
+    use crate::loop_proof::{LoopSimplicity, certify_loop_orientation, certify_loop_simplicity};
+
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(&unsplit_parallel_cylinder_lens_input(), TOLERANCE)
+        .unwrap();
+    for key in [AnalyticFaceKey::new(2), AnalyticFaceKey::new(3)] {
+        let face = output
+            .faces()
+            .iter()
+            .find_map(|&(candidate, face)| (candidate == key).then_some(face))
+            .unwrap();
+        let loop_id = transaction.store().get(face).unwrap().loops()[0];
+        assert_eq!(
+            certify_loop_simplicity(transaction.store(), loop_id).unwrap(),
+            LoopSimplicity::Certified
+        );
+        assert!(
+            certify_loop_orientation(transaction.store(), face, loop_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+    let decision = transaction
+        .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+        .unwrap();
+    assert!(decision.is_committed());
+    let report = decision.checks()[0].report();
+    assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:#?}");
+    assert!(report.faults.is_empty(), "{report:#?}");
+    assert!(report.gaps.is_empty(), "{report:#?}");
 }
 
 fn assert_materialization_refuses(prepared: &PreparedAnalyticShell) {

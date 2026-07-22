@@ -45,7 +45,7 @@ pub use lineage_ruling::SourceLineagePlaneCylinderRulingResidualCertificate;
 #[cfg(test)]
 mod assemble_tests;
 #[cfg(test)]
-mod cylinder_cylinder_tests;
+pub(crate) mod cylinder_cylinder_tests;
 
 macro_rules! stable_key {
     ($name:ident, $doc:literal) => {

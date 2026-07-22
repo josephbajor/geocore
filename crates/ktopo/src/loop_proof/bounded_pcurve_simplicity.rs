@@ -691,41 +691,45 @@ fn match_circle_roots(
     right_roots: Vec<Interval>,
 ) -> core::result::Result<PairRelation, ()> {
     let ordinary_shared = uncertified_shared_parameters(shared, certified_joins);
-    if left_roots.len() == 1 && right_roots.len() == 1 {
-        match uniquely_confining_join(left, left_roots[0], right, right_roots[0], certified_joins) {
-            Ok(Some(_)) => return Ok(PairRelation::Disjoint),
-            Err(()) => return Ok(PairRelation::Indeterminate),
-            Ok(None) => {}
-        }
-        return Ok(classify_root_pair(
-            left,
-            left_roots[0],
-            right,
-            right_roots[0],
-            &ordinary_shared,
-        ));
-    }
+    let Some(left_roots) = active_circle_roots(left_roots, left)? else {
+        return Ok(PairRelation::Indeterminate);
+    };
+    let Some(right_roots) = active_circle_roots(right_roots, right)? else {
+        return Ok(PairRelation::Indeterminate);
+    };
     let left_points = left_roots
         .iter()
-        .map(|&root| circle_point_interval(left_center, left_cosine, left_sine, root))
+        .map(|&(principal, _)| {
+            circle_point_interval(left_center, left_cosine, left_sine, principal)
+        })
         .collect::<core::result::Result<Vec<_>, _>>()?;
     let right_points = right_roots
         .iter()
-        .map(|&root| circle_point_interval(right_center, right_cosine, right_sine, root))
+        .map(|&(principal, _)| {
+            circle_point_interval(right_center, right_cosine, right_sine, principal)
+        })
         .collect::<core::result::Result<Vec<_>, _>>()?;
     let mut uncertain = false;
     let mut consumed_joins = vec![false; certified_joins.len()];
-    for (left_root_index, &left_root) in left_roots.iter().enumerate() {
+    let mut consumed_right_roots = vec![false; right_roots.len()];
+    for (left_root_index, &(_, left_root)) in left_roots.iter().enumerate() {
         let matches = right_points
             .iter()
             .enumerate()
             .filter(|(_, point)| boxes_intersect(left_points[left_root_index], **point))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let [right_root_index] = matches.as_slice() else {
-            return Ok(PairRelation::Indeterminate);
+        let right_root_index = match matches.as_slice() {
+            [] => continue,
+            [index] => *index,
+            _ => return Ok(PairRelation::Indeterminate),
         };
-        let right_root = right_roots[*right_root_index];
+        if consumed_right_roots[right_root_index] {
+            uncertain = true;
+            continue;
+        }
+        consumed_right_roots[right_root_index] = true;
+        let right_root = right_roots[right_root_index].1;
         match uniquely_confining_join(left, left_root, right, right_root, certified_joins) {
             Ok(Some(join_index)) if !consumed_joins[join_index] => {
                 consumed_joins[join_index] = true;
@@ -751,6 +755,25 @@ fn match_circle_roots(
     } else {
         PairRelation::Disjoint
     })
+}
+
+/// Lift principal-angle circle roots into the authored active span before
+/// comparing source carriers or consuming topology-owned endpoint joins.
+/// A root outside the span cannot participate in a span/span intersection;
+/// more than one admissible period lift remains fail-closed.
+fn active_circle_roots(
+    roots: Vec<Interval>,
+    span: BoundedPcurveSpan<'_>,
+) -> core::result::Result<Option<Vec<(Interval, Interval)>>, ()> {
+    let mut active = Vec::with_capacity(roots.len());
+    for root in roots {
+        match root_membership(root, span)? {
+            RootMembership::Outside => {}
+            RootMembership::Candidate(use_) => active.push((root, use_.parameter)),
+            RootMembership::Ambiguous => return Ok(None),
+        }
+    }
+    Ok(Some(active))
 }
 
 fn coincident_circle_relation(
@@ -994,7 +1017,16 @@ fn solve_harmonic(
         .map(twice_atan_interval)
         .collect::<core::result::Result<Vec<_>, _>>()?;
     if infinity {
-        roots.push(Interval::point(core::f64::consts::PI));
+        // The half-angle point at infinity is the transcendental root pi,
+        // not the single rounded `f64::consts::PI` value. Match the outward
+        // enclosure used by finite `atan` roots before point-box pairing.
+        let mut lo = core::f64::consts::PI;
+        let mut hi = core::f64::consts::PI;
+        for _ in 0..4 {
+            lo = lo.next_down();
+            hi = hi.next_up();
+        }
+        roots.push(Interval::new(lo, hi));
     }
     roots.sort_by(|left, right| {
         left.lo()
@@ -1427,6 +1459,88 @@ mod tests {
             )
             .unwrap(),
             PairRelation::Coincident
+        );
+    }
+
+    #[test]
+    fn strict_secant_arc_ring_consumes_period_shifted_endpoint_roots() {
+        let angle = core::f64::consts::PI / 3.0;
+        let first = circle([0.0, 0.0], 1.0);
+        let second = circle([1.0, 0.0], 1.0);
+        let join = || CertifiedBoundedLoopJoin::new(2.0e-8).unwrap();
+        let forward = [
+            span(&first, -angle, angle, [0.0, 0.0], 0, 1).with_head_join(join()),
+            span(&second, 2.0 * angle, 4.0 * angle, [0.0, 0.0], 1, 0).with_head_join(join()),
+        ];
+        assert_eq!(
+            certify_bounded_loop_simplicity(&forward),
+            BoundedLoopSimplicity::Certified
+        );
+
+        let reverse_period = [
+            span(&second, -4.0 * angle, -2.0 * angle, [0.0, 0.0], 0, 1).with_head_join(join()),
+            span(&first, -angle, angle, [0.0, 0.0], 1, 0).with_head_join(join()),
+        ];
+        assert_eq!(
+            certify_bounded_loop_simplicity(&reverse_period),
+            BoundedLoopSimplicity::Certified
+        );
+
+        let mut missing_source_evidence = forward;
+        missing_source_evidence[0].head_join = None;
+        assert!(matches!(
+            certify_bounded_loop_simplicity(&missing_source_evidence),
+            BoundedLoopSimplicity::Indeterminate(
+                BoundedLoopSimplicityGap::ChartDiscontinuity { .. }
+            )
+        ));
+
+        assert_eq!(
+            circle_circle_relation(
+                BoundedPcurveSpan::new(&first, -angle - 0.1, -angle + 0.1, Point2::default(),),
+                BoundedPcurveSpan::new(
+                    &second,
+                    2.0 * angle - 0.1,
+                    2.0 * angle + 0.1,
+                    Point2::default(),
+                ),
+                &[],
+                &[],
+            )
+            .unwrap(),
+            PairRelation::Disjoint,
+            "carrier roots active on only one span are not span intersections"
+        );
+    }
+
+    #[test]
+    fn circle_root_boxes_that_do_not_pair_uniquely_fail_closed() {
+        let first = circle([0.0, 0.0], 1.0);
+        let second = circle([0.0, 0.0], 1.0);
+        let span = |curve| BoundedPcurveSpan::new(curve, -0.1, 0.1, Point2::default());
+        let center = [Exact::scalar(0.0).unwrap(), Exact::scalar(0.0).unwrap()];
+        let cosine = [Exact::scalar(1.0).unwrap(), Exact::scalar(0.0).unwrap()];
+        let sine = [Exact::scalar(0.0).unwrap(), Exact::scalar(1.0).unwrap()];
+        assert_eq!(
+            match_circle_roots(
+                span(&first),
+                span(&second),
+                &[],
+                &[],
+                &center,
+                &cosine,
+                &sine,
+                vec![Interval::new(-1.0e-6, 1.0e-6)],
+                &center,
+                &cosine,
+                &sine,
+                vec![
+                    Interval::new(-3.0e-6, -2.0e-6),
+                    Interval::new(2.0e-6, 3.0e-6),
+                ],
+            )
+            .unwrap(),
+            PairRelation::Indeterminate
         );
     }
 

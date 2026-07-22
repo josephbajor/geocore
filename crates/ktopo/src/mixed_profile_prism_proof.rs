@@ -794,6 +794,7 @@ fn certified_point_on_axis(frame: &Frame, point: Point3) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analytic_shell::cylinder_cylinder_tests::unsplit_parallel_cylinder_lens_input;
     use crate::analytic_shell::tests::half_cylinder_input;
     use crate::analytic_shell::{
         AnalyticEdgeKey, AnalyticFaceKey, AnalyticPcurveUse, AnalyticShellCurve, AnalyticShellEdge,
@@ -1285,6 +1286,152 @@ mod tests {
                 assert_eq!(
                     result.unwrap().unwrap().embedding,
                     ShellEmbedding::Certified
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().limit().map(|limit| limit.stage),
+                    Some(MIXED_PROFILE_PRISM_WORK)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn strict_parallel_cylinder_profile_uses_the_general_sweep_theorem() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&unsplit_parallel_cylinder_lens_input(), 1.0e-12)
+            .unwrap();
+        assert_eq!(
+            certify_mixed_profile_prism(transaction.store(), output.shell(), None).unwrap(),
+            Some(ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Positive,
+            })
+        );
+        let decision = transaction
+            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+            .unwrap();
+        assert!(decision.is_committed());
+        assert_eq!(decision.checks()[0].report().outcome(), CheckOutcome::Valid);
+    }
+
+    #[test]
+    fn strict_parallel_cylinder_profile_tampering_fails_closed() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&unsplit_parallel_cylinder_lens_input(), 1.0e-12)
+            .unwrap();
+        let baseline = transaction.store().clone();
+        let edge = |key: u64| {
+            output
+                .edges()
+                .iter()
+                .find_map(|(candidate, edge)| (candidate.value() == key).then_some(*edge))
+                .unwrap()
+        };
+        let face = |key: u64| {
+            output
+                .faces()
+                .iter()
+                .find_map(|(candidate, face)| (candidate.value() == key).then_some(*face))
+                .unwrap()
+        };
+
+        for case in ["carrier", "pcurve", "source", "sense"] {
+            let mut copy = baseline.clone();
+            let mut edit = copy.transaction().unwrap();
+            match case {
+                "carrier" => {
+                    let curve_id = edit.store().get(edge(2)).unwrap().curve.unwrap();
+                    let CurveGeom::Circle(circle) = *edit.store().curve(curve_id).unwrap() else {
+                        unreachable!()
+                    };
+                    edit.store_mut()
+                        .replace_curve(
+                            curve_id,
+                            CurveGeom::Circle(
+                                Circle::new(*circle.frame(), circle.radius() + 0.125).unwrap(),
+                            ),
+                        )
+                        .unwrap();
+                }
+                "pcurve" => {
+                    let loop_id = edit.store().get(face(2)).unwrap().loops[0];
+                    let fin_id = edit.store().get(loop_id).unwrap().fins[0];
+                    let pcurve_id = edit.store().get(fin_id).unwrap().pcurve.unwrap().curve();
+                    edit.store_mut()
+                        .replace_pcurve(
+                            pcurve_id,
+                            Curve2dGeom::Circle(
+                                Circle2d::new(Point2::new(1.125, 0.0), 1.0, Vec2::new(1.0, 0.0))
+                                    .unwrap(),
+                            ),
+                        )
+                        .unwrap();
+                }
+                "source" => {
+                    let surface_id = edit.store().get(face(1)).unwrap().surface;
+                    let SurfaceGeom::Cylinder(cylinder) =
+                        *edit.store().surface(surface_id).unwrap()
+                    else {
+                        unreachable!()
+                    };
+                    edit.store_mut()
+                        .replace_surface(
+                            surface_id,
+                            SurfaceGeom::Cylinder(
+                                Cylinder::new(*cylinder.frame(), cylinder.radius() + 0.125)
+                                    .unwrap(),
+                            ),
+                        )
+                        .unwrap();
+                }
+                "sense" => {
+                    let loop_id = edit.store().get(face(2)).unwrap().loops[0];
+                    let fin_id = edit.store().get(loop_id).unwrap().fins[0];
+                    let fin = edit.store_mut().get_mut(fin_id).unwrap();
+                    fin.sense = fin.sense.flipped();
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                certify_mixed_profile_prism(edit.store(), output.shell(), None).unwrap(),
+                None,
+                "{case} tamper must not retain the sweep theorem"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_parallel_cylinder_profile_work_is_exactly_budgeted() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&unsplit_parallel_cylinder_lens_input(), 1.0e-12)
+            .unwrap();
+        let required = proof_work(transaction.store(), output.shell(), 2)
+            .unwrap()
+            .unwrap();
+        for allowed in [required, required - 1] {
+            let session = session_with_work(allowed);
+            let context = kcore::operation::OperationContext::new(
+                &session,
+                kcore::tolerance::Tolerances::default(),
+            )
+            .unwrap();
+            let mut scope = OperationScope::new(&context);
+            let result =
+                certify_mixed_profile_prism(transaction.store(), output.shell(), Some(&mut scope));
+            if allowed == required {
+                assert_eq!(
+                    result.unwrap().unwrap(),
+                    ShellCertification {
+                        embedding: ShellEmbedding::Certified,
+                        orientation: ShellOrientation::Positive,
+                    }
                 );
             } else {
                 assert_eq!(
