@@ -12,6 +12,7 @@ const AXIS_OFFSET: f64 = 0.5;
 const OUTER_HALF_HEIGHT: f64 = 2.0;
 const INNER_HALF_HEIGHT: f64 = 1.0;
 const ANALYTIC_ORACLE_TOLERANCE: f64 = 1.0e-10;
+const CYLINDER_TOPOLOGY: [usize; 3] = [3, 2, 0];
 
 #[derive(Debug, Clone, Copy)]
 enum Placement {
@@ -40,6 +41,14 @@ fn shared_frame(placement: Placement) -> Frame {
 }
 
 fn fixture(placement: Placement) -> Fixture {
+    fixture_with_half_heights(placement, OUTER_HALF_HEIGHT, INNER_HALF_HEIGHT)
+}
+
+fn fixture_with_half_heights(
+    placement: Placement,
+    outer_half_height: f64,
+    inner_half_height: f64,
+) -> Fixture {
     let frame = shared_frame(placement);
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
@@ -47,9 +56,9 @@ fn fixture(placement: Placement) -> Fixture {
         let mut edit = session.edit_part(part_id.clone()).unwrap();
         let outer = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(-AXIS_OFFSET, 0.0, -OUTER_HALF_HEIGHT)),
+                frame.with_origin(frame.point_at(-AXIS_OFFSET, 0.0, -outer_half_height)),
                 RADIUS,
-                2.0 * OUTER_HALF_HEIGHT,
+                2.0 * outer_half_height,
             ))
             .unwrap()
             .into_result()
@@ -57,9 +66,9 @@ fn fixture(placement: Placement) -> Fixture {
             .body();
         let inner = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(AXIS_OFFSET, 0.0, -INNER_HALF_HEIGHT)),
+                frame.with_origin(frame.point_at(AXIS_OFFSET, 0.0, -inner_half_height)),
                 RADIUS,
-                2.0 * INNER_HALF_HEIGHT,
+                2.0 * inner_half_height,
             ))
             .unwrap()
             .into_result()
@@ -85,17 +94,81 @@ fn body_topology(part: &kernel::Part<'_>, body: BodyId) -> [usize; 3] {
     ]
 }
 
-fn source_signature(fixture: &Fixture) -> ([usize; 3], [usize; 3], usize) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PartEntityCounts {
+    bodies: usize,
+    regions: usize,
+    shells: usize,
+    faces: usize,
+    loops: usize,
+    fins: usize,
+    edges: usize,
+    vertices: usize,
+    curves: usize,
+    surfaces: usize,
+    pcurves: usize,
+}
+
+impl PartEntityCounts {
+    fn from_part(part: &kernel::Part<'_>) -> Self {
+        Self {
+            bodies: part.bodies().len(),
+            regions: part.regions().len(),
+            shells: part.shells().len(),
+            faces: part.faces().len(),
+            loops: part.loops().len(),
+            fins: part.fins().len(),
+            edges: part.edges().len(),
+            vertices: part.vertices().len(),
+            curves: part.curves().len(),
+            surfaces: part.surfaces().len(),
+            pcurves: part.pcurves().len(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FixtureSignature {
+    outer_topology: [usize; 3],
+    inner_topology: [usize; 3],
+    part_entities: PartEntityCounts,
+}
+
+fn fixture_signature(fixture: &Fixture) -> FixtureSignature {
     let part = fixture.session.part(fixture.part_id.clone()).unwrap();
-    (
-        body_topology(&part, fixture.outer.clone()),
-        body_topology(&part, fixture.inner.clone()),
-        part.bodies().len(),
-    )
+    FixtureSignature {
+        outer_topology: body_topology(&part, fixture.outer.clone()),
+        inner_topology: body_topology(&part, fixture.inner.clone()),
+        part_entities: PartEntityCounts::from_part(&part),
+    }
+}
+
+fn assert_source_bodies_preserved(fixture: &Fixture, expected_body_count: usize) {
+    let signature = fixture_signature(fixture);
+    assert_eq!(signature.outer_topology, CYLINDER_TOPOLOGY);
+    assert_eq!(signature.inner_topology, CYLINDER_TOPOLOGY);
+    assert_eq!(signature.part_entities.bodies, expected_body_count);
 }
 
 fn run(
     fixture: &mut Fixture,
+    swapped: bool,
+    settings: OperationSettings,
+) -> OperationOutcome<BooleanOutcome> {
+    run_commutative(fixture, BooleanOperation::Intersect, swapped, settings)
+}
+
+fn run_unite(
+    fixture: &mut Fixture,
+    swapped: bool,
+    settings: OperationSettings,
+) -> OperationOutcome<BooleanOutcome> {
+    run_commutative(fixture, BooleanOperation::Unite, swapped, settings)
+}
+
+fn run_commutative(
+    fixture: &mut Fixture,
+    operation: BooleanOperation,
     swapped: bool,
     settings: OperationSettings,
 ) -> OperationOutcome<BooleanOutcome> {
@@ -109,12 +182,8 @@ fn run(
         .edit_part(fixture.part_id.clone())
         .unwrap()
         .boolean_bodies(
-            BooleanBodiesRequest::new(
-                BooleanOperation::Intersect,
-                bodies[0].clone(),
-                bodies[1].clone(),
-            )
-            .with_settings(settings),
+            BooleanBodiesRequest::new(operation, bodies[0].clone(), bodies[1].clone())
+                .with_settings(settings),
         )
         .unwrap()
 }
@@ -187,6 +256,36 @@ fn expected_subtract_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
     rotate_tensor(frame, local)
 }
 
+fn expected_unite_volume() -> f64 {
+    14.0 * core::f64::consts::PI / 3.0 + 3.0_f64.sqrt()
+}
+
+fn expected_unite_surface_area() -> f64 {
+    12.0 * core::f64::consts::PI + 3.0_f64.sqrt()
+}
+
+fn expected_unite_centroid_x() -> f64 {
+    -core::f64::consts::PI / expected_unite_volume()
+}
+
+fn expected_unite_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
+    let pi = core::f64::consts::PI;
+    let root_three = 3.0_f64.sqrt();
+    let volume = expected_unite_volume();
+    // Inclusion-exclusion of the height-four left cylinder, height-two right
+    // cylinder, and their symmetric height-two lens gives these raw moments.
+    let raw_x_squared = 7.0 * pi / 3.0 + 9.0 * root_three / 8.0;
+    let raw_y_squared = 7.0 * pi / 6.0 + 3.0 * root_three / 8.0;
+    let raw_z_squared = 50.0 * pi / 9.0 + root_three / 3.0;
+    let central_x_squared = raw_x_squared - pi.powi(2) / volume;
+    let local = [
+        [raw_y_squared + raw_z_squared, 0.0, 0.0],
+        [0.0, central_x_squared + raw_z_squared, 0.0],
+        [0.0, 0.0, central_x_squared + raw_y_squared],
+    ];
+    rotate_tensor(frame, local)
+}
+
 fn rotate_tensor(frame: Frame, local: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let axes = [frame.x(), frame.y(), frame.z()].map(|axis| [axis.x, axis.y, axis.z]);
     core::array::from_fn(|row| {
@@ -218,6 +317,25 @@ fn assert_point_matches_analytic(actual: Point3Enclosure, expected: Point3) {
     assert!(
         actual.error_bound() <= ANALYTIC_ORACLE_TOLERANCE,
         "centroid enclosure is too wide: {actual:?}"
+    );
+}
+
+fn assert_inertia_matches_analytic(
+    actual: [[f64; 3]; 3],
+    error_bound: f64,
+    expected: [[f64; 3]; 3],
+) {
+    let error = (0..3)
+        .flat_map(|row| (0..3).map(move |column| (row, column)))
+        .map(|(row, column)| (actual[row][column] - expected[row][column]).abs())
+        .fold(0.0, f64::max);
+    assert!(
+        error <= ANALYTIC_ORACLE_TOLERANCE,
+        "inertia={actual:?}, expected={expected:?}, error_bound={error_bound}"
+    );
+    assert!(
+        error_bound <= 1.0e-8,
+        "centroidal inertia enclosure is too wide: {error_bound}"
     );
 }
 
@@ -312,26 +430,75 @@ fn assert_subtract_created(
             .frame
             .point_at(expected_subtract_centroid_x(), 0.0, 0.0),
     );
-    let expected_inertia = expected_subtract_centroidal_inertia(fixture.frame);
-    let actual_inertia = properties.centroidal_inertia().value();
     // The oracle describes the ideal CSG circles, while the committed B-rep
     // owns certified floating trim representatives. Compare their values at
     // the same tolerance used for volume/area and separately bound the
     // certificate width; an ideal value need not lie inside the realized
     // trim enclosure bit-for-bit.
-    let inertia_error = (0..3)
-        .flat_map(|row| (0..3).map(move |column| (row, column)))
-        .map(|(row, column)| (actual_inertia[row][column] - expected_inertia[row][column]).abs())
-        .fold(0.0, f64::max);
-    assert!(
-        inertia_error <= ANALYTIC_ORACLE_TOLERANCE,
-        "inertia={actual_inertia:?}, expected={expected_inertia:?}, enclosure {:?}",
-        properties.centroidal_inertia()
+    assert_inertia_matches_analytic(
+        properties.centroidal_inertia().value(),
+        properties.centroidal_inertia().error_bound(),
+        expected_subtract_centroidal_inertia(fixture.frame),
     );
-    assert!(
-        properties.centroidal_inertia().error_bound() <= 1.0e-8,
-        "centroidal inertia enclosure is too wide: {:?}",
-        properties.centroidal_inertia()
+    let first = part
+        .export_xt(ExportXtRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let second = part
+        .export_xt(ExportXtRequest::new(result))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(first.bytes(), second.bytes());
+    first.bytes().to_vec()
+}
+
+fn assert_unite_created(fixture: &Fixture, outcome: OperationOutcome<BooleanOutcome>) -> Vec<u8> {
+    let result = outcome.into_result().unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+        panic!("connected parallel-cylinder Unite returned {result:#?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.reports().len(), 1);
+    assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
+    let result = created.bodies()[0].clone();
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    assert_eq!(body_topology(&part, result.clone()), [6, 8, 4]);
+    let full = part
+        .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
+    let BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = part
+        .body_properties(BodyPropertiesRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap()
+    else {
+        panic!("connected-union analytic properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    assert_scalar_matches_analytic(properties.volume(), expected_unite_volume(), "volume");
+    assert_scalar_matches_analytic(
+        properties.surface_area(),
+        expected_unite_surface_area(),
+        "surface area",
+    );
+    assert_point_matches_analytic(
+        properties.centroid(),
+        fixture
+            .frame
+            .point_at(expected_unite_centroid_x(), 0.0, 0.0),
+    );
+    assert_inertia_matches_analytic(
+        properties.centroidal_inertia().value(),
+        properties.centroidal_inertia().error_bound(),
+        expected_unite_centroidal_inertia(fixture.frame),
     );
     let first = part
         .export_xt(ExportXtRequest::new(result.clone()))
@@ -353,7 +520,7 @@ fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
         let mut canonical_bytes: Option<Vec<u8>> = None;
         for swapped in [false, true] {
             let mut fixture = fixture(placement);
-            assert_eq!(source_signature(&fixture), ([3, 2, 0], [3, 2, 0], 2));
+            assert_source_bodies_preserved(&fixture, 2);
             let outcome = run(&mut fixture, swapped, OperationSettings::new());
             let result = outcome.into_result().unwrap();
             let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
@@ -404,7 +571,7 @@ fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
                 assert_eq!(first.bytes(), second.bytes());
                 first.bytes().to_vec()
             };
-            assert_eq!(source_signature(&fixture), ([3, 2, 0], [3, 2, 0], 3));
+            assert_source_bodies_preserved(&fixture, 3);
             if let Some(canonical) = canonical_bytes.as_ref() {
                 assert_xt_equal(&bytes, canonical, "operand swap changed X_T bytes");
             } else {
@@ -416,15 +583,63 @@ fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
 }
 
 #[test]
+fn parallel_cylinder_unite_full_commits_a_deterministic_connected_union() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let mut canonical_bytes: Option<Vec<u8>> = None;
+        for swapped in [false, true] {
+            for _ in 0..2 {
+                let mut fixture = fixture(placement);
+                assert_source_bodies_preserved(&fixture, 2);
+                let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
+                let bytes = assert_unite_created(&fixture, outcome);
+                assert_source_bodies_preserved(&fixture, 3);
+                if let Some(canonical) = canonical_bytes.as_ref() {
+                    assert_xt_equal(
+                        &bytes,
+                        canonical,
+                        "operand swap or repeat changed Unite X_T bytes",
+                    );
+                } else {
+                    canonical_bytes = Some(bytes.clone());
+                }
+                assert_fast_self_import(&mut fixture.session, &bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn unsupported_equal_height_parallel_cylinder_unite_refuses_atomically() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for swapped in [false, true] {
+            let mut fixture =
+                fixture_with_half_heights(placement, INNER_HALF_HEIGHT, INNER_HALF_HEIGHT);
+            assert_source_bodies_preserved(&fixture, 2);
+            let before = fixture_signature(&fixture);
+            let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
+            assert!(matches!(
+                outcome.into_result().unwrap(),
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            assert_eq!(
+                fixture_signature(&fixture),
+                before,
+                "equal-height Unite mutated the part for {placement:?}, swapped={swapped}"
+            );
+        }
+    }
+}
+
+#[test]
 fn parallel_cylinder_inner_minus_outer_full_commits_a_deterministic_crescent_prism() {
     for placement in [Placement::World, Placement::Oblique] {
         let mut canonical_bytes: Option<Vec<u8>> = None;
         for _ in 0..2 {
             let mut fixture = fixture(placement);
-            assert_eq!(source_signature(&fixture), ([3, 2, 0], [3, 2, 0], 2));
+            assert_source_bodies_preserved(&fixture, 2);
             let outcome = run_subtract(&mut fixture, false, OperationSettings::new());
             let bytes = assert_subtract_created(&fixture, outcome);
-            assert_eq!(source_signature(&fixture), ([3, 2, 0], [3, 2, 0], 3));
+            assert_source_bodies_preserved(&fixture, 3);
             if let Some(canonical) = canonical_bytes.as_ref() {
                 assert_xt_equal(&bytes, canonical, "repeat Subtract changed X_T bytes");
             } else {
@@ -434,19 +649,20 @@ fn parallel_cylinder_inner_minus_outer_full_commits_a_deterministic_crescent_pri
         }
 
         let mut reverse = fixture(placement);
-        let before = source_signature(&reverse);
+        let before = fixture_signature(&reverse);
         let outcome = run_subtract(&mut reverse, true, OperationSettings::new());
         assert!(matches!(
             outcome.into_result().unwrap(),
             BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
         ));
-        assert_eq!(source_signature(&reverse), before);
+        assert_eq!(fixture_signature(&reverse), before);
     }
 }
 
 #[derive(Clone, Copy)]
 enum RealizationCase {
     Intersection,
+    Unite,
     InnerMinusOuter,
 }
 
@@ -457,6 +673,7 @@ fn run_realization_case(
 ) -> OperationOutcome<BooleanOutcome> {
     match case {
         RealizationCase::Intersection => run(fixture, false, settings),
+        RealizationCase::Unite => run_unite(fixture, false, settings),
         RealizationCase::InnerMinusOuter => run_subtract(fixture, false, settings),
     }
 }
@@ -502,7 +719,7 @@ fn assert_realization_budget_case(case: RealizationCase) {
     ));
 
     let mut denied_fixture = fixture(Placement::World);
-    let before = source_signature(&denied_fixture);
+    let before = fixture_signature(&denied_fixture);
     let denied = run_realization_case(&mut denied_fixture, case, settings_at(usage.consumed - 1));
     let expected = kernel::LimitSnapshot {
         allowed: usage.consumed - 1,
@@ -510,13 +727,14 @@ fn assert_realization_budget_case(case: RealizationCase) {
     };
     assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
     assert_eq!(denied.report().limit_events(), &[expected]);
-    assert_eq!(source_signature(&denied_fixture), before);
+    assert_eq!(fixture_signature(&denied_fixture), before);
 }
 
 #[test]
 fn parallel_cylinder_realization_budget_accepts_n_and_refuses_n_minus_one_atomically() {
     for case in [
         RealizationCase::Intersection,
+        RealizationCase::Unite,
         RealizationCase::InnerMinusOuter,
     ] {
         assert_realization_budget_case(case);

@@ -22,9 +22,9 @@ use crate::session::PartEdit;
 /// Consume the strict nested-height parallel-cylinder theorem through the
 /// shared arrangement, truth-selection, planning, and Full-check path.
 ///
-/// Intersect is commutative and receives a canonical source order. Subtract
-/// preserves caller order and is admitted only for axial-inner minus outer;
-/// the reverse topology needs a different realization theorem.
+/// Intersect and Unite are commutative and receive a canonical source order.
+/// Subtract preserves caller order and is admitted only for axial-inner minus
+/// outer; the reverse topology needs a different realization theorem.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -33,11 +33,10 @@ pub(super) fn execute_parallel_cylinder_boolean(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     let bodies = match operation {
-        PlanarBooleanOperation::Intersect => canonical_intersection_order(edit, bodies)?,
-        PlanarBooleanOperation::Subtract => bodies,
-        PlanarBooleanOperation::Unite => {
-            return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+        PlanarBooleanOperation::Intersect | PlanarBooleanOperation::Unite => {
+            canonical_commutative_order(edit, bodies)?
         }
+        PlanarBooleanOperation::Subtract => bodies,
     };
     let first = extract_cylinder_operand(edit, bodies[0].clone(), 0, scope)?;
     let second = extract_cylinder_operand(edit, bodies[1].clone(), 1, scope)?;
@@ -81,7 +80,7 @@ pub(super) fn execute_parallel_cylinder_boolean(
 /// Give a commutative operation one caller-order-independent source order.
 /// Store iteration is deterministic slot order and carries no geometric case
 /// decision; operand meaning is recovered later by the certified relation.
-fn canonical_intersection_order(
+fn canonical_commutative_order(
     edit: &PartEdit<'_>,
     bodies: [BodyId; 2],
 ) -> StageResult<[BodyId; 2]> {
