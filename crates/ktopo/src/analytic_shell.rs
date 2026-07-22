@@ -234,6 +234,30 @@ pub struct AnalyticShellEdge {
     carrier: AnalyticShellCurve,
     range: ParamRange,
     source: Option<EntityRef>,
+    split_lineage: Option<(EntityRef, AnalyticEdgeSplitPiece)>,
+}
+
+/// Stable semantic order of one result in an explicitly binary edge split.
+///
+/// Split lineage is never inferred from repeated derivation sources. Callers
+/// must mark exactly one [`Self::First`] and one [`Self::Second`] bounded edge
+/// for the same live source edge before analytic-shell preflight will admit
+/// the relationship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalyticEdgeSplitPiece {
+    /// First persistent-name result piece.
+    First,
+    /// Second persistent-name result piece.
+    Second,
+}
+
+impl AnalyticEdgeSplitPiece {
+    const fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
 }
 
 impl AnalyticShellEdge {
@@ -250,12 +274,28 @@ impl AnalyticShellEdge {
             carrier,
             range,
             source: None,
+            split_lineage: None,
         }
     }
 
     /// Retain the source entity for transaction-journal lineage.
     pub const fn with_source(mut self, source: EntityRef) -> Self {
         self.source = Some(source);
+        self
+    }
+
+    /// Declare this bounded edge as one ordered piece of a binary source-edge
+    /// split.
+    ///
+    /// This is mutually exclusive with [`Self::with_source`]. Preflight
+    /// requires the source to be a live edge and requires exactly one first
+    /// and one second result across the complete shell proposal.
+    pub const fn with_split_lineage(
+        mut self,
+        source: EntityRef,
+        piece: AnalyticEdgeSplitPiece,
+    ) -> Self {
+        self.split_lineage = Some((source, piece));
         self
     }
 
@@ -282,6 +322,11 @@ impl AnalyticShellEdge {
     /// Optional source entity.
     pub const fn source(self) -> Option<EntityRef> {
         self.source
+    }
+
+    /// Optional explicit binary split source and semantic piece order.
+    pub const fn split_lineage(self) -> Option<(EntityRef, AnalyticEdgeSplitPiece)> {
+        self.split_lineage
     }
 }
 
@@ -664,7 +709,14 @@ pub struct PreparedAnalyticShell {
     edges: Vec<PreparedAnalyticEdge>,
     closed_edges: Vec<PreparedAnalyticClosedEdge>,
     edge_order: Vec<AnalyticEdgeKey>,
+    edge_splits: Vec<PreparedAnalyticEdgeSplit>,
     faces: Vec<AnalyticShellFace>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreparedAnalyticEdgeSplit {
+    source: EntityRef,
+    pieces: [AnalyticEdgeKey; 2],
 }
 
 impl PreparedAnalyticShell {
@@ -690,6 +742,10 @@ impl PreparedAnalyticShell {
 
     fn edge_order(&self) -> &[AnalyticEdgeKey] {
         &self.edge_order
+    }
+
+    fn edge_splits(&self) -> &[PreparedAnalyticEdgeSplit] {
+        &self.edge_splits
     }
 
     fn declaration(&self, key: AnalyticEdgeKey) -> Option<AnalyticEdgeDeclaration> {
@@ -823,6 +879,12 @@ pub enum AnalyticShellPlanError {
     ConflictingFaceLineage(AnalyticFaceKey),
     /// Face merge lineage needs at least two distinct face sources.
     InvalidFaceMergeLineage(AnalyticFaceKey),
+    /// One bounded edge declared mutually exclusive derivation and split
+    /// lineage.
+    ConflictingEdgeLineage(AnalyticEdgeKey),
+    /// Explicit split metadata did not form one live, ordered binary edge
+    /// partition.
+    InvalidEdgeSplitLineage(EntityRef),
     /// The carrier/surface/pcurve representation family has no exact certifier.
     UnsupportedPairing(AnalyticEdgeKey),
     /// An admitted pairing failed its whole-interval certificate.
@@ -879,6 +941,7 @@ pub fn prepare_analytic_shell(
     let vertices = prepare_vertices(&input.vertices)?;
     let bounded_edges = prepare_edges(&input.edges, &vertices, store, tolerance)?;
     let closed_edges = prepare_closed_edges(&input.closed_edges, store)?;
+    let edge_splits = prepare_edge_splits(&bounded_edges, &closed_edges)?;
     let mut declarations = BTreeMap::new();
     for (&key, &edge) in &bounded_edges {
         declarations.insert(key, AnalyticEdgeDeclaration::Bounded(edge));
@@ -944,6 +1007,7 @@ pub fn prepare_analytic_shell(
         edges: prepared_edges,
         closed_edges: prepared_closed_edges,
         edge_order: declarations.keys().copied().collect(),
+        edge_splits,
         faces,
     })
 }
@@ -1020,6 +1084,17 @@ fn prepare_edges(
         {
             return Err(AnalyticShellPlanError::StaleLineage(source));
         }
+        if edge.source.is_some() && edge.split_lineage.is_some() {
+            return Err(AnalyticShellPlanError::ConflictingEdgeLineage(edge.key));
+        }
+        if let Some((source, _)) = edge.split_lineage {
+            if !matches!(source, EntityRef::Edge(_)) {
+                return Err(AnalyticShellPlanError::InvalidEdgeSplitLineage(source));
+            }
+            if !lineage_is_live(store, source) {
+                return Err(AnalyticShellPlanError::StaleLineage(source));
+            }
+        }
         if edges.insert(edge.key, edge).is_some() {
             return Err(AnalyticShellPlanError::DuplicateEdge(edge.key));
         }
@@ -1032,6 +1107,57 @@ fn prepare_edges(
         return Err(AnalyticShellPlanError::UnusedVertex(key));
     }
     Ok(edges)
+}
+
+fn prepare_edge_splits(
+    bounded: &BTreeMap<AnalyticEdgeKey, AnalyticShellEdge>,
+    closed: &BTreeMap<AnalyticEdgeKey, AnalyticShellClosedEdge>,
+) -> Result<Vec<PreparedAnalyticEdgeSplit>, AnalyticShellPlanError> {
+    let mut groups: Vec<(EntityRef, [Option<AnalyticEdgeKey>; 2])> = Vec::new();
+    for (&key, &edge) in bounded {
+        let Some((source, piece)) = edge.split_lineage() else {
+            continue;
+        };
+        let index = piece.index();
+        if let Some((_, pieces)) = groups
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == source)
+        {
+            if pieces[index].replace(key).is_some() {
+                return Err(AnalyticShellPlanError::InvalidEdgeSplitLineage(source));
+            }
+        } else {
+            let mut pieces = [None; 2];
+            pieces[index] = Some(key);
+            groups.push((source, pieces));
+        }
+    }
+
+    let mut splits = Vec::with_capacity(groups.len());
+    for (source, pieces) in groups {
+        let [Some(first), Some(second)] = pieces else {
+            return Err(AnalyticShellPlanError::InvalidEdgeSplitLineage(source));
+        };
+        if let Some(conflict) = bounded
+            .values()
+            .find(|edge| edge.source() == Some(source))
+            .map(|edge| edge.key())
+            .or_else(|| {
+                closed
+                    .values()
+                    .find(|edge| edge.source() == Some(source))
+                    .map(|edge| edge.key())
+            })
+        {
+            return Err(AnalyticShellPlanError::ConflictingEdgeLineage(conflict));
+        }
+        splits.push(PreparedAnalyticEdgeSplit {
+            source,
+            pieces: [first, second],
+        });
+    }
+    splits.sort_by_key(|split| split.pieces.into_iter().min().unwrap_or(split.pieces[0]));
+    Ok(splits)
 }
 
 fn prepare_closed_edges(

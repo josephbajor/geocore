@@ -1,13 +1,14 @@
-//! Alternating axis-aligned periodic graph loops on cylinder charts.
+//! Axis-aligned periodic graph loops on cylinder charts.
 //!
 //! A bounded cylinder loop may represent a noncontractible ring without an
-//! endpoint-free edge. This authority places a topology-ordered, strictly
-//! alternating sequence of horizontal and vertical bounded Line2d uses in one
-//! proof-local universal-cover chart. It admits only total winding `(+/-1, 0)`
-//! and requires every horizontal span to advance with that winding. Within
-//! this representation the lifted walk is a single-valued periodic height
-//! graph (vertical jumps are allowed) and cannot meet itself or a nontrivial
-//! period translate. Other curve types, same-axis subdivisions, backtracking,
+//! endpoint-free edge. This authority places either a topology-ordered
+//! subdivision of one horizontal ring or a strictly alternating sequence of
+//! horizontal and vertical bounded Line2d uses in one proof-local
+//! universal-cover chart. It admits only total winding `(+/-1, 0)` and
+//! requires every horizontal span to advance with that winding. Within this
+//! representation the lifted walk is a single-valued periodic height graph
+//! (vertical jumps are allowed) and cannot meet itself or a nontrivial period
+//! translate. Other curve types, mixed same-axis subdivisions, backtracking,
 //! ambiguous lifts, or repeated vertical fibers fail closed.
 
 use super::bounded_pcurve_integral::BoundedPcurveSpan;
@@ -85,8 +86,9 @@ struct LiftedCycle<'a> {
     winding: i64,
 }
 
-/// Certify an alternating finite cycle of horizontal and vertical bounded
-/// Line2d uses as one simple noncontractible cylinder boundary.
+/// Certify a finite horizontal subdivision or alternating horizontal/vertical
+/// cycle of bounded Line2d uses as one simple noncontractible cylinder
+/// boundary.
 pub(super) fn certify_piecewise_periodic_line_loop(
     store: &Store,
     face_id: crate::entity::FaceId,
@@ -151,13 +153,17 @@ fn certify_piecewise_periodic_line_cycle<'a>(
     let Some(cycle) = lift_cycle(surface, &raw, period) else {
         return Ok(None);
     };
-    if !periodic_graph_is_simple(
-        &cycle.spans,
-        cycle.winding,
-        period,
-        [u_tolerance, v_tolerance],
-    ) || !periodic_span_family_is_simple(&cycle, period)
-    {
+    let simple = if cycle.spans.iter().all(|span| span.horizontal) {
+        horizontal_ring_is_simple(&raw, &cycle, period)
+    } else {
+        periodic_graph_is_simple(
+            &cycle.spans,
+            cycle.winding,
+            period,
+            [u_tolerance, v_tolerance],
+        ) && periodic_span_family_is_simple(&cycle, period)
+    };
+    if !simple {
         return Ok(None);
     }
     Ok(Some(cycle))
@@ -365,6 +371,53 @@ fn periodic_graph_is_simple(
                     advance.hi() < 0.0
                 }
         })
+}
+
+/// A same-height monotone subdivision whose proof-local charted joins are
+/// bit-identical modulo one explicit period addition and whose total winding
+/// is +/-1 is exactly one simple horizontal ring. `lift_cycle` independently
+/// authorizes every join through topology identity, whole-fin incidence, and
+/// surface-lifted distance. The exact coordinate relation rules out even tiny
+/// same-carrier overlaps without asking the generic pair engine to reinterpret
+/// coincident Line2d carriers.
+fn horizontal_ring_is_simple(raw: &[RawSpan<'_>], cycle: &LiftedCycle<'_>, period: f64) -> bool {
+    let Some(first) = raw.first() else {
+        return false;
+    };
+    if raw.len() != cycle.spans.len()
+        || cycle.winding.unsigned_abs() != 1
+        || !period.is_finite()
+        || period <= 0.0
+    {
+        return false;
+    }
+    let height = first.start.y;
+    if !height.is_finite() {
+        return false;
+    }
+    raw.iter().enumerate().all(|(index, span)| {
+        let next = raw[(index + 1) % raw.len()];
+        let du = Interval::point(span.end.x) - Interval::point(span.start.x);
+        span.horizontal
+            && span.head == next.tail
+            && span.start.y.to_bits() == height.to_bits()
+            && span.end.y.to_bits() == height.to_bits()
+            && next.start.y.to_bits() == height.to_bits()
+            && exact_periodic_coordinate_join(span.end.x, next.start.x, period)
+            && if cycle.winding > 0 {
+                du.lo() > 0.0
+            } else {
+                du.hi() < 0.0
+            }
+    })
+}
+
+fn exact_periodic_coordinate_join(left: f64, right: f64, period: f64) -> bool {
+    left.is_finite()
+        && right.is_finite()
+        && (left.to_bits() == right.to_bits()
+            || (left + period).to_bits() == right.to_bits()
+            || left.to_bits() == (right + period).to_bits())
 }
 
 /// Check one base traversal together with both adjacent period translates.
@@ -591,6 +644,63 @@ mod tests {
                 .unwrap_or_else(|| panic!("negative graph refused at cyclic anchor {anchor}"));
             assert_eq!(cycle.winding, -1);
         }
+    }
+
+    #[test]
+    fn periodic_line_authority_accepts_monotone_horizontal_ring_subdivisions() {
+        let period = core::f64::consts::TAU;
+        for points in [
+            vec![
+                Point2::new(0.0, 2.0),
+                Point2::new(2.0, 2.0),
+                Point2::new(period, 2.0),
+            ],
+            vec![
+                Point2::new(0.0, -3.0),
+                Point2::new(2.0 - period, -3.0),
+                Point2::new(-period, -3.0),
+            ],
+        ] {
+            let segments = segment_chain(&points);
+            let curves = line_curves(&segments);
+            let raw = raw_spans(&curves, &segments);
+            let expected_winding = if points[1].x > points[0].x { 1 } else { -1 };
+            for anchor in 0..raw.len() {
+                let mut rotated = raw.clone();
+                rotated.rotate_left(anchor);
+                let surface = cylinder_surface(1.0);
+                let cycle = lift_cycle(&surface, &rotated, period)
+                    .unwrap_or_else(|| panic!("horizontal ring lift refused at anchor {anchor}"));
+                assert!(
+                    horizontal_ring_is_simple(&rotated, &cycle, period),
+                    "horizontal ring proof refused at anchor {anchor}",
+                );
+                assert_eq!(cycle.winding, expected_winding);
+            }
+        }
+
+        let backtracking = [
+            Point2::new(0.0, 0.0),
+            Point2::new(4.0, 0.0),
+            Point2::new(2.0, 0.0),
+            Point2::new(period, 0.0),
+        ];
+        let segments = segment_chain(&backtracking);
+        let curves = line_curves(&segments);
+        let raw = raw_spans(&curves, &segments);
+        assert!(certified_cycle(&cylinder_surface(1.0), &raw).is_none());
+
+        let overlapping_closure = [
+            Point2::new(0.0, 0.0),
+            Point2::new(4.0, 0.0),
+            Point2::new(period + LINEAR_RESOLUTION, 0.0),
+        ];
+        let segments = segment_chain(&overlapping_closure);
+        let curves = line_curves(&segments);
+        let raw = raw_spans(&curves, &segments);
+        let cycle = lift_cycle(&cylinder_surface(1.0), &raw, period)
+            .expect("near overlapping closure should reach the ordering gate");
+        assert!(!horizontal_ring_is_simple(&raw, &cycle, period));
     }
 
     #[test]

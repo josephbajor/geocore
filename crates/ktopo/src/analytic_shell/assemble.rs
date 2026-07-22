@@ -467,6 +467,12 @@ impl Transaction<'_> {
                 self.record_merge(sources.to_vec(), result);
             }
         }
+        for split in prepared.edge_splits() {
+            self.record_split(
+                split.source,
+                split.pieces.map(|piece| EntityRef::Edge(edges[&piece])),
+            );
+        }
         for &key in prepared.edge_order() {
             let Some(declaration) = prepared.declaration(key) else {
                 continue;

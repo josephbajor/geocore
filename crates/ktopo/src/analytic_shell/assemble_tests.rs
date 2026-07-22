@@ -1,6 +1,6 @@
-use super::AnalyticShellPlanError;
 use super::assemble::AnalyticShellAssemblyError;
 use super::tests::{full_cylinder_input, half_cylinder_input, shifted_full_cylinder_input};
+use super::{AnalyticEdgeSplitPiece, AnalyticShellPlanError};
 use crate::check::{CheckLevel, CheckOutcome, check_body_report};
 use crate::entity::{Body, Edge, EntityRef, Face, Fin, FinPcurve, Loop, Region, Shell, Vertex};
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
@@ -287,6 +287,123 @@ fn analytic_face_merge_lineage_preserves_caller_source_order() {
     let reversed = assemble(true);
     assert_eq!(forward, replayed);
     assert_ne!(forward, reversed);
+}
+
+#[test]
+fn analytic_edge_split_lineage_is_explicit_binary_ordered_and_deterministic() {
+    fn assemble(reverse_declarations: bool) -> Vec<LineageEvent> {
+        let mut store = Store::new();
+        let source_body = make::block(&mut store, &Frame::world(), [3.0, 3.0, 3.0]).unwrap();
+        let source = EntityRef::Edge(store.edges_of_body(source_body).unwrap()[0]);
+        let mut input = half_cylinder_input();
+        input.edges[0] = input.edges[0].with_split_lineage(source, AnalyticEdgeSplitPiece::Second);
+        input.edges[1] = input.edges[1].with_split_lineage(source, AnalyticEdgeSplitPiece::First);
+        if reverse_declarations {
+            input.edges.reverse();
+        }
+
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&input, 1.0e-12)
+            .unwrap();
+        let edge = |value| {
+            EntityRef::Edge(
+                output
+                    .edges()
+                    .iter()
+                    .find_map(|(key, edge)| (key.value() == value).then_some(*edge))
+                    .unwrap(),
+            )
+        };
+        let expected = vec![LineageEvent::Split {
+            source,
+            pieces: vec![edge(1), edge(0)],
+        }];
+        let journal = transaction.commit_checked(&[output.body()]).unwrap();
+        assert_eq!(journal.lineage(), expected);
+        journal.lineage().to_vec()
+    }
+
+    let first = assemble(false);
+    assert_eq!(assemble(false), first);
+    assert_eq!(assemble(true), first);
+}
+
+#[test]
+fn repeated_edge_derivations_are_not_inferred_as_a_split() {
+    let mut store = Store::new();
+    let source_body = make::block(&mut store, &Frame::world(), [3.0, 3.0, 3.0]).unwrap();
+    let source = EntityRef::Edge(store.edges_of_body(source_body).unwrap()[0]);
+    let mut input = half_cylinder_input();
+    input.edges[0] = input.edges[0].with_source(source);
+    input.edges[1] = input.edges[1].with_source(source);
+
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(&input, 1.0e-12)
+        .unwrap();
+    let journal = transaction.commit_checked(&[output.body()]).unwrap();
+    assert_eq!(journal.lineage().len(), 2);
+    assert!(journal.lineage().iter().all(|event| matches!(
+        event,
+        LineageEvent::DerivedFrom {
+            source: candidate,
+            ..
+        } if *candidate == source
+    )));
+}
+
+#[test]
+fn invalid_binary_edge_split_metadata_refuses_before_allocation() {
+    let mut store = Store::new();
+    let source_body = make::block(&mut store, &Frame::world(), [3.0, 3.0, 3.0]).unwrap();
+    let source_edge = EntityRef::Edge(store.edges_of_body(source_body).unwrap()[0]);
+    let source_face = EntityRef::Face(store.faces_of_body(source_body).unwrap()[0]);
+
+    let mut incomplete = half_cylinder_input();
+    incomplete.edges[0] =
+        incomplete.edges[0].with_split_lineage(source_edge, AnalyticEdgeSplitPiece::First);
+    assert!(matches!(
+        super::prepare_analytic_shell(&incomplete, &store, 1.0e-12),
+        Err(AnalyticShellPlanError::InvalidEdgeSplitLineage(source)) if source == source_edge
+    ));
+
+    let mut duplicate = half_cylinder_input();
+    duplicate.edges[0] =
+        duplicate.edges[0].with_split_lineage(source_edge, AnalyticEdgeSplitPiece::First);
+    duplicate.edges[1] =
+        duplicate.edges[1].with_split_lineage(source_edge, AnalyticEdgeSplitPiece::First);
+    assert!(matches!(
+        super::prepare_analytic_shell(&duplicate, &store, 1.0e-12),
+        Err(AnalyticShellPlanError::InvalidEdgeSplitLineage(source)) if source == source_edge
+    ));
+
+    let mut wrong_kind = half_cylinder_input();
+    wrong_kind.edges[0] =
+        wrong_kind.edges[0].with_split_lineage(source_face, AnalyticEdgeSplitPiece::First);
+    wrong_kind.edges[1] =
+        wrong_kind.edges[1].with_split_lineage(source_face, AnalyticEdgeSplitPiece::Second);
+    assert!(matches!(
+        super::prepare_analytic_shell(&wrong_kind, &store, 1.0e-12),
+        Err(AnalyticShellPlanError::InvalidEdgeSplitLineage(source)) if source == source_face
+    ));
+
+    let mut conflicting = half_cylinder_input();
+    conflicting.edges[0] = conflicting.edges[0]
+        .with_source(source_edge)
+        .with_split_lineage(source_edge, AnalyticEdgeSplitPiece::First);
+    conflicting.edges[1] =
+        conflicting.edges[1].with_split_lineage(source_edge, AnalyticEdgeSplitPiece::Second);
+    let before = counts(&store);
+    let mut transaction = store.transaction().unwrap();
+    assert!(matches!(
+        transaction.assemble_analytic_shell(&conflicting, 1.0e-12),
+        Err(AnalyticShellAssemblyError::Preflight(
+            AnalyticShellPlanError::ConflictingEdgeLineage(_)
+        ))
+    ));
+    assert_eq!(counts(transaction.store()), before);
+    transaction.rollback().unwrap();
 }
 
 #[test]

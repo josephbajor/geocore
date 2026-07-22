@@ -634,6 +634,15 @@ impl<'a> Transaction<'a> {
         self.lineage.push(LineageEvent::Merge { sources, result });
     }
 
+    /// Record one completely preflighted binary split produced by an in-crate
+    /// assembler. Piece order is semantic and must already be canonical.
+    pub(crate) fn record_split(&mut self, source: EntityRef, pieces: [EntityRef; 2]) {
+        self.lineage.push(LineageEvent::Split {
+            source,
+            pieces: pieces.to_vec(),
+        });
+    }
+
     /// Open the unstable low-level reconstruction/assembly seam for this
     /// transaction.
     ///
