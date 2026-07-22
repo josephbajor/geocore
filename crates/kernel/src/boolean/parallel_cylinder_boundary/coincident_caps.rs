@@ -13,8 +13,11 @@ use ktopo::entity::EdgeId as RawEdgeId;
 
 use super::*;
 use crate::boolean::boundary_select::{
-    BoundaryFragmentClassification, CoincidentBoundaryPairEvidence, CoincidentSourceOrientation,
+    BoundaryFragmentClassification, BoundarySelectionError, CoincidentBoundaryPairEvidence,
+    CoincidentSourceOrientation, OperandSide, RegularizedBooleanOperation,
+    SelectedBoundaryFragment, SelectedOrientation, select_boundary_fragments_with_coincident_pairs,
 };
+use crate::boolean::face_arrangement::ArrangementEdgeKey;
 use crate::boolean::mixed_boundary::{
     classify_periodic_face_from_source_point, periodic_source_span_point,
 };
@@ -33,7 +36,6 @@ pub(crate) enum ParallelCoincidentBoundaryKey {
     Arranged(MixedShellCellKey),
     CapEnd(usize),
     CapRemainder(usize),
-    ExteriorCap(usize),
 }
 
 /// One exact physical boundary piece of a derived planar cap cell.
@@ -92,12 +94,121 @@ impl PreparedCoincidentCapCell {
 pub(crate) enum ParallelCoincidentBoundaryPayload {
     Arranged,
     Cap(PreparedCoincidentCapCell),
-    OmittedCap,
+}
+
+/// Exact selected side use that bounds one coalesced planar cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectedCoincidentCapBoundaryUse {
+    SourceSpan {
+        operand: usize,
+        edge: RawEdgeId,
+        roots: [ParallelCylinderSourceRootWitness; 2],
+        side_cell: MixedShellCellKey,
+        span: PeriodicSourceLoopKey,
+        side_orientation: SelectedOrientation,
+    },
+    SectionArc {
+        fragment: usize,
+        endpoints: [usize; 2],
+        side_cell: MixedShellCellKey,
+        side_orientation: SelectedOrientation,
+    },
+}
+
+/// One canonical operation-selected planar cap and its exact side boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectedCoincidentCapPlan {
+    owner_key: ParallelCoincidentBoundaryKey,
+    target: PreparedCoincidentCapCell,
+    orientation: SelectedOrientation,
+    boundary: [SelectedCoincidentCapBoundaryUse; 2],
+}
+
+impl SelectedCoincidentCapPlan {
+    pub(crate) const fn owner_key(&self) -> ParallelCoincidentBoundaryKey {
+        self.owner_key
+    }
+
+    pub(crate) const fn target(&self) -> &PreparedCoincidentCapCell {
+        &self.target
+    }
+
+    pub(crate) const fn orientation(&self) -> SelectedOrientation {
+        self.orientation
+    }
+
+    pub(crate) const fn boundary(&self) -> &[SelectedCoincidentCapBoundaryUse; 2] {
+        &self.boundary
+    }
+}
+
+/// Canonical ordinary cells and one coalesced cap plan per physical end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectedParallelCylinderCoincidentBoundary {
+    arranged: Vec<
+        SelectedBoundaryFragment<ParallelCoincidentBoundaryKey, ParallelCoincidentBoundaryPayload>,
+    >,
+    caps: Vec<SelectedCoincidentCapPlan>,
+}
+
+impl SelectedParallelCylinderCoincidentBoundary {
+    pub(crate) fn arranged(
+        &self,
+    ) -> &[SelectedBoundaryFragment<
+        ParallelCoincidentBoundaryKey,
+        ParallelCoincidentBoundaryPayload,
+    >] {
+        &self.arranged
+    }
+
+    pub(crate) fn caps(&self) -> &[SelectedCoincidentCapPlan] {
+        &self.caps
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<
+            SelectedBoundaryFragment<
+                ParallelCoincidentBoundaryKey,
+                ParallelCoincidentBoundaryPayload,
+            >,
+        >,
+        Vec<SelectedCoincidentCapPlan>,
+    ) {
+        (self.arranged, self.caps)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreparedCoincidentSourceSpan {
+    cell: MixedShellCellKey,
+    span: PeriodicSourceLoopKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedCoincidentSourcePartition {
+    physical_end: usize,
+    piece: CoincidentCapBoundaryPiece,
+    spans: [PreparedCoincidentSourceSpan; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreparedPeriodicCutOwner {
+    fragment: usize,
+    cell: MixedShellCellKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedCoincidentCapProfile {
+    physical_end: usize,
+    boundary: [CoincidentCapBoundaryPiece; 2],
 }
 
 /// Owned periodic arrangements, cap candidates, and exact pair evidence.
 pub(crate) struct PreparedParallelCylinderCoincidentBoundary {
     periodic: Vec<PreparedPeriodicFace>,
+    caps: Vec<MixedCylinderCapRing>,
     classified: Vec<
         ClassifiedBoundaryFragment<
             ParallelCoincidentBoundaryKey,
@@ -105,6 +216,9 @@ pub(crate) struct PreparedParallelCylinderCoincidentBoundary {
         >,
     >,
     coincident_pairs: Vec<CoincidentBoundaryPairEvidence<ParallelCoincidentBoundaryKey>>,
+    source_partitions: Vec<PreparedCoincidentSourcePartition>,
+    periodic_cut_owners: Vec<PreparedPeriodicCutOwner>,
+    cap_profiles: Vec<PreparedCoincidentCapProfile>,
 }
 
 impl PreparedParallelCylinderCoincidentBoundary {
@@ -116,6 +230,11 @@ impl PreparedParallelCylinderCoincidentBoundary {
                 operand: face.operand,
                 arrangement: &face.arrangement,
             })
+            .chain(
+                self.caps
+                    .iter()
+                    .map(|ring| MixedArrangementBinding::CylinderCap { ring }),
+            )
             .collect()
     }
 
@@ -134,6 +253,25 @@ impl PreparedParallelCylinderCoincidentBoundary {
         &self,
     ) -> Vec<CoincidentBoundaryPairEvidence<ParallelCoincidentBoundaryKey>> {
         self.coincident_pairs.clone()
+    }
+
+    /// Apply regularized set truth, then coalesce the selected planar
+    /// partitions into one exact boundary plan per physical overlap end.
+    pub(crate) fn select(
+        &self,
+        operation: RegularizedBooleanOperation,
+    ) -> Result<SelectedParallelCylinderCoincidentBoundary, BoundarySelectionError> {
+        let selected = select_boundary_fragments_with_coincident_pairs(
+            operation,
+            self.classified(),
+            self.coincident_pairs(),
+        )?;
+        select_coincident_cap_plans(
+            selected,
+            &self.source_partitions,
+            &self.periodic_cut_owners,
+            &self.cap_profiles,
+        )
     }
 }
 
@@ -171,6 +309,8 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
     let store = &part.state.store;
     let mut periodic = Vec::with_capacity(2);
     let mut classified = Vec::new();
+    let mut source_partitions = Vec::new();
+    let mut periodic_cut_owners = Vec::new();
     for operand in 0..2 {
         let face = unique_periodic_face(graph, cylinders[operand], operand)?;
         let arrangement =
@@ -196,14 +336,16 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             linear,
             scope,
         )?;
-        validate_cap_partition_classes(
+        source_partitions.extend(prepare_cap_source_partitions(
             graph,
             cylinders[operand],
             relation,
             operand,
+            source,
             &arrangement,
             &classes,
-        )?;
+        )?);
+        periodic_cut_owners.extend(collect_periodic_cut_owners(source, &arrangement)?);
         classified.extend(arrangement.cells().iter().map(|cell| {
             ClassifiedBoundaryFragment::new(
                 ParallelCoincidentBoundaryKey::Arranged(MixedShellCellKey::periodic(
@@ -223,8 +365,13 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
     }
 
     let mut coincident_pairs = Vec::new();
+    let mut cap_profiles = Vec::with_capacity(relation.overlap_ends().len());
     for (physical_end, end) in relation.overlap_ends().iter().enumerate() {
         let boundary = cap_boundary_pieces(end)?;
+        cap_profiles.push(PreparedCoincidentCapProfile {
+            physical_end,
+            boundary,
+        });
         let mut contributors = 0_usize;
         for operand in 0..2 {
             let Some(source) = end.source(operand) else {
@@ -253,13 +400,13 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             classified.push(ClassifiedBoundaryFragment::new(
                 ParallelCoincidentBoundaryKey::CapEnd(physical_end),
                 operand_side(operand),
-                ParallelCoincidentBoundaryPayload::Cap(cap),
+                ParallelCoincidentBoundaryPayload::Cap(cap.clone()),
                 classification,
             ));
             classified.push(ClassifiedBoundaryFragment::new(
                 ParallelCoincidentBoundaryKey::CapRemainder(physical_end),
                 operand_side(operand),
-                ParallelCoincidentBoundaryPayload::OmittedCap,
+                ParallelCoincidentBoundaryPayload::Cap(cap),
                 BoundaryFragmentClassification::Exterior,
             ));
         }
@@ -275,7 +422,12 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
         }
     }
 
+    let mut caps = Vec::new();
     for operand in 0..2 {
+        let periodic_face = periodic
+            .iter()
+            .find(|face| face.operand == operand)
+            .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
         for (boundary, source) in cylinders[operand].boundaries().iter().enumerate() {
             let belongs_to_overlap = relation.overlap_ends().iter().any(|end| {
                 end.source(operand)
@@ -287,20 +439,222 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             if classify_anchor(part, &bodies[1 - operand], source.center(), linear, scope)? {
                 return Err(MixedBoundaryError::CylinderCapNotExterior);
             }
+            let ring = bind_cylinder_cap_ring(
+                store,
+                graph,
+                cylinders[operand],
+                operand,
+                boundary,
+                &periodic_face.face,
+                &periodic_face.arrangement,
+            )
+            .map_err(|_| MixedBoundaryError::SourceTopology)?;
             classified.push(ClassifiedBoundaryFragment::new(
-                ParallelCoincidentBoundaryKey::ExteriorCap(boundary),
+                ParallelCoincidentBoundaryKey::Arranged(MixedShellCellKey::cylinder_cap(
+                    ring.cap_source(),
+                    ring.boundary(),
+                )),
                 operand_side(operand),
-                ParallelCoincidentBoundaryPayload::OmittedCap,
+                ParallelCoincidentBoundaryPayload::Arranged,
                 BoundaryFragmentClassification::Exterior,
             ));
+            caps.push(ring);
         }
+    }
+    if caps.len() != relation.unique_end_count() {
+        return Err(MixedBoundaryError::SourceTopology);
     }
 
     Ok(PreparedParallelCylinderCoincidentBoundary {
         periodic,
+        caps,
         classified,
         coincident_pairs,
+        source_partitions,
+        periodic_cut_owners,
+        cap_profiles,
     })
+}
+
+const CAP_SELECTION_PAYLOAD_MISMATCH: &str =
+    "coincident-cap truth selection returned an incompatible payload";
+const CAP_SELECTION_OWNER_MISMATCH: &str =
+    "coincident-cap truth selection has no canonical physical-end owner";
+const CAP_SELECTION_SIDE_SPAN_MISMATCH: &str =
+    "coincident-cap source arc has no unique selected periodic side span";
+const CAP_SELECTION_SECTION_USE_MISMATCH: &str =
+    "coincident-cap Section arc has no unique selected periodic side use";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedCoincidentCapTarget {
+    key: ParallelCoincidentBoundaryKey,
+    operand: OperandSide,
+    target: PreparedCoincidentCapCell,
+    orientation: SelectedOrientation,
+}
+
+fn selection_gap(reason: &'static str) -> BoundarySelectionError {
+    BoundarySelectionError::Unsupported { reason }
+}
+
+fn select_coincident_cap_plans(
+    selected: Vec<
+        SelectedBoundaryFragment<ParallelCoincidentBoundaryKey, ParallelCoincidentBoundaryPayload>,
+    >,
+    source_partitions: &[PreparedCoincidentSourcePartition],
+    periodic_cut_owners: &[PreparedPeriodicCutOwner],
+    cap_profiles: &[PreparedCoincidentCapProfile],
+) -> Result<SelectedParallelCylinderCoincidentBoundary, BoundarySelectionError> {
+    let mut arranged = Vec::new();
+    let mut side_cells = BTreeMap::new();
+    let mut targets: BTreeMap<usize, Vec<SelectedCoincidentCapTarget>> = BTreeMap::new();
+    for fragment in selected {
+        match (fragment.key(), fragment.fragment()) {
+            (
+                ParallelCoincidentBoundaryKey::Arranged(cell),
+                ParallelCoincidentBoundaryPayload::Arranged,
+            ) if fragment.operand() == operand_side(cell.source().operand()) => {
+                if side_cells.insert(*cell, fragment.orientation()).is_some() {
+                    return Err(selection_gap(CAP_SELECTION_PAYLOAD_MISMATCH));
+                }
+                arranged.push(fragment);
+            }
+            (
+                key @ (ParallelCoincidentBoundaryKey::CapEnd(physical_end)
+                | ParallelCoincidentBoundaryKey::CapRemainder(physical_end)),
+                ParallelCoincidentBoundaryPayload::Cap(cap),
+            ) if *physical_end == cap.physical_end()
+                && fragment.operand() == operand_side(cap.target_operand()) =>
+            {
+                targets
+                    .entry(*physical_end)
+                    .or_default()
+                    .push(SelectedCoincidentCapTarget {
+                        key: *key,
+                        operand: fragment.operand(),
+                        target: cap.clone(),
+                        orientation: fragment.orientation(),
+                    });
+            }
+            _ => return Err(selection_gap(CAP_SELECTION_PAYLOAD_MISMATCH)),
+        }
+    }
+
+    let mut caps = Vec::with_capacity(cap_profiles.len());
+    for profile in cap_profiles {
+        let mut candidates = targets
+            .remove(&profile.physical_end)
+            .ok_or_else(|| selection_gap(CAP_SELECTION_OWNER_MISMATCH))?;
+        if candidates.iter().any(|candidate| {
+            candidate.target.boundary() != &profile.boundary
+                || candidate.target.physical_end() != profile.physical_end
+        }) {
+            return Err(selection_gap(CAP_SELECTION_OWNER_MISMATCH));
+        }
+        candidates.sort_unstable_by_key(|candidate| (candidate.operand, candidate.key));
+        let owner = candidates
+            .first()
+            .ok_or_else(|| selection_gap(CAP_SELECTION_OWNER_MISMATCH))?;
+        if candidates
+            .iter()
+            .any(|candidate| candidate.orientation != owner.orientation)
+        {
+            return Err(selection_gap(CAP_SELECTION_OWNER_MISMATCH));
+        }
+        let boundary = profile
+            .boundary
+            .map(|piece| {
+                select_cap_boundary_use(
+                    profile.physical_end,
+                    piece,
+                    source_partitions,
+                    periodic_cut_owners,
+                    &side_cells,
+                )
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| selection_gap(CAP_SELECTION_SIDE_SPAN_MISMATCH))?;
+        caps.push(SelectedCoincidentCapPlan {
+            owner_key: owner.key,
+            target: owner.target.clone(),
+            orientation: owner.orientation,
+            boundary,
+        });
+    }
+    if !targets.is_empty() {
+        return Err(selection_gap(CAP_SELECTION_OWNER_MISMATCH));
+    }
+    Ok(SelectedParallelCylinderCoincidentBoundary { arranged, caps })
+}
+
+fn select_cap_boundary_use(
+    physical_end: usize,
+    piece: CoincidentCapBoundaryPiece,
+    source_partitions: &[PreparedCoincidentSourcePartition],
+    periodic_cut_owners: &[PreparedPeriodicCutOwner],
+    side_cells: &BTreeMap<MixedShellCellKey, SelectedOrientation>,
+) -> Result<SelectedCoincidentCapBoundaryUse, BoundarySelectionError> {
+    match piece {
+        CoincidentCapBoundaryPiece::SourceArc {
+            operand,
+            edge,
+            roots,
+        } => {
+            let mut partitions = source_partitions.iter().filter(|partition| {
+                partition.physical_end == physical_end && partition.piece == piece
+            });
+            let partition = partitions
+                .next()
+                .filter(|_| partitions.next().is_none())
+                .ok_or_else(|| selection_gap(CAP_SELECTION_SIDE_SPAN_MISMATCH))?;
+            let mut selected = partition.spans.iter().filter_map(|span| {
+                side_cells
+                    .get(&span.cell)
+                    .map(|orientation| (*span, *orientation))
+            });
+            let (span, side_orientation) = selected
+                .next()
+                .filter(|_| selected.next().is_none())
+                .ok_or_else(|| selection_gap(CAP_SELECTION_SIDE_SPAN_MISMATCH))?;
+            Ok(SelectedCoincidentCapBoundaryUse::SourceSpan {
+                operand,
+                edge,
+                roots,
+                side_cell: span.cell,
+                span: span.span,
+                side_orientation,
+            })
+        }
+        CoincidentCapBoundaryPiece::SectionArc {
+            fragment,
+            endpoints,
+        } => {
+            let owners = periodic_cut_owners
+                .iter()
+                .filter(|owner| owner.fragment == fragment)
+                .collect::<Vec<_>>();
+            if owners.len() != 2 {
+                return Err(selection_gap(CAP_SELECTION_SECTION_USE_MISMATCH));
+            }
+            let mut selected = owners.iter().filter_map(|owner| {
+                side_cells
+                    .get(&owner.cell)
+                    .map(|orientation| (owner.cell, *orientation))
+            });
+            let (side_cell, side_orientation) = selected
+                .next()
+                .filter(|_| selected.next().is_none())
+                .ok_or_else(|| selection_gap(CAP_SELECTION_SECTION_USE_MISMATCH))?;
+            Ok(SelectedCoincidentCapBoundaryUse::SectionArc {
+                fragment,
+                endpoints,
+                side_cell,
+                side_orientation,
+            })
+        }
+    }
 }
 
 fn coincident_periodic_anchor(
@@ -386,14 +740,15 @@ fn coincident_periodic_anchor(
     Ok((*source.key(), point))
 }
 
-fn validate_cap_partition_classes(
+fn prepare_cap_source_partitions(
     graph: &BodySectionGraph,
     cylinder: &CertifiedCylinderSource,
     relation: &CertifiedParallelCylinderCoincidentCapRelation,
     operand: usize,
+    source_face: MixedSourceFaceKey,
     arrangement: &MixedPeriodicFaceArrangement,
     classes: &BTreeMap<PeriodicArrangementCellKey, bool>,
-) -> Result<(), MixedBoundaryError> {
+) -> Result<Vec<PreparedCoincidentSourcePartition>, MixedBoundaryError> {
     let certified = graph
         .periodic_face_embeddings()
         .iter()
@@ -406,10 +761,12 @@ fn validate_cap_partition_classes(
             _ => None,
         })
         .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
-    for source in relation
+    let mut partitions = Vec::new();
+    for (physical_end, source) in relation
         .overlap_ends()
         .iter()
-        .filter_map(|end| end.source(operand))
+        .enumerate()
+        .filter_map(|(physical_end, end)| end.source(operand).map(|source| (physical_end, source)))
     {
         let source_loop = cylinder.boundaries()[source.boundary()].side_loop();
         let loop_ordinal = certified
@@ -431,7 +788,7 @@ fn validate_cap_partition_classes(
         if spans.len() != 2 {
             return Err(MixedBoundaryError::SourceTopology);
         }
-        let mut owners = Vec::with_capacity(2);
+        let mut owned_spans = Vec::with_capacity(2);
         for span in spans {
             let mut matching = arrangement.cells().iter().filter(|cell| {
                 cell.boundaries().iter().any(|boundary| {
@@ -448,18 +805,70 @@ fn validate_cap_partition_classes(
                 .next()
                 .filter(|_| matching.next().is_none())
                 .ok_or(MixedBoundaryError::SourceTopology)?;
-            owners.push(
-                *classes
-                    .get(owner.key())
-                    .ok_or(MixedBoundaryError::SourceTopology)?,
-            );
+            let class = *classes
+                .get(owner.key())
+                .ok_or(MixedBoundaryError::SourceTopology)?;
+            owned_spans.push((
+                PreparedCoincidentSourceSpan {
+                    cell: MixedShellCellKey::periodic(source_face, *owner.key()),
+                    span: *span.key(),
+                },
+                class,
+            ));
         }
-        owners.sort_unstable();
-        if owners != [false, true] {
+        owned_spans.sort_unstable_by_key(|(span, _)| span.span);
+        let classes = owned_spans
+            .iter()
+            .map(|(_, class)| *class)
+            .collect::<Vec<_>>();
+        if classes.iter().filter(|class| **class).count() != 1
+            || classes.iter().filter(|class| !**class).count() != 1
+        {
             return Err(MixedBoundaryError::ContradictoryDual);
         }
+        let spans = owned_spans
+            .into_iter()
+            .map(|(span, _)| span)
+            .collect::<Vec<_>>()
+            .try_into()
+            .map_err(|_| MixedBoundaryError::SourceTopology)?;
+        partitions.push(PreparedCoincidentSourcePartition {
+            physical_end,
+            piece: CoincidentCapBoundaryPiece::SourceArc {
+                operand,
+                edge: source.edge(),
+                roots: source.roots(),
+            },
+            spans,
+        });
     }
-    Ok(())
+    Ok(partitions)
+}
+
+fn collect_periodic_cut_owners(
+    source: MixedSourceFaceKey,
+    arrangement: &MixedPeriodicFaceArrangement,
+) -> Result<Vec<PreparedPeriodicCutOwner>, MixedBoundaryError> {
+    let mut owners = Vec::new();
+    for cell in arrangement.cells() {
+        for boundary in cell.boundaries() {
+            for use_ in boundary.uses() {
+                let ArrangementEdgeKey::Cut(cut) = use_.edge() else {
+                    continue;
+                };
+                let owner = PreparedPeriodicCutOwner {
+                    fragment: cut.fragment(),
+                    cell: MixedShellCellKey::periodic(source, *cell.key()),
+                };
+                if owners.contains(&owner) {
+                    return Err(MixedBoundaryError::SourceTopology);
+                }
+                owners.push(owner);
+            }
+        }
+    }
+    owners.sort_unstable_by_key(|owner| (owner.fragment, owner.cell));
+    Ok(owners)
 }
 
 fn same_periodic_roots(
@@ -556,4 +965,264 @@ fn validate_coincident_periodic_fragments(
         return Err(MixedBoundaryError::SourceTopology);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use kcore::operation::{OperationContext, OperationScope};
+    use kcore::tolerance::Tolerances;
+    use kgeom::frame::Frame;
+
+    use super::*;
+    use crate::boolean::curved_source::{CylinderSourceOutcome, extract_cylinder_source};
+    use crate::boolean::mixed_shell_plan::MixedShellCellKind;
+    use crate::boolean::parallel_cylinder_relation::{
+        ParallelCylinderRelationOutcome, certify_parallel_cylinder_relation,
+    };
+    use crate::{BodyId, CylinderRequest, Kernel, SectionBodiesRequest};
+
+    fn extract_source(part: &Part<'_>, body: &BodyId) -> CertifiedCylinderSource {
+        let context = OperationContext::new(part.policy(), Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(crate::boolean::BooleanBudgetProfile::v1_defaults());
+        let mut scope = OperationScope::new(&context);
+        match extract_cylinder_source(&part.state.store, body.raw(), &mut scope).unwrap() {
+            CylinderSourceOutcome::Ready(source) => source,
+            other => panic!("unexpected cylinder source outcome: {other:?}"),
+        }
+    }
+
+    fn prepared_case(
+        first: (f64, f64),
+        second: (f64, f64),
+        reverse_second_axis: bool,
+    ) -> (
+        CertifiedParallelCylinderCoincidentCapRelation,
+        PreparedParallelCylinderCoincidentBoundary,
+    ) {
+        let frame = Frame::world();
+        let second_frame = if reverse_second_axis {
+            Frame::new(
+                frame.point_at(0.5, 0.0, second.0 + second.1),
+                -frame.z(),
+                frame.x(),
+            )
+            .unwrap()
+        } else {
+            frame.with_origin(frame.point_at(0.5, 0.0, second.0))
+        };
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let bodies = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            [
+                edit.create_cylinder(CylinderRequest::new(
+                    frame.with_origin(frame.point_at(-0.5, 0.0, first.0)),
+                    1.0,
+                    first.1,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body(),
+                edit.create_cylinder(CylinderRequest::new(second_frame, 1.0, second.1))
+                    .unwrap()
+                    .into_result()
+                    .unwrap()
+                    .body(),
+            ]
+        };
+        let part = session.part(part_id).unwrap();
+        let graph = part
+            .section_bodies(SectionBodiesRequest::new(
+                bodies[0].clone(),
+                bodies[1].clone(),
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let cylinders = [
+            extract_source(&part, &bodies[0]),
+            extract_source(&part, &bodies[1]),
+        ];
+        let context = OperationContext::new(part.policy(), Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(crate::boolean::BooleanBudgetProfile::v1_defaults());
+        let relation = {
+            let mut scope = OperationScope::new(&context);
+            match certify_parallel_cylinder_relation(
+                &graph,
+                [&cylinders[0], &cylinders[1]],
+                &mut scope,
+            )
+            .unwrap()
+            {
+                ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(relation) => *relation,
+                other => panic!("unexpected parallel-cylinder relation: {other:?}"),
+            }
+        };
+        let prepared = {
+            let mut scope = OperationScope::new(&context);
+            prepare_parallel_cylinder_coincident_boundary(
+                &part,
+                &graph,
+                &bodies,
+                [&cylinders[0], &cylinders[1]],
+                &relation,
+                Tolerances::default().linear(),
+                &mut scope,
+            )
+            .unwrap()
+        };
+        (relation, prepared)
+    }
+
+    fn selected_side_matches(
+        selected: &SelectedParallelCylinderCoincidentBoundary,
+        cell: MixedShellCellKey,
+        orientation: SelectedOrientation,
+    ) -> bool {
+        selected.arranged().iter().any(|fragment| {
+            matches!(fragment.key(), ParallelCoincidentBoundaryKey::Arranged(key) if *key == cell)
+                && fragment.orientation() == orientation
+        })
+    }
+
+    fn assert_cap_plan(
+        operation: RegularizedBooleanOperation,
+        physical_end: usize,
+        end: &crate::boolean::parallel_cylinder_relation::ParallelCylinderCoincidentCapEndWitness,
+        plan: &SelectedCoincidentCapPlan,
+        selected: &SelectedParallelCylinderCoincidentBoundary,
+    ) {
+        let source_operand = end.sources().iter().position(Option::is_some);
+        let expected_operand = if end.is_shared() {
+            0
+        } else {
+            source_operand.expect("a unique end has one source")
+        };
+        let expected_key = match (operation, end.is_shared(), expected_operand) {
+            (RegularizedBooleanOperation::Intersect, _, _) => {
+                ParallelCoincidentBoundaryKey::CapEnd(physical_end)
+            }
+            (RegularizedBooleanOperation::Unite, true, _) => {
+                ParallelCoincidentBoundaryKey::CapEnd(physical_end)
+            }
+            (RegularizedBooleanOperation::Subtract, false, 1) => {
+                ParallelCoincidentBoundaryKey::CapEnd(physical_end)
+            }
+            _ => ParallelCoincidentBoundaryKey::CapRemainder(physical_end),
+        };
+        let expected_orientation = if operation == RegularizedBooleanOperation::Subtract
+            && !end.is_shared()
+            && expected_operand == 1
+        {
+            SelectedOrientation::Reversed
+        } else {
+            SelectedOrientation::Preserved
+        };
+        assert_eq!(plan.owner_key(), expected_key);
+        assert_eq!(plan.target().physical_end(), physical_end);
+        assert_eq!(plan.target().target_operand(), expected_operand);
+        assert_eq!(plan.orientation(), expected_orientation);
+
+        for use_ in plan.boundary() {
+            let (cell, orientation) = match *use_ {
+                SelectedCoincidentCapBoundaryUse::SourceSpan {
+                    operand,
+                    edge,
+                    roots,
+                    side_cell,
+                    span,
+                    side_orientation,
+                } => {
+                    let source = end
+                        .source(operand)
+                        .expect("source use must be relation-owned");
+                    assert_eq!(edge, source.edge());
+                    assert_eq!(roots, source.roots());
+                    assert!(same_periodic_roots(
+                        span.terminal_roots()
+                            .expect("selected source span is bounded"),
+                        roots,
+                    ));
+                    (side_cell, side_orientation)
+                }
+                SelectedCoincidentCapBoundaryUse::SectionArc {
+                    fragment,
+                    endpoints,
+                    side_cell,
+                    side_orientation,
+                } => {
+                    let arc = end.cap_arc().expect("Section use must be relation-owned");
+                    assert_eq!((fragment, endpoints), (arc.fragment(), arc.endpoints()));
+                    (side_cell, side_orientation)
+                }
+            };
+            let expected_side_orientation = if operation == RegularizedBooleanOperation::Subtract
+                && cell.source().operand() == 1
+            {
+                SelectedOrientation::Reversed
+            } else {
+                SelectedOrientation::Preserved
+            };
+            assert_eq!(orientation, expected_side_orientation);
+            assert!(selected_side_matches(selected, cell, orientation));
+        }
+    }
+
+    #[test]
+    fn coincident_cap_selection_is_operation_driven_for_shared_end_proofs() {
+        let cases = [
+            ((-1.0, 2.0), (-1.0, 2.0), None),
+            ((-1.0, 3.0), (-1.0, 2.0), Some(0)),
+            ((-1.0, 2.0), (-1.0, 3.0), Some(1)),
+            ((-2.0, 3.0), (-1.0, 2.0), Some(0)),
+        ];
+        for ((first, second, far_operand), reverse_second_axis) in cases
+            .into_iter()
+            .flat_map(|case| [(case, false), (case, true)])
+        {
+            let (relation, prepared) = prepared_case(first, second, reverse_second_axis);
+            for operation in [
+                RegularizedBooleanOperation::Unite,
+                RegularizedBooleanOperation::Intersect,
+                RegularizedBooleanOperation::Subtract,
+            ] {
+                let selected = prepared.select(operation).unwrap();
+                assert_eq!(selected, prepared.select(operation).unwrap());
+                assert_eq!(selected.caps().len(), relation.overlap_ends().len());
+                for (physical_end, (end, plan)) in relation
+                    .overlap_ends()
+                    .iter()
+                    .zip(selected.caps())
+                    .enumerate()
+                {
+                    assert_cap_plan(operation, physical_end, end, plan, &selected);
+                }
+
+                let selected_whole_caps = selected
+                    .arranged()
+                    .iter()
+                    .filter_map(|fragment| match fragment.key() {
+                        ParallelCoincidentBoundaryKey::Arranged(cell)
+                            if matches!(cell.cell(), MixedShellCellKind::CylinderCap(_)) =>
+                        {
+                            Some(cell.source().operand())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let expected_whole_caps = match operation {
+                    RegularizedBooleanOperation::Unite => far_operand.into_iter().collect(),
+                    RegularizedBooleanOperation::Intersect => Vec::new(),
+                    RegularizedBooleanOperation::Subtract => far_operand
+                        .filter(|operand| *operand == 0)
+                        .into_iter()
+                        .collect(),
+                };
+                assert_eq!(selected_whole_caps, expected_whole_caps);
+            }
+        }
+    }
 }

@@ -7,6 +7,8 @@ use kernel::{
     Point3Enclosure, ScalarEnclosure,
 };
 
+#[path = "parallel_cylinder_boolean/coincident_cap_setops.rs"]
+mod coincident_cap_setops;
 #[path = "parallel_cylinder_boolean/coincident_caps.rs"]
 mod coincident_caps;
 
@@ -1196,42 +1198,6 @@ fn partial_overlap_unite_shell_work_accepts_n_and_refuses_n_minus_one_atomically
             before,
             "shell N-1 refusal mutated a source or retained candidate topology"
         );
-    }
-}
-
-#[test]
-fn unsupported_equal_height_or_shared_end_unite_refuses_atomically() {
-    for placement in [Placement::World, Placement::Oblique] {
-        for (name, outer, inner) in [
-            ("equal height", [-1.0, 1.0], [-1.0, 1.0]),
-            ("shared lower end", [-2.0, 1.0], [-2.0, 2.0]),
-            ("shared upper end", [-2.0, 2.0], [-1.0, 2.0]),
-        ] {
-            for antiparallel in [false, true] {
-                for swapped in [false, true] {
-                    let mut fixture = fixture_with_axial_intervals_and_inner_direction(
-                        placement,
-                        outer,
-                        inner,
-                        antiparallel,
-                    );
-                    assert_source_bodies_preserved(&fixture, 2);
-                    let before = fixture_signature(&fixture);
-                    let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
-                    assert!(matches!(
-                        outcome.into_result().unwrap(),
-                        BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
-                    ));
-                    assert_eq!(
-                        fixture_signature(&fixture),
-                        before,
-                        "{name} Unite mutated the part for {placement:?}, \
-                         antiparallel={antiparallel}, swapped={swapped}"
-                    );
-                    assert_source_bodies_preserved(&fixture, 2);
-                }
-            }
-        }
     }
 }
 

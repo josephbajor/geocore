@@ -13,7 +13,8 @@ use super::*;
 use crate::SectionCompletion;
 use crate::boolean::parallel_cylinder_boundary::{
     CoincidentCapBoundaryPiece, ParallelCoincidentBoundaryKey, ParallelCoincidentBoundaryPayload,
-    PreparedCoincidentCapCell,
+    SelectedCoincidentCapBoundaryUse, SelectedCoincidentCapPlan,
+    SelectedParallelCylinderCoincidentBoundary,
 };
 use crate::boolean::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation;
 use crate::boolean::parallel_cylinder_relation::ParallelCylinderSourceRootWitness;
@@ -24,23 +25,19 @@ struct ReversedBoundarySegment {
     end: MixedShellVertexKey,
 }
 
-/// Build the Intersect lens plan under the exact coincident-cap relation.
-pub(crate) fn plan_parallel_cylinder_coincident_intersection<'a>(
+/// Build one regularized Boolean plan under the exact coincident-cap relation.
+pub(crate) fn plan_parallel_cylinder_coincident_boolean<'a>(
     store: &Store,
     graph: &BodySectionGraph,
     bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<
-        Item = SelectedBoundaryFragment<
-            ParallelCoincidentBoundaryKey,
-            ParallelCoincidentBoundaryPayload,
-        >,
-    >,
+    selected: SelectedParallelCylinderCoincidentBoundary,
     relation: &CertifiedParallelCylinderCoincidentCapRelation,
     linear: f64,
 ) -> Result<MixedShellProofPlan, MixedShellPlanError> {
     if graph.completion() != SectionCompletion::Indeterminate || graph.gaps().is_empty() {
         return Err(MixedShellPlanError::SectionIncomplete);
     }
+    let (selected, cap_plans) = selected.into_parts();
     let mut arranged = Vec::new();
     let mut caps = BTreeMap::new();
     for selected in selected {
@@ -52,21 +49,22 @@ pub(crate) fn plan_parallel_cylinder_coincident_intersection<'a>(
             ) if operand == operand_side(cell.source().operand()) => {
                 arranged.push((cell, operand, orientation));
             }
-            (
-                ParallelCoincidentBoundaryKey::CapEnd(physical_end),
-                ParallelCoincidentBoundaryPayload::Cap(cap),
-            ) if physical_end == cap.physical_end()
-                && operand == operand_side(cap.target_operand())
-                && orientation == SelectedOrientation::Preserved =>
-            {
-                if caps.insert(physical_end, cap).is_some() {
-                    return Err(MixedShellPlanError::CoincidentCapSelectionMismatch);
-                }
-            }
             _ => return Err(MixedShellPlanError::CoincidentCapSelectionMismatch),
         }
     }
-    if arranged.len() != 2 || caps.len() != relation.overlap_ends().len() {
+    for cap in cap_plans {
+        let physical_end = cap.target().physical_end();
+        if caps.insert(physical_end, cap).is_some() {
+            return Err(MixedShellPlanError::CoincidentCapSelectionMismatch);
+        }
+    }
+    if arranged
+        .iter()
+        .filter(|(cell, _, _)| matches!(cell.cell(), MixedShellCellKind::Periodic(_)))
+        .count()
+        != 2
+        || caps.len() != relation.overlap_ends().len()
+    {
         return Err(MixedShellPlanError::CoincidentCapSelectionMismatch);
     }
     for (physical_end, end) in relation.overlap_ends().iter().enumerate() {
@@ -89,14 +87,20 @@ pub(crate) fn plan_parallel_cylinder_coincident_intersection<'a>(
 fn validate_cap_selection(
     store: &Store,
     graph: &BodySectionGraph,
-    cap: &PreparedCoincidentCapCell,
+    plan: &SelectedCoincidentCapPlan,
     physical_end: usize,
     end: &crate::boolean::parallel_cylinder_relation::ParallelCylinderCoincidentCapEndWitness,
 ) -> Result<(), MixedShellPlanError> {
+    let cap = plan.target();
     let source = end
         .source(cap.target_operand())
         .ok_or(MixedShellPlanError::CoincidentCapSelectionMismatch)?;
-    if cap.physical_end() != physical_end
+    if !matches!(
+        plan.owner_key(),
+        ParallelCoincidentBoundaryKey::CapEnd(value)
+            | ParallelCoincidentBoundaryKey::CapRemainder(value)
+            if value == physical_end
+    ) || cap.physical_end() != physical_end
         || cap.target_boundary() != source.boundary()
         || cap.target_face().raw() != source.cap_face()
         || source_face_key(store, graph, cap.target_face(), cap.target_operand())?
@@ -120,7 +124,27 @@ fn validate_cap_selection(
             endpoints: arc.endpoints(),
         });
     }
-    if expected.as_slice() != cap.boundary() {
+    let actual = plan.boundary().map(|use_| match use_ {
+        SelectedCoincidentCapBoundaryUse::SourceSpan {
+            operand,
+            edge,
+            roots,
+            ..
+        } => CoincidentCapBoundaryPiece::SourceArc {
+            operand,
+            edge,
+            roots,
+        },
+        SelectedCoincidentCapBoundaryUse::SectionArc {
+            fragment,
+            endpoints,
+            ..
+        } => CoincidentCapBoundaryPiece::SectionArc {
+            fragment,
+            endpoints,
+        },
+    });
+    if expected.as_slice() != cap.boundary() || actual != *cap.boundary() {
         return Err(MixedShellPlanError::CoincidentCapSelectionMismatch);
     }
     Ok(())
@@ -129,12 +153,13 @@ fn validate_cap_selection(
 fn append_cap_faces(
     store: &Store,
     graph: &BodySectionGraph,
-    caps: &BTreeMap<usize, PreparedCoincidentCapCell>,
+    caps: &BTreeMap<usize, SelectedCoincidentCapPlan>,
     faces: &mut Vec<MixedShellFacePlan>,
     spans: &mut Vec<MixedBoundedSourceSpanPlan>,
     linear: f64,
 ) -> Result<(), MixedShellPlanError> {
-    for (&physical_end, cap) in caps {
+    for (&physical_end, plan) in caps {
+        let cap = plan.target();
         if faces
             .iter()
             .any(|face| face.source() == cap.target_source())
@@ -142,12 +167,15 @@ fn append_cap_faces(
             return Err(MixedShellPlanError::CoincidentCapSelectionMismatch);
         }
         let mut segments = Vec::with_capacity(cap.boundary().len());
-        for piece in cap.boundary() {
-            segments.push(match *piece {
-                CoincidentCapBoundaryPiece::SourceArc {
+        for use_ in plan.boundary() {
+            segments.push(match *use_ {
+                SelectedCoincidentCapBoundaryUse::SourceSpan {
                     operand,
                     edge,
                     roots,
+                    side_cell,
+                    span,
+                    side_orientation,
                 } => reversed_source_segment(
                     store,
                     cap,
@@ -155,23 +183,35 @@ fn append_cap_faces(
                     operand,
                     edge,
                     roots,
+                    side_cell,
+                    span,
+                    side_orientation,
                     faces,
                     spans,
                     linear,
                 )?,
-                CoincidentCapBoundaryPiece::SectionArc {
+                SelectedCoincidentCapBoundaryUse::SectionArc {
                     fragment,
                     endpoints,
-                } => {
-                    reversed_section_segment(graph, cap, physical_end, fragment, endpoints, faces)?
-                }
+                    side_cell,
+                    side_orientation,
+                } => reversed_section_segment(
+                    graph,
+                    cap,
+                    physical_end,
+                    fragment,
+                    endpoints,
+                    side_cell,
+                    side_orientation,
+                    faces,
+                )?,
             });
         }
         let loop_ = close_reversed_segments(physical_end, segments)?;
         faces.push(MixedShellFacePlan {
             source: cap.target_source(),
             source_face: cap.target_face().clone(),
-            selected_orientation: SelectedOrientation::Preserved,
+            selected_orientation: plan.orientation(),
             loops: vec![loop_],
         });
     }
@@ -181,22 +221,40 @@ fn append_cap_faces(
 #[allow(clippy::too_many_arguments)]
 fn reversed_source_segment(
     store: &Store,
-    cap: &PreparedCoincidentCapCell,
+    cap: &crate::boolean::parallel_cylinder_boundary::PreparedCoincidentCapCell,
     physical_end: usize,
     operand: usize,
     edge: RawEdgeId,
     roots: [ParallelCylinderSourceRootWitness; 2],
+    side_cell: MixedShellCellKey,
+    periodic_span: PeriodicSourceLoopKey,
+    side_orientation: SelectedOrientation,
     faces: &[MixedShellFacePlan],
     spans: &[MixedBoundedSourceSpanPlan],
     linear: f64,
 ) -> Result<ReversedBoundarySegment, MixedShellPlanError> {
+    let span_ordinal = periodic_span.cyclic_span_ordinal().ok_or(
+        MixedShellPlanError::CoincidentCapBoundaryChain(physical_end),
+    )?;
+    let local_span = MixedSourceSpanKey {
+        fin_loop_ordinal: periodic_span.topology_ordinal(),
+        traversal_ordinal: span_ordinal,
+    };
     let mut matches = Vec::new();
     for span in spans.iter().filter(|span| {
-        span.source().operand() == operand
+        matches!(side_cell.cell(), MixedShellCellKind::Periodic(_))
+            && side_cell.source().operand() == operand
+            && span.source() == side_cell.source()
+            && span.span() == &local_span
             && span.edge() == edge
             && same_source_roots(span.roots(), &roots)
     }) {
         for (face_index, face) in faces.iter().enumerate() {
+            if face.source() != side_cell.source()
+                || face.selected_orientation() != side_orientation
+            {
+                continue;
+            }
             for (loop_index, loop_) in face.loops().iter().enumerate() {
                 for (use_index, use_) in loop_.uses().iter().enumerate() {
                     if use_.edge()
@@ -265,14 +323,22 @@ fn same_source_roots(
 
 fn reversed_section_segment(
     graph: &BodySectionGraph,
-    cap: &PreparedCoincidentCapCell,
+    cap: &crate::boolean::parallel_cylinder_boundary::PreparedCoincidentCapCell,
     physical_end: usize,
     fragment: usize,
     endpoints: [usize; 2],
+    side_cell: MixedShellCellKey,
+    side_orientation: SelectedOrientation,
     faces: &[MixedShellFacePlan],
 ) -> Result<ReversedBoundarySegment, MixedShellPlanError> {
     let mut matches = Vec::new();
     for face in faces {
+        if !matches!(side_cell.cell(), MixedShellCellKind::Periodic(_))
+            || face.source() != side_cell.source()
+            || face.selected_orientation() != side_orientation
+        {
+            continue;
+        }
         for loop_ in face.loops() {
             for (use_index, use_) in loop_.uses().iter().enumerate() {
                 if use_.edge() == &MixedShellEdgeKey::SectionFragment(fragment) {

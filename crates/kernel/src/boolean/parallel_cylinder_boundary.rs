@@ -41,6 +41,10 @@ pub(super) use coincident_caps::{
     CoincidentCapBoundaryPiece, ParallelCoincidentBoundaryKey, ParallelCoincidentBoundaryPayload,
     PreparedCoincidentCapCell, prepare_parallel_cylinder_coincident_boundary,
 };
+pub(crate) use coincident_caps::{
+    SelectedCoincidentCapBoundaryUse, SelectedCoincidentCapPlan,
+    SelectedParallelCylinderCoincidentBoundary,
+};
 
 struct PreparedPeriodicFace {
     face: FaceId,

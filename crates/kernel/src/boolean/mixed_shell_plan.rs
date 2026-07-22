@@ -22,7 +22,7 @@ mod parallel_cylinder_lens;
 #[path = "mixed_shell_plan/projected_source_circle.rs"]
 mod projected_source_circle;
 
-pub(crate) use parallel_cylinder_lens::plan_parallel_cylinder_coincident_intersection;
+pub(crate) use parallel_cylinder_lens::plan_parallel_cylinder_coincident_boolean;
 pub(crate) use projected_source_circle::{
     ProjectedSourceCircleOnPlane, ProjectedSourceCircleOnPlaneError,
 };

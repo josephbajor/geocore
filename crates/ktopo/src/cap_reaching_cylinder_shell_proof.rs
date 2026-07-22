@@ -1,14 +1,17 @@
-//! Shell theorem for a strict-secant product notch reaching one cylinder cap.
+//! Shell theorem for a strict-secant product feature reaching one cylinder cap.
 //!
-//! The admitted unsplit representation starts with a finite cylinder band and
-//! removes the intersection with a second, parallel cylinder over one terminal
-//! axial interval. Its incidence roles are one endpoint-free host cap, one
-//! piecewise-periodic host side, the reversed notch side, and two planar radial
-//! partitions. Constructor provenance and storage order do not matter within
-//! this representation. Exact normal translation pairs the notch arcs and
-//! rulings; strict radial secancy proves that the complementary host spans have
-//! exactly two boundary roots. These witnesses identify
-//! `boundary((D x I) \\ ((D ∩ N) x J))` for any authored frame and either axial
+//! The admitted unsplit representation starts with a finite cylinder band and,
+//! over one terminal axial interval, either removes its intersection with a
+//! second parallel cylinder or adjoins the second disk outside the host. Its
+//! incidence roles are one endpoint-free host cap, one piecewise-periodic host
+//! side, one feature side, and two planar radial partitions. Constructor
+//! provenance and storage order do not matter within this representation.
+//! Exact normal translation pairs the feature arcs and rulings; strict radial
+//! secancy proves that the complementary host spans have exactly two boundary
+//! roots and classifies the feature span as inside (notch) or outside (boss).
+//! These witnesses identify either
+//! `boundary((D x I) \\ ((D ∩ N) x J))` or
+//! `boundary((D x I) ∪ (N x J))` for any authored frame and either axial
 //! direction; other decompositions fail closed.
 
 use super::*;
@@ -25,7 +28,7 @@ use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
 #[path = "cap_reaching_cylinder_shell_proof/tests.rs"]
 mod tests;
 
-/// Cumulative deterministic work for cap-reaching cylinder-notch proofs.
+/// Cumulative deterministic work for cap-reaching cylinder-feature proofs.
 pub(crate) const CAP_REACHING_CYLINDER_SHELL_WORK: StageId =
     match StageId::new("ktopo.check.cap-reaching-cylinder-shell-work") {
         Ok(stage) => stage,
@@ -80,7 +83,13 @@ struct EndCap {
     axial: Interval,
 }
 
-/// Attempt the admitted two-root, two-axial-end cap-reaching notch theorem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalFeature {
+    Notch,
+    Boss,
+}
+
+/// Attempt the admitted two-root, two-axial-end cap-reaching feature theorem.
 pub(super) fn certify_cap_reaching_cylinder_shell(
     store: &Store,
     shell_id: ShellId,
@@ -240,13 +249,17 @@ fn certify_host(
     let Some(translation) = translated_vertices(store, &inner.cap, &reached.cap)? else {
         return Ok(None);
     };
+    let Some(terminal_feature) =
+        classify_terminal_feature(host, feature, inner.host, reached.host, inner.feature)
+    else {
+        return Ok(None);
+    };
     let geometry_checks = [
         certified_nonzero(translation.vector),
         certified_parallel(translation.vector, host.frame().z()),
         certified_parallel(translation.vector, feature.frame().z()),
         translated_carrier(inner.feature, reached.feature, translation.vector),
         complementary_host_arcs(inner.host, reached.host, &translation),
-        certify_selected_secant_arcs(host, feature, inner.host, reached.host, inner.feature),
         rulings_biject_vertices(store, &boundary.rulings, &translation)?,
     ];
     if !geometry_checks.into_iter().all(|check| check) {
@@ -286,6 +299,7 @@ fn certify_host(
         [&inner, &reached],
         feature_support,
         translation.vector,
+        terminal_feature,
     )?))
 }
 
@@ -600,17 +614,19 @@ fn complementary_host_arcs(first: CapUse, second: CapUse, translation: &Translat
 }
 
 /// Classify the selected strict-secant radial cells, not merely their carrier
-/// widths. The notch arc is the lens boundary inside the host; the nearer
-/// host arc is inside the notch and its translated complement is outside.
+/// widths. The nearer host arc lies inside the feature and its translated
+/// complement lies outside. The feature span then distinguishes the two
+/// complete terminal products: an inside span removes the lens (`Notch`),
+/// while an outside span adjoins the feature disk difference (`Boss`).
 /// Together with the two distinct shared topology endpoints, the circle
 /// secant theorem derives the complete two-root radial partition.
-fn certify_selected_secant_arcs(
+fn classify_terminal_feature(
     host: Cylinder,
     feature: Cylinder,
     inner_host: CapUse,
     reached_host: CapUse,
     inner_feature: CapUse,
-) -> bool {
+) -> Option<TerminalFeature> {
     let (
         ProfileCarrier::Circle(inner_host_circle),
         ProfileCarrier::Circle(reached_host_circle),
@@ -621,23 +637,23 @@ fn certify_selected_secant_arcs(
         inner_feature.carrier,
     )
     else {
-        return false;
+        return None;
     };
     let distinct = |use_: CapUse| use_.tail != use_.head;
-    circle_secant_span_side(
+    let feature_side = circle_secant_span_side(
         host,
         feature_circle,
         inner_feature.range,
         inner_host_circle,
         distinct(inner_feature),
+    )?;
+    if circle_secant_span_side(
+        feature,
+        inner_host_circle,
+        inner_host.range,
+        feature_circle,
+        distinct(inner_host),
     ) == Some(RadialSide::Inside)
-        && circle_secant_span_side(
-            feature,
-            inner_host_circle,
-            inner_host.range,
-            feature_circle,
-            distinct(inner_host),
-        ) == Some(RadialSide::Inside)
         && circle_secant_span_side(
             feature,
             reached_host_circle,
@@ -645,6 +661,14 @@ fn certify_selected_secant_arcs(
             feature_circle,
             distinct(reached_host),
         ) == Some(RadialSide::Outside)
+    {
+        Some(match feature_side {
+            RadialSide::Inside => TerminalFeature::Notch,
+            RadialSide::Outside => TerminalFeature::Boss,
+        })
+    } else {
+        None
+    }
 }
 
 fn rulings_biject_vertices(
@@ -679,6 +703,7 @@ fn certification_from_orientation(
     ends: [&EndCap; 2],
     feature_support: i8,
     outward_axis: Vec3,
+    terminal_feature: TerminalFeature,
 ) -> Result<ShellCertification> {
     let host = store.get(host_face)?;
     let feature = store.get(boundary.feature_face)?;
@@ -690,22 +715,28 @@ fn certification_from_orientation(
     };
     let whole_normal = whole_plane.frame().z() * sense_factor(whole_face.sense);
     let whole_sign = oriented_dot_sign(whole_normal, outward_axis);
-    let mut end_signs = Vec::with_capacity(ends.len());
-    for end in ends {
+    let mut end_signs = [None; 2];
+    for (index, end) in ends.into_iter().enumerate() {
         let face = store.get(end.cap.face)?;
-        end_signs.push(oriented_dot_sign(
+        end_signs[index] = oriented_dot_sign(
             end.cap.plane.frame().z() * sense_factor(face.sense),
             outward_axis,
-        ));
+        );
     }
+    let feature_sign = sense_factor(feature.sense) as i8;
+    let terminal_orientation_valid = match terminal_feature {
+        TerminalFeature::Notch => feature_sign == -host_sign && end_signs == [Some(host_sign); 2],
+        TerminalFeature::Boss => {
+            feature_sign == host_sign && end_signs == [Some(-host_sign), Some(host_sign)]
+        }
+    };
     let coherent = whole.local_orientation_valid
         && whole.host_loop_orientation != boundary.loop_orientation
         && ends.iter().all(|end| end.cap.local_orientation_valid)
-        && sense_factor(feature.sense) as i8 == -host_sign
+        && terminal_orientation_valid
         && (feature_boundary.loop_orientation == PredicateOrientation::Positive)
             == feature.sense.is_forward()
         && whole_sign == Some(-host_sign)
-        && end_signs.into_iter().all(|sign| sign == Some(host_sign))
         && feature_support == host_sign;
     Ok(ShellCertification {
         embedding: ShellEmbedding::Certified,

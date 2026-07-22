@@ -3,9 +3,7 @@
 use kcore::operation::OperationScope;
 use ktopo::entity::Body as TopologyBody;
 
-use super::boundary_select::{
-    select_boundary_fragments, select_boundary_fragments_with_coincident_pairs,
-};
+use super::boundary_select::select_boundary_fragments;
 use super::curved_pipeline::{
     CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, PipelineFailure, StageResult,
     adapt_operation, extract_cylinder_operand, mixed_boundary_failure, mixed_plan_failure,
@@ -14,7 +12,7 @@ use super::curved_pipeline::{
 use super::curved_source::CertifiedCylinderSource;
 use super::mixed_shell_plan::{
     MixedBoundedSourceRoot, MixedShellProofPlan, plan_mixed_shell,
-    plan_parallel_cylinder_coincident_intersection,
+    plan_parallel_cylinder_coincident_boolean,
 };
 use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
@@ -63,11 +61,10 @@ pub(super) fn execute_parallel_cylinder_boolean(
             linear,
             scope,
         ),
-        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(relation)
-            if operation == PlanarBooleanOperation::Intersect =>
-        {
-            execute_coincident_cap_intersection(
+        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(relation) => {
+            execute_coincident_cap_boolean(
                 edit,
+                operation,
                 &bodies,
                 [&first, &second],
                 &graph,
@@ -76,8 +73,7 @@ pub(super) fn execute_parallel_cylinder_boolean(
                 scope,
             )
         }
-        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(_)
-        | ParallelCylinderRelationOutcome::Indeterminate(_) => {
+        ParallelCylinderRelationOutcome::Indeterminate(_) => {
             refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
         }
     }
@@ -124,8 +120,9 @@ fn execute_complete_relation(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_coincident_cap_intersection(
+fn execute_coincident_cap_boolean(
     edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
     bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
     graph: &BodySectionGraph,
@@ -143,18 +140,17 @@ fn execute_coincident_cap_intersection(
         scope,
     )
     .map_err(mixed_boundary_failure)?;
-    let selected = select_boundary_fragments_with_coincident_pairs(
-        adapt_operation(PlanarBooleanOperation::Intersect),
-        prepared.classified(),
-        prepared.coincident_pairs(),
-    )
-    .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
-    if selected.is_empty() {
+    let selected = prepared
+        .select(adapt_operation(operation))
+        .map_err(|error| {
+            PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error))
+        })?;
+    if selected.arranged().is_empty() || selected.caps().is_empty() {
         return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
-            "certified coincident-cap intersection selected no boundary",
+            "certified coincident-cap Boolean selected no boundary",
         ));
     }
-    let plan = plan_parallel_cylinder_coincident_intersection(
+    let plan = plan_parallel_cylinder_coincident_boolean(
         &edit.state.store,
         graph,
         prepared.bindings(),
@@ -238,8 +234,7 @@ fn coincident_cap_plan_matches_relation(
         .iter()
         .flat_map(|end| end.sources().iter().flatten())
         .count();
-    if plan.faces().len() != 4
-        || !plan.cap_rings().is_empty()
+    if plan.faces().len() != 4 + plan.cap_rings().len()
         || plan.section_edges().len() != 2 + relation.unique_end_count()
         || plan.bounded_source_spans().len() != expected_source_span_count
     {
