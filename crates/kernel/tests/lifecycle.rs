@@ -18,6 +18,8 @@ use kernel::{
     Tolerances, Vec3,
 };
 
+#[path = "lifecycle/body_distance.rs"]
+mod body_distance;
 #[path = "lifecycle/cap_crossing_secant.rs"]
 mod cap_crossing_secant;
 #[path = "lifecycle/curved_cavity.rs"]

@@ -48,7 +48,7 @@ pub struct ScalarEnclosure {
 }
 
 impl ScalarEnclosure {
-    fn from_lower(value: ktopo::body_properties::ScalarEnclosure) -> Self {
+    pub(crate) fn from_lower(value: ktopo::body_properties::ScalarEnclosure) -> Self {
         Self {
             lower: value.lower(),
             upper: value.upper(),
@@ -89,7 +89,7 @@ pub struct Point3Enclosure {
 }
 
 impl Point3Enclosure {
-    fn from_lower(value: ktopo::body_properties::Point3Enclosure) -> Self {
+    pub(crate) fn from_lower(value: ktopo::body_properties::Point3Enclosure) -> Self {
         let coordinates = value.coordinates();
         Self {
             coordinates: [

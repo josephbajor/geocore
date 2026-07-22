@@ -262,6 +262,7 @@
 
 mod boolean;
 mod classify;
+mod distance;
 mod edit;
 mod error;
 mod id;
@@ -288,6 +289,10 @@ pub use classify::{
     POINT_CLASSIFICATION_WORK, PointBodyClassification, PointBodyVerdict,
     PointClassificationBudgetProfile, PointFaceClassification, PointFaceSite, PointFaceVerdict,
     RayParityWitness,
+};
+pub use distance::{
+    BodyDistanceBoundaryWitness, BodyDistanceOperand, BodyDistanceOutcome, BodyDistanceRefusal,
+    BodyDistanceRequest, BodyDistanceUpperWitness, CertifiedBodyDistance,
 };
 pub use edit::{
     BoundedPcurve, CreateSeedBodyRequest, CreateSeedBodyResult, CreateStrutRequest,
@@ -366,6 +371,7 @@ pub use kgeom::surface::SurfaceDerivs;
 pub use kgeom::tess::TessOptions;
 pub use kgeom::vec::{Point2, Point3, Vec3};
 pub use kgraph::{EvalBudgetProfile, GeometryClassKey, SurfaceDerivativeOrder};
+pub use ktopo::body_distance::{BODY_DISTANCE_ANALYTIC_WORK, BodyDistanceBudgetProfile};
 pub use ktopo::body_properties::{BODY_PROPERTIES_ANALYTIC_WORK, BodyPropertiesBudgetProfile};
 pub use ktopo::btess::BodyTessellationBudgetProfile;
 pub use ktopo::check::{

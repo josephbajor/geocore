@@ -74,7 +74,7 @@ pub struct ScalarEnclosure {
 }
 
 impl ScalarEnclosure {
-    fn from_interval(value: Interval) -> Option<Self> {
+    pub(crate) fn from_interval(value: Interval) -> Option<Self> {
         (finite_interval(value) && value.lo() <= value.hi()).then_some(Self {
             lower: value.lo(),
             upper: value.hi(),
@@ -110,7 +110,7 @@ pub struct Point3Enclosure {
 }
 
 impl Point3Enclosure {
-    fn from_intervals(values: [Interval; 3]) -> Option<Self> {
+    pub(crate) fn from_intervals(values: [Interval; 3]) -> Option<Self> {
         Some(Self {
             coordinates: [
                 ScalarEnclosure::from_interval(values[0])?,

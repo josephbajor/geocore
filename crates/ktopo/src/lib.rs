@@ -53,6 +53,7 @@
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
 //! - [`btess`] — conforming whole-body solid and sheet tessellation.
+//! - [`body_distance`] — Full-gated certified solid material-distance enclosures.
 //! - [`body_properties`] — Full-gated analytic solid mass-property enclosures.
 //! - [`domain`] — certified conservative face UV work-box construction.
 //! - `loop_proof` / `shell_proof` / `planar_shell_proof` — checker-v2 whole-entity certificates
@@ -63,6 +64,7 @@ pub mod analytic_shell;
 #[doc(hidden)]
 pub mod benchmark;
 pub(crate) mod body_copy;
+pub mod body_distance;
 pub mod body_properties;
 pub mod btess;
 pub mod check;

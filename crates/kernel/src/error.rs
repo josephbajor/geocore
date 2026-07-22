@@ -57,6 +57,9 @@ pub mod capability {
     /// Certified Plane/Cylinder boundary integration for body volume and centroid.
     pub const ANALYTIC_BODY_PROPERTIES: CapabilityId =
         known_capability("kernel.interrogation.body-properties.plane-cylinder");
+    /// Certified whole-body distance bounds for exact Plane/Cylinder solids.
+    pub const ANALYTIC_BODY_DISTANCE: CapabilityId =
+        known_capability("kernel.interrogation.body-distance.plane-cylinder");
 }
 
 /// Facade identity kind used in stale-ID diagnostics and committed journals.
