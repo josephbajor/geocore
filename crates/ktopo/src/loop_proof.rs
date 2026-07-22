@@ -17,7 +17,7 @@ mod periodic_line_loop;
 
 #[cfg(test)]
 pub(crate) use analytic_face_layout::FACE_LOOP_CONTAINMENT_WORK;
-pub(crate) use analytic_face_layout::face_loop_containment_budget;
+pub(crate) use analytic_face_layout::{face_loop_containment_budget, face_loop_containment_work};
 
 use self::analytic_face_layout::{certify_analytic_face_layout, charge_face_loop_containment_work};
 use self::bounded_pcurve_integral::{

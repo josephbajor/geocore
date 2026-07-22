@@ -22,11 +22,9 @@ use crate::session::PartEdit;
 /// Consume the strict positive-overlap parallel-cylinder theorem through the
 /// shared arrangement, truth-selection, planning, and Full-check path.
 ///
-/// Intersect and ordered Subtract admit either strict nesting or two uniquely
-/// owned overlap ends. Unite currently requires strict axial nesting and
-/// refuses other positive overlaps before boundary arrangement. Commutative
-/// operations receive a canonical source order; Subtract preserves caller
-/// order.
+/// Intersect, Unite, and ordered Subtract admit either strict nesting or two
+/// uniquely owned overlap ends. Commutative operations receive a canonical
+/// source order; Subtract preserves caller order.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -47,11 +45,6 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let ParallelCylinderRelationOutcome::Certified(relation) = relation else {
         return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
     };
-    if relation.strict_nesting_operands().is_none()
-        && matches!(operation, PlanarBooleanOperation::Unite)
-    {
-        return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
-    }
     let prepared = prepare_parallel_cylinder_boundary(
         &edit.as_part(),
         &graph,

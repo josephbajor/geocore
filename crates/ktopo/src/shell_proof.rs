@@ -43,6 +43,8 @@ mod cylindrical_host_proof;
 mod mixed_profile_prism_proof;
 #[path = "portal_cylinder_shell_proof.rs"]
 mod portal_cylinder_shell_proof;
+#[path = "two_host_axial_chain_shell_proof.rs"]
+mod two_host_axial_chain_shell_proof;
 #[cfg(test)]
 pub(crate) use cap_reaching_cylinder_shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK;
 #[cfg(test)]
@@ -77,6 +79,7 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
         .overlaid(&cap_reaching_cylinder_shell_proof::cap_reaching_cylinder_proof_budget())
+        .overlaid(&two_host_axial_chain_shell_proof::two_host_axial_chain_proof_budget())
         .overlaid(&chord_portal_shell_proof::chord_portal_shell_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
@@ -191,6 +194,15 @@ fn certify_shell_impl(
     }
     if let Some(certification) =
         cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell(
+            store,
+            shell_id,
+            scope.as_deref_mut(),
+        )?
+    {
+        return Ok(certification);
+    }
+    if let Some(certification) =
+        two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell(
             store,
             shell_id,
             scope.as_deref_mut(),

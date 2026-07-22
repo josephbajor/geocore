@@ -13,8 +13,15 @@ const OUTER_HALF_HEIGHT: f64 = 2.0;
 const INNER_HALF_HEIGHT: f64 = 1.0;
 const ANALYTIC_ORACLE_TOLERANCE: f64 = 1.0e-10;
 const CYLINDER_TOPOLOGY: [usize; 3] = [3, 2, 0];
-const PARTIAL_SUBTRACT_REALIZATION_WORK: u64 = 4_103;
+const PARTIAL_SUBTRACT_REALIZATION_WORK: u64 = 4_192;
 const PARTIAL_SUBTRACT_BODY_PROPERTIES_WORK: u64 = 15_617;
+const PARTIAL_UNITE_REALIZATION_WORK: u64 = 5_334;
+const PARTIAL_UNITE_BODY_PROPERTIES_WORK: u64 = 17_585;
+const PARTIAL_UNITE_SHELL_WORK: u64 = 31_058;
+
+fn partial_unite_shell_stage() -> kernel::StageId {
+    kernel::StageId::new("ktopo.check.two-host-axial-chain-shell-work").unwrap()
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Placement {
@@ -372,6 +379,46 @@ fn expected_partial_subtract_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
     rotate_tensor(frame, local)
 }
 
+fn expected_partial_unite_volume() -> f64 {
+    let primitive_volume = 3.0 * core::f64::consts::PI;
+    let intersection_volume = 4.0 * core::f64::consts::PI / 3.0 - 3.0_f64.sqrt();
+    2.0 * primitive_volume - intersection_volume
+}
+
+fn expected_partial_unite_surface_area() -> f64 {
+    let pi = core::f64::consts::PI;
+    let root_three = 3.0_f64.sqrt();
+    let primitive_boundary_area = 8.0 * pi;
+    // On each height-three cylinder, the other solid hides a lateral arc of
+    // angle 2*pi/3 over height two and one cap lens of this exact area.
+    let hidden_lateral_area = 4.0 * pi / 3.0;
+    let hidden_cap_area = 2.0 * pi / 3.0 - root_three / 2.0;
+    2.0 * primitive_boundary_area - 2.0 * (hidden_lateral_area + hidden_cap_area)
+}
+
+fn expected_partial_unite_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
+    let pi = core::f64::consts::PI;
+    let root_three = 3.0_f64.sqrt();
+    // The primitive cylinders have volume 3*pi and centroids
+    // (-1/2, 0, -1/2) and (1/2, 0, 1/2). Their summed raw volume moments are
+    // Qxx=3*pi, Qyy=3*pi/2, Qzz=6*pi, and Qxz=3*pi/2. The independently
+    // integrated centered height-two lens has the following diagonal raw
+    // moments and zero xz moment.
+    let lens_x_squared = 2.0 * pi / 3.0 - 9.0 * root_three / 8.0;
+    let lens_y_squared = pi / 3.0 - 3.0 * root_three / 8.0;
+    let lens_z_squared = 4.0 * pi / 9.0 - root_three / 3.0;
+    let x_squared = 3.0 * pi - lens_x_squared;
+    let y_squared = 3.0 * pi / 2.0 - lens_y_squared;
+    let z_squared = 6.0 * pi - lens_z_squared;
+    let xz = 3.0 * pi / 2.0;
+    let local = [
+        [y_squared + z_squared, 0.0, -xz],
+        [0.0, x_squared + z_squared, 0.0],
+        [-xz, 0.0, x_squared + y_squared],
+    ];
+    rotate_tensor(frame, local)
+}
+
 fn expected_unite_volume() -> f64 {
     14.0 * core::f64::consts::PI / 3.0 + 3.0_f64.sqrt()
 }
@@ -698,11 +745,85 @@ fn assert_outer_subtract_created(
     first.bytes().to_vec()
 }
 
+fn certified_properties_at_exact_budget(
+    part: &kernel::Part<'_>,
+    body: BodyId,
+    expected_work: u64,
+    label: &str,
+) -> kernel::BodyProperties {
+    let outcome = part
+        .body_properties(BodyPropertiesRequest::new(body.clone()))
+        .unwrap();
+    let usage = *outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == kernel::BODY_PROPERTIES_ANALYTIC_WORK
+                && usage.resource == ResourceKind::Work
+        })
+        .unwrap_or_else(|| panic!("{label} properties did not charge analytic work"));
+    assert_eq!(
+        usage.consumed, expected_work,
+        "{label} property work changed"
+    );
+    let BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = outcome.into_result().unwrap()
+    else {
+        panic!("{label} analytic properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+
+    let settings_at = |allowed| {
+        OperationSettings::new().with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                kernel::BODY_PROPERTIES_ANALYTIC_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    };
+    let admitted = part
+        .body_properties(
+            BodyPropertiesRequest::new(body.clone()).with_settings(settings_at(usage.consumed)),
+        )
+        .unwrap();
+    assert!(matches!(
+        admitted.into_result().unwrap(),
+        BodyPropertiesOutcome::Certified { .. }
+    ));
+    let refused = part
+        .body_properties(
+            BodyPropertiesRequest::new(body).with_settings(settings_at(usage.consumed - 1)),
+        )
+        .unwrap();
+    let expected_limit = kernel::LimitSnapshot {
+        allowed: usage.consumed - 1,
+        ..usage
+    };
+    assert_eq!(refused.result().unwrap_err().limit(), Some(expected_limit));
+    assert_eq!(refused.report().limit_events(), &[expected_limit]);
+    properties
+}
+
 fn assert_partial_subtract_created(
     fixture: &Fixture,
     meaning: PartialSubtractMeaning,
     outcome: OperationOutcome<BooleanOutcome>,
 ) -> Vec<u8> {
+    let realization = *outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == BOOLEAN_POST_SELECTION_WORK && usage.resource == ResourceKind::Work
+        })
+        .expect("partial Subtract did not charge realization work");
+    assert_eq!(realization.consumed, PARTIAL_SUBTRACT_REALIZATION_WORK);
     let result = outcome.into_result().unwrap();
     let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
         panic!("partial-overlap parallel-cylinder {meaning:?} returned {result:#?}")
@@ -719,30 +840,12 @@ fn assert_partial_subtract_created(
         .into_result()
         .unwrap();
     assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
-    let properties_outcome = part
-        .body_properties(BodyPropertiesRequest::new(result.clone()))
-        .unwrap();
-    let analytic_usage = *properties_outcome
-        .report()
-        .usage()
-        .iter()
-        .find(|usage| {
-            usage.stage == kernel::BODY_PROPERTIES_ANALYTIC_WORK
-                && usage.resource == ResourceKind::Work
-        })
-        .expect("partial Subtract properties did not charge analytic work");
-    assert_eq!(
-        analytic_usage.consumed, PARTIAL_SUBTRACT_BODY_PROPERTIES_WORK,
-        "partial-overlap {meaning:?} changed analytic property work"
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        result.clone(),
+        PARTIAL_SUBTRACT_BODY_PROPERTIES_WORK,
+        &format!("partial-overlap {meaning:?}"),
     );
-    let BodyPropertiesOutcome::Certified {
-        properties,
-        full_check,
-    } = properties_outcome.into_result().unwrap()
-    else {
-        panic!("partial-overlap {meaning:?} analytic properties were refused")
-    };
-    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
     assert_scalar_matches_analytic(
         properties.volume(),
         expected_partial_subtract_volume(),
@@ -763,39 +866,6 @@ fn assert_partial_subtract_created(
         properties.centroidal_inertia().error_bound(),
         expected_partial_subtract_centroidal_inertia(fixture.frame),
     );
-    let property_settings_at = |allowed| {
-        OperationSettings::new().with_budget_overrides(
-            BudgetPlan::new([LimitSpec::new(
-                kernel::BODY_PROPERTIES_ANALYTIC_WORK,
-                ResourceKind::Work,
-                AccountingMode::Cumulative,
-                allowed,
-            )])
-            .unwrap(),
-        )
-    };
-    let admitted = part
-        .body_properties(
-            BodyPropertiesRequest::new(result.clone())
-                .with_settings(property_settings_at(analytic_usage.consumed)),
-        )
-        .unwrap();
-    assert!(matches!(
-        admitted.into_result().unwrap(),
-        BodyPropertiesOutcome::Certified { .. }
-    ));
-    let refused = part
-        .body_properties(
-            BodyPropertiesRequest::new(result.clone())
-                .with_settings(property_settings_at(analytic_usage.consumed - 1)),
-        )
-        .unwrap();
-    let expected_limit = kernel::LimitSnapshot {
-        allowed: analytic_usage.consumed - 1,
-        ..analytic_usage
-    };
-    assert_eq!(refused.result().unwrap_err().limit(), Some(expected_limit));
-    assert_eq!(refused.report().limit_events(), &[expected_limit]);
     let first = part
         .export_xt(ExportXtRequest::new(result.clone()))
         .unwrap()
@@ -855,6 +925,82 @@ fn assert_unite_created(fixture: &Fixture, outcome: OperationOutcome<BooleanOutc
         properties.centroidal_inertia().value(),
         properties.centroidal_inertia().error_bound(),
         expected_unite_centroidal_inertia(fixture.frame),
+    );
+    let first = part
+        .export_xt(ExportXtRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let second = part
+        .export_xt(ExportXtRequest::new(result))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(first.bytes(), second.bytes());
+    first.bytes().to_vec()
+}
+
+fn assert_partial_unite_created(
+    fixture: &Fixture,
+    outcome: OperationOutcome<BooleanOutcome>,
+) -> Vec<u8> {
+    let realization = *outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == BOOLEAN_POST_SELECTION_WORK && usage.resource == ResourceKind::Work
+        })
+        .expect("partial Unite did not charge realization work");
+    assert_eq!(realization.consumed, PARTIAL_UNITE_REALIZATION_WORK);
+    let shell_usage = *outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == partial_unite_shell_stage() && usage.resource == ResourceKind::Work
+        })
+        .expect("partial Unite did not charge its shell theorem");
+    assert_eq!(shell_usage.consumed, PARTIAL_UNITE_SHELL_WORK);
+    let result = outcome.into_result().unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+        panic!("partial-overlap parallel-cylinder Unite returned {result:#?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.reports().len(), 1);
+    assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
+    let result = created.bodies()[0].clone();
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    assert_eq!(body_topology(&part, result.clone()), [6, 8, 4]);
+    let full = part
+        .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        result.clone(),
+        PARTIAL_UNITE_BODY_PROPERTIES_WORK,
+        "partial-overlap Unite",
+    );
+    assert_scalar_matches_analytic(
+        properties.volume(),
+        expected_partial_unite_volume(),
+        "volume",
+    );
+    assert_scalar_matches_analytic(
+        properties.surface_area(),
+        expected_partial_unite_surface_area(),
+        "surface area",
+    );
+    // The equal primitive volumes have opposite x/z first moments, and the
+    // independently integrated intersection lens is centered at the origin.
+    assert_point_matches_analytic(properties.centroid(), fixture.frame.origin());
+    assert_inertia_matches_analytic(
+        properties.centroidal_inertia().value(),
+        properties.centroidal_inertia().error_bound(),
+        expected_partial_unite_centroidal_inertia(fixture.frame),
     );
     let first = part
         .export_xt(ExportXtRequest::new(result.clone()))
@@ -991,45 +1137,107 @@ fn parallel_cylinder_unite_full_commits_a_deterministic_connected_union() {
 }
 
 #[test]
-fn unsupported_equal_height_parallel_cylinder_unite_refuses_atomically() {
+fn partial_axial_overlap_unite_full_commits_a_deterministic_two_host_chain() {
     for placement in [Placement::World, Placement::Oblique] {
+        let mut canonical_bytes: Option<Vec<u8>> = None;
         for swapped in [false, true] {
-            let mut fixture =
-                fixture_with_half_heights(placement, INNER_HALF_HEIGHT, INNER_HALF_HEIGHT);
-            assert_source_bodies_preserved(&fixture, 2);
-            let before = fixture_signature(&fixture);
-            let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
-            assert!(matches!(
-                outcome.into_result().unwrap(),
-                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
-            ));
-            assert_eq!(
-                fixture_signature(&fixture),
-                before,
-                "equal-height Unite mutated the part for {placement:?}, swapped={swapped}"
-            );
+            for _ in 0..2 {
+                let mut fixture = partial_overlap_fixture(placement);
+                assert_source_bodies_preserved(&fixture, 2);
+                let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
+                let bytes = assert_partial_unite_created(&fixture, outcome);
+                assert_source_bodies_preserved(&fixture, 3);
+                if let Some(canonical) = canonical_bytes.as_ref() {
+                    assert_xt_equal(
+                        &bytes,
+                        canonical,
+                        "operand swap or repeat changed partial-overlap Unite X_T bytes",
+                    );
+                } else {
+                    canonical_bytes = Some(bytes.clone());
+                }
+                assert_fast_self_import(&mut fixture.session, &bytes);
+            }
         }
     }
 }
 
 #[test]
-fn unsupported_partial_overlap_unite_refuses_atomically() {
+fn partial_overlap_unite_shell_work_accepts_n_and_refuses_n_minus_one_atomically() {
+    let stage = partial_unite_shell_stage();
+    let settings_at = |allowed| {
+        OperationSettings::new().with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                stage,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    };
+
+    let mut baseline = partial_overlap_fixture(Placement::World);
+    let baseline_outcome = run_unite(&mut baseline, false, OperationSettings::new());
+    assert!(matches!(
+        baseline_outcome.result().unwrap(),
+        BooleanOutcome::Success(BooleanResult::Created(_))
+    ));
+    let usage = *baseline_outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == stage && usage.resource == ResourceKind::Work)
+        .expect("partial Unite did not charge its shell theorem");
+    assert_eq!(usage.consumed, PARTIAL_UNITE_SHELL_WORK);
+
+    let mut admitted = partial_overlap_fixture(Placement::World);
+    let admitted_outcome = run_unite(&mut admitted, false, settings_at(usage.consumed));
+    assert!(matches!(
+        admitted_outcome.into_result().unwrap(),
+        BooleanOutcome::Success(BooleanResult::Created(_))
+    ));
+
+    let mut denied = partial_overlap_fixture(Placement::World);
+    let before = fixture_signature(&denied);
+    let denied_outcome = run_unite(&mut denied, false, settings_at(usage.consumed - 1));
+    let expected = kernel::LimitSnapshot {
+        allowed: usage.consumed - 1,
+        ..usage
+    };
+    assert_eq!(denied_outcome.result().unwrap_err().limit(), Some(expected));
+    assert_eq!(denied_outcome.report().limit_events(), &[expected]);
+    assert_eq!(
+        fixture_signature(&denied),
+        before,
+        "shell N-1 refusal mutated a source or retained candidate topology"
+    );
+}
+
+#[test]
+fn unsupported_equal_height_or_shared_end_unite_refuses_atomically() {
     for placement in [Placement::World, Placement::Oblique] {
-        for swapped in [false, true] {
-            let mut fixture = partial_overlap_fixture(placement);
-            assert_source_bodies_preserved(&fixture, 2);
-            let before = fixture_signature(&fixture);
-            let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
-            assert!(matches!(
-                outcome.into_result().unwrap(),
-                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
-            ));
-            assert_eq!(
-                fixture_signature(&fixture),
-                before,
-                "partial-overlap Unite mutated the part for {placement:?}, swapped={swapped}"
-            );
-            assert_source_bodies_preserved(&fixture, 2);
+        for (name, outer, inner) in [
+            ("equal height", [-1.0, 1.0], [-1.0, 1.0]),
+            ("shared lower end", [-2.0, 1.0], [-2.0, 2.0]),
+            ("shared upper end", [-2.0, 2.0], [-1.0, 2.0]),
+        ] {
+            for swapped in [false, true] {
+                let mut fixture = fixture_with_axial_intervals(placement, outer, inner);
+                assert_source_bodies_preserved(&fixture, 2);
+                let before = fixture_signature(&fixture);
+                let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
+                assert!(matches!(
+                    outcome.into_result().unwrap(),
+                    BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+                ));
+                assert_eq!(
+                    fixture_signature(&fixture),
+                    before,
+                    "{name} Unite mutated the part for {placement:?}, swapped={swapped}"
+                );
+                assert_source_bodies_preserved(&fixture, 2);
+            }
         }
     }
 }
@@ -1108,6 +1316,7 @@ fn parallel_cylinder_outer_minus_inner_full_commits_a_deterministic_notched_cyli
 enum RealizationCase {
     Intersection,
     PartialOverlapIntersection,
+    PartialOverlapUnite,
     PartialOverlapAMinusB,
     PartialOverlapBMinusA,
     Unite,
@@ -1118,6 +1327,7 @@ enum RealizationCase {
 fn realization_fixture(case: RealizationCase, placement: Placement) -> Fixture {
     match case {
         RealizationCase::PartialOverlapIntersection
+        | RealizationCase::PartialOverlapUnite
         | RealizationCase::PartialOverlapAMinusB
         | RealizationCase::PartialOverlapBMinusA => partial_overlap_fixture(placement),
         RealizationCase::Intersection
@@ -1136,6 +1346,7 @@ fn run_realization_case(
         RealizationCase::Intersection | RealizationCase::PartialOverlapIntersection => {
             run(fixture, false, settings)
         }
+        RealizationCase::PartialOverlapUnite => run_unite(fixture, false, settings),
         RealizationCase::PartialOverlapAMinusB => run_subtract(fixture, true, settings),
         RealizationCase::PartialOverlapBMinusA => run_subtract(fixture, false, settings),
         RealizationCase::Unite => run_unite(fixture, false, settings),
@@ -1159,11 +1370,14 @@ fn assert_realization_budget_case(case: RealizationCase) {
         })
         .expect("parallel-cylinder realization did not charge its shared stage");
     assert!(usage.consumed > 0);
-    if matches!(
-        case,
-        RealizationCase::PartialOverlapAMinusB | RealizationCase::PartialOverlapBMinusA
-    ) {
-        assert_eq!(usage.consumed, PARTIAL_SUBTRACT_REALIZATION_WORK);
+    match case {
+        RealizationCase::PartialOverlapUnite => {
+            assert_eq!(usage.consumed, PARTIAL_UNITE_REALIZATION_WORK)
+        }
+        RealizationCase::PartialOverlapAMinusB | RealizationCase::PartialOverlapBMinusA => {
+            assert_eq!(usage.consumed, PARTIAL_SUBTRACT_REALIZATION_WORK)
+        }
+        _ => {}
     }
     let baseline_result = baseline.into_result().unwrap();
     assert!(
@@ -1212,6 +1426,7 @@ fn parallel_cylinder_realization_budget_accepts_n_and_refuses_n_minus_one_atomic
     for case in [
         RealizationCase::Intersection,
         RealizationCase::PartialOverlapIntersection,
+        RealizationCase::PartialOverlapUnite,
         RealizationCase::PartialOverlapAMinusB,
         RealizationCase::PartialOverlapBMinusA,
         RealizationCase::Unite,

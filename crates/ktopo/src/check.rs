@@ -2353,6 +2353,8 @@ mod tests {
         let semantic_region = crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK;
         let semantic_shell = crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK;
         let facet_stage = crate::shell_proof::SHELL_FACET_PAIR_WORK;
+        let two_host_stage =
+            kcore::operation::StageId::new("ktopo.check.two-host-axial-chain-shell-work").unwrap();
         let mut store = Store::new();
         let body = clean_block(&mut store);
         let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
@@ -2390,6 +2392,7 @@ mod tests {
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
+                proof_snapshot(two_host_stage, 0),
             ]
         );
         const CALLER_STAGE: kcore::operation::StageId =
@@ -2459,6 +2462,7 @@ mod tests {
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
+                proof_snapshot(two_host_stage, 0),
             ]
         );
         assert!(report.limit_events().is_empty());

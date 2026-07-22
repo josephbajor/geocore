@@ -570,6 +570,7 @@ fn precharge_analytic_shell(
     let work = analytic_shell_realization_work(
         input.vertices().len(),
         input.edges().len(),
+        input.closed_edges().len(),
         input.faces().len(),
         loop_count,
         fin_count,
@@ -591,26 +592,30 @@ fn precharge_analytic_shell(
 
 /// Conservative structural ceiling for analytic-shell preflight/allocation.
 ///
-/// Let `N = 1 + V + E + F + L + U`, where `L` is the loop count and `U` the
-/// directed edge-use count. `N^2` covers the producer's worst quadratic loop
-/// canonicalization and dominates its ordered-map/dual traversals; `16N`
+/// Let `N = 1 + V + Eb + Ec + F + L + U`, where `Eb` and `Ec` are bounded
+/// and endpoint-free closed edge declarations, `L` is the loop count, and `U`
+/// is the directed edge-use count. `N^2` covers the producer's worst quadratic
+/// loop canonicalization and dominates its ordered-map/dual traversals; `16N`
 /// covers the fixed-number validation, certificate, geometry, topology, and
 /// lineage operations attached to every authored item.
 fn analytic_shell_realization_work(
     vertices: usize,
     edges: usize,
+    closed_edges: usize,
     faces: usize,
     loops: usize,
     uses: usize,
 ) -> StageResult<u64> {
     let vertices = u64::try_from(vertices).map_err(|_| work_overflow())?;
     let edges = u64::try_from(edges).map_err(|_| work_overflow())?;
+    let closed_edges = u64::try_from(closed_edges).map_err(|_| work_overflow())?;
     let faces = u64::try_from(faces).map_err(|_| work_overflow())?;
     let loops = u64::try_from(loops).map_err(|_| work_overflow())?;
     let uses = u64::try_from(uses).map_err(|_| work_overflow())?;
     let size = 1_u64
         .checked_add(vertices)
         .and_then(|value| value.checked_add(edges))
+        .and_then(|value| value.checked_add(closed_edges))
         .and_then(|value| value.checked_add(faces))
         .and_then(|value| value.checked_add(loops))
         .and_then(|value| value.checked_add(uses))
@@ -802,20 +807,25 @@ mod tests {
 
     #[test]
     fn analytic_shell_realization_work_counts_complete_structure() {
-        // Half-cylinder shell: V=4, E=6, F=4, L=4, U=12, hence N=31.
+        // Half-cylinder shell: V=4, Eb=4, Ec=2, F=4, L=4, U=12, hence N=31.
         assert_eq!(
-            analytic_shell_realization_work(4, 6, 4, 4, 12).unwrap(),
+            analytic_shell_realization_work(4, 4, 2, 4, 4, 12).unwrap(),
             1_457
+        );
+        assert_eq!(
+            analytic_shell_realization_work(4, 4, 0, 4, 4, 12).unwrap(),
+            1_305
         );
     }
 
     #[test]
     fn analytic_shell_realization_work_fails_closed_on_overflow() {
-        assert!(analytic_shell_realization_work(usize::MAX, 0, 0, 0, 0).is_err());
+        assert!(analytic_shell_realization_work(usize::MAX, 0, 0, 0, 0, 0).is_err());
         assert!(
             analytic_shell_realization_work(
                 (u64::MAX / 2) as usize,
                 (u64::MAX / 2) as usize,
+                usize::MAX,
                 0,
                 0,
                 0,
