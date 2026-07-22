@@ -7,7 +7,8 @@ use super::{
     AnalyticEdgeDeclaration, AnalyticEdgeKey, AnalyticEdgeProof, AnalyticEdgeUseRef,
     AnalyticFaceKey, AnalyticPcurveUse, AnalyticShellCurve, AnalyticShellInput,
     AnalyticShellPcurve, AnalyticShellPlanError, AnalyticShellSurface, AnalyticVertexKey,
-    PreparedAnalyticShell, prepare_analytic_shell,
+    PreparedAnalyticBatchFaceRef, PreparedAnalyticBatchFaceSplit, PreparedAnalyticShell,
+    prepare_analytic_face_splits, prepare_analytic_shell, prepare_analytic_shell_component,
 };
 use crate::entity::{
     BodyId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinPcurve, Loop, ParamMap1d, ShellId,
@@ -144,12 +145,15 @@ impl Transaction<'_> {
     ) -> Result<Vec<AnalyticShellOutput>, AnalyticShellAssemblyError> {
         let prepared = inputs
             .iter()
-            .map(|input| prepare_analytic_shell(input, self.store(), tolerance))
+            .map(|input| prepare_analytic_shell_component(input, self.store(), tolerance))
             .collect::<Result<Vec<_>, _>>()?;
-        prepared
+        let face_splits = prepare_analytic_face_splits(&prepared)?;
+        let outputs = prepared
             .iter()
             .map(|component| self.allocate_prepared_analytic_shell(component))
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        self.record_analytic_batch_face_splits(&face_splits, &outputs)?;
+        Ok(outputs)
     }
 
     fn allocate_prepared_analytic_shell(
@@ -467,6 +471,12 @@ impl Transaction<'_> {
                 self.record_merge(sources.to_vec(), result);
             }
         }
+        for split in prepared.face_splits() {
+            self.record_split(
+                split.source,
+                split.pieces.map(|piece| EntityRef::Face(faces[&piece])),
+            );
+        }
         for split in prepared.edge_splits() {
             self.record_split(
                 split.source,
@@ -477,14 +487,54 @@ impl Transaction<'_> {
             let Some(declaration) = prepared.declaration(key) else {
                 continue;
             };
-            let source = match declaration {
-                AnalyticEdgeDeclaration::Bounded(edge) => edge.source(),
-                AnalyticEdgeDeclaration::Closed(edge) => edge.source(),
-            };
-            if let Some(source) = source {
-                self.record_derived_from(EntityRef::Edge(edges[&key]), source);
+            let result = EntityRef::Edge(edges[&key]);
+            match declaration {
+                AnalyticEdgeDeclaration::Bounded(edge) => {
+                    if let Some(source) = edge.source() {
+                        self.record_derived_from(result, source);
+                    }
+                }
+                AnalyticEdgeDeclaration::Closed(edge) => {
+                    if let Some(source) = edge.source() {
+                        self.record_derived_from(result, source);
+                    } else if let Some(sources) = edge.merge_sources() {
+                        self.record_merge(sources.to_vec(), result);
+                    }
+                }
             }
         }
+    }
+
+    fn record_analytic_batch_face_splits(
+        &mut self,
+        splits: &[PreparedAnalyticBatchFaceSplit],
+        outputs: &[AnalyticShellOutput],
+    ) -> Result<(), AnalyticShellAssemblyError> {
+        let resolve = |piece: PreparedAnalyticBatchFaceRef| -> Result<FaceId, Error> {
+            outputs
+                .get(piece.component())
+                .and_then(|output| {
+                    output
+                        .faces()
+                        .binary_search_by_key(&piece.face(), |(key, _)| *key)
+                        .ok()
+                        .map(|index| output.faces()[index].1)
+                })
+                .ok_or(Error::InvalidGeometry {
+                    reason: "prepared analytic-shell batch face split lost a result face",
+                })
+        };
+        for split in splits {
+            let [first, second] = split.pieces();
+            self.record_split(
+                split.source(),
+                [
+                    EntityRef::Face(resolve(first)?),
+                    EntityRef::Face(resolve(second)?),
+                ],
+            );
+        }
+        Ok(())
     }
 }
 

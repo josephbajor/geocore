@@ -341,6 +341,7 @@ pub struct AnalyticShellClosedEdge {
     carrier: AnalyticShellCurve,
     logical_range: ParamRange,
     source: Option<EntityRef>,
+    merge_sources: Option<[EntityRef; 2]>,
 }
 
 impl AnalyticShellClosedEdge {
@@ -355,12 +356,22 @@ impl AnalyticShellClosedEdge {
             carrier,
             logical_range,
             source: None,
+            merge_sources: None,
         }
     }
 
     /// Retain the source entity for transaction-journal lineage.
     pub const fn with_source(mut self, source: EntityRef) -> Self {
         self.source = Some(source);
+        self
+    }
+
+    /// Retain ordered source edges for one transaction-journal merge event.
+    ///
+    /// Merge lineage is mutually exclusive with [`Self::with_source`]. The
+    /// preflight requires two distinct, live edge identities.
+    pub const fn with_merge_sources(mut self, sources: [EntityRef; 2]) -> Self {
+        self.merge_sources = Some(sources);
         self
     }
 
@@ -382,6 +393,11 @@ impl AnalyticShellClosedEdge {
     /// Optional source entity.
     pub const fn source(self) -> Option<EntityRef> {
         self.source
+    }
+
+    /// Ordered source identities for an optional merge lineage event.
+    pub const fn merge_sources(self) -> Option<[EntityRef; 2]> {
+        self.merge_sources
     }
 }
 
@@ -447,6 +463,29 @@ pub struct AnalyticShellFace {
     loops: Vec<AnalyticShellLoop>,
     source: Option<EntityRef>,
     merge_sources: Option<[EntityRef; 2]>,
+    split_lineage: Option<(EntityRef, AnalyticFaceSplitPiece)>,
+}
+
+/// Stable semantic order of one result in an explicitly binary face split.
+///
+/// Split lineage is never inferred from repeated derivation sources. Callers
+/// must mark exactly one [`Self::First`] and one [`Self::Second`] face for the
+/// same live source across the complete analytic-shell batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalyticFaceSplitPiece {
+    /// First persistent-name result piece.
+    First,
+    /// Second persistent-name result piece.
+    Second,
+}
+
+impl AnalyticFaceSplitPiece {
+    const fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
 }
 
 impl AnalyticShellFace {
@@ -466,6 +505,7 @@ impl AnalyticShellFace {
             loops,
             source: None,
             merge_sources: None,
+            split_lineage: None,
         }
     }
 
@@ -482,6 +522,21 @@ impl AnalyticShellFace {
     /// keeps lineage validation constant-work under the analytic-shell plan.
     pub const fn with_merge_sources(mut self, sources: [EntityRef; 2]) -> Self {
         self.merge_sources = Some(sources);
+        self
+    }
+
+    /// Declare this face as one ordered piece of a binary source-face split.
+    ///
+    /// This is mutually exclusive with [`Self::with_source`] and
+    /// [`Self::with_merge_sources`]. Preflight requires the source to be a live
+    /// face and requires exactly one first and one second result across the
+    /// complete analytic-shell batch.
+    pub const fn with_split_lineage(
+        mut self,
+        source: EntityRef,
+        piece: AnalyticFaceSplitPiece,
+    ) -> Self {
+        self.split_lineage = Some((source, piece));
         self
     }
 
@@ -518,6 +573,11 @@ impl AnalyticShellFace {
     /// Ordered source identities for an optional merge lineage event.
     pub const fn merge_sources(&self) -> Option<[EntityRef; 2]> {
         self.merge_sources
+    }
+
+    /// Optional explicit binary split source and semantic piece order.
+    pub const fn split_lineage(&self) -> Option<(EntityRef, AnalyticFaceSplitPiece)> {
+        self.split_lineage
     }
 }
 
@@ -710,6 +770,7 @@ pub struct PreparedAnalyticShell {
     closed_edges: Vec<PreparedAnalyticClosedEdge>,
     edge_order: Vec<AnalyticEdgeKey>,
     edge_splits: Vec<PreparedAnalyticEdgeSplit>,
+    face_splits: Vec<PreparedAnalyticFaceSplit>,
     faces: Vec<AnalyticShellFace>,
 }
 
@@ -717,6 +778,44 @@ pub struct PreparedAnalyticShell {
 struct PreparedAnalyticEdgeSplit {
     source: EntityRef,
     pieces: [AnalyticEdgeKey; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreparedAnalyticFaceSplit {
+    source: EntityRef,
+    pieces: [AnalyticFaceKey; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PreparedAnalyticBatchFaceRef {
+    component: usize,
+    face: AnalyticFaceKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PreparedAnalyticBatchFaceSplit {
+    source: EntityRef,
+    pieces: [PreparedAnalyticBatchFaceRef; 2],
+}
+
+impl PreparedAnalyticBatchFaceRef {
+    pub(super) const fn component(self) -> usize {
+        self.component
+    }
+
+    pub(super) const fn face(self) -> AnalyticFaceKey {
+        self.face
+    }
+}
+
+impl PreparedAnalyticBatchFaceSplit {
+    pub(super) const fn source(self) -> EntityRef {
+        self.source
+    }
+
+    pub(super) const fn pieces(self) -> [PreparedAnalyticBatchFaceRef; 2] {
+        self.pieces
+    }
 }
 
 impl PreparedAnalyticShell {
@@ -746,6 +845,10 @@ impl PreparedAnalyticShell {
 
     fn edge_splits(&self) -> &[PreparedAnalyticEdgeSplit] {
         &self.edge_splits
+    }
+
+    fn face_splits(&self) -> &[PreparedAnalyticFaceSplit] {
+        &self.face_splits
     }
 
     fn declaration(&self, key: AnalyticEdgeKey) -> Option<AnalyticEdgeDeclaration> {
@@ -875,13 +978,17 @@ pub enum AnalyticShellPlanError {
     UnusedVertex(AnalyticVertexKey),
     /// Optional source lineage refers to an entity absent from the store.
     StaleLineage(EntityRef),
-    /// A face declared both derivation and merge lineage.
+    /// A face declared mutually exclusive derivation, merge, or split lineage.
     ConflictingFaceLineage(AnalyticFaceKey),
     /// Face merge lineage needs at least two distinct face sources.
     InvalidFaceMergeLineage(AnalyticFaceKey),
-    /// One bounded edge declared mutually exclusive derivation and split
-    /// lineage.
+    /// Explicit split metadata did not form one live, ordered binary face
+    /// partition across the complete analytic-shell batch.
+    InvalidFaceSplitLineage(EntityRef),
+    /// One edge declared mutually exclusive derivation, merge, or split lineage.
     ConflictingEdgeLineage(AnalyticEdgeKey),
+    /// Endpoint-free edge merge lineage needs two distinct edge sources.
+    InvalidEdgeMergeLineage(AnalyticEdgeKey),
     /// Explicit split metadata did not form one live, ordered binary edge
     /// partition.
     InvalidEdgeSplitLineage(EntityRef),
@@ -922,6 +1029,23 @@ struct UseCandidate {
 /// exact.  Optional lineage is checked against `store` before any plan is
 /// returned.
 pub fn prepare_analytic_shell(
+    input: &AnalyticShellInput,
+    store: &Store,
+    tolerance: f64,
+) -> Result<PreparedAnalyticShell, AnalyticShellPlanError> {
+    let mut prepared = prepare_analytic_shell_component(input, store, tolerance)?;
+    let splits = prepare_analytic_face_splits(core::slice::from_ref(&prepared))?;
+    prepared.face_splits = splits
+        .into_iter()
+        .map(|split| PreparedAnalyticFaceSplit {
+            source: split.source,
+            pieces: split.pieces.map(|piece| piece.face),
+        })
+        .collect();
+    Ok(prepared)
+}
+
+pub(super) fn prepare_analytic_shell_component(
     input: &AnalyticShellInput,
     store: &Store,
     tolerance: f64,
@@ -1008,6 +1132,7 @@ pub fn prepare_analytic_shell(
         closed_edges: prepared_closed_edges,
         edge_order: declarations.keys().copied().collect(),
         edge_splits,
+        face_splits: Vec::new(),
         faces,
     })
 }
@@ -1148,6 +1273,15 @@ fn prepare_edge_splits(
                     .find(|edge| edge.source() == Some(source))
                     .map(|edge| edge.key())
             })
+            .or_else(|| {
+                closed
+                    .values()
+                    .find(|edge| {
+                        edge.merge_sources()
+                            .is_some_and(|sources| sources.contains(&source))
+                    })
+                    .map(|edge| edge.key())
+            })
         {
             return Err(AnalyticShellPlanError::ConflictingEdgeLineage(conflict));
         }
@@ -1157,6 +1291,65 @@ fn prepare_edge_splits(
         });
     }
     splits.sort_by_key(|split| split.pieces.into_iter().min().unwrap_or(split.pieces[0]));
+    Ok(splits)
+}
+
+pub(super) fn prepare_analytic_face_splits(
+    components: &[PreparedAnalyticShell],
+) -> Result<Vec<PreparedAnalyticBatchFaceSplit>, AnalyticShellPlanError> {
+    let mut groups: Vec<(EntityRef, [Option<PreparedAnalyticBatchFaceRef>; 2])> = Vec::new();
+    for (component, prepared) in components.iter().enumerate() {
+        for face in prepared.faces() {
+            let Some((source, piece)) = face.split_lineage() else {
+                continue;
+            };
+            let result = PreparedAnalyticBatchFaceRef {
+                component,
+                face: face.key(),
+            };
+            let index = piece.index();
+            if let Some((_, pieces)) = groups
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == source)
+            {
+                if pieces[index].replace(result).is_some() {
+                    return Err(AnalyticShellPlanError::InvalidFaceSplitLineage(source));
+                }
+            } else {
+                let mut pieces = [None; 2];
+                pieces[index] = Some(result);
+                groups.push((source, pieces));
+            }
+        }
+    }
+
+    let mut splits = Vec::with_capacity(groups.len());
+    for (source, pieces) in groups {
+        let [Some(first), Some(second)] = pieces else {
+            return Err(AnalyticShellPlanError::InvalidFaceSplitLineage(source));
+        };
+        if first == second {
+            return Err(AnalyticShellPlanError::InvalidFaceSplitLineage(source));
+        }
+        if let Some(conflict) = components
+            .iter()
+            .flat_map(|component| component.faces())
+            .find(|face| {
+                face.source() == Some(source)
+                    || face
+                        .merge_sources()
+                        .is_some_and(|sources| sources.contains(&source))
+            })
+        {
+            return Err(AnalyticShellPlanError::ConflictingFaceLineage(
+                conflict.key(),
+            ));
+        }
+        splits.push(PreparedAnalyticBatchFaceSplit {
+            source,
+            pieces: [first, second],
+        });
+    }
     Ok(splits)
 }
 
@@ -1182,6 +1375,25 @@ fn prepare_closed_edges(
             && !lineage_is_live(store, source)
         {
             return Err(AnalyticShellPlanError::StaleLineage(source));
+        }
+        if edge.source.is_some() && edge.merge_sources.is_some() {
+            return Err(AnalyticShellPlanError::ConflictingEdgeLineage(edge.key));
+        }
+        if let Some(sources) = edge.merge_sources {
+            let valid = sources[0] != sources[1]
+                && sources
+                    .iter()
+                    .all(|source| matches!(source, EntityRef::Edge(_)));
+            if !valid {
+                return Err(AnalyticShellPlanError::InvalidEdgeMergeLineage(edge.key));
+            }
+            if let Some(source) = sources
+                .iter()
+                .copied()
+                .find(|source| !lineage_is_live(store, *source))
+            {
+                return Err(AnalyticShellPlanError::StaleLineage(source));
+            }
         }
         if edges.insert(edge.key, edge).is_some() {
             return Err(AnalyticShellPlanError::DuplicateEdge(edge.key));
@@ -1210,7 +1422,10 @@ fn prepare_faces(
         {
             return Err(AnalyticShellPlanError::StaleLineage(source));
         }
-        if face.source.is_some() && face.merge_sources.is_some() {
+        let lineage_declarations = usize::from(face.source.is_some())
+            + usize::from(face.merge_sources.is_some())
+            + usize::from(face.split_lineage.is_some());
+        if lineage_declarations > 1 {
             return Err(AnalyticShellPlanError::ConflictingFaceLineage(face.key));
         }
         if let Some(sources) = face.merge_sources {
@@ -1226,6 +1441,14 @@ fn prepare_faces(
                 .copied()
                 .find(|source| !lineage_is_live(store, *source))
             {
+                return Err(AnalyticShellPlanError::StaleLineage(source));
+            }
+        }
+        if let Some((source, _)) = face.split_lineage {
+            if !matches!(source, EntityRef::Face(_)) {
+                return Err(AnalyticShellPlanError::InvalidFaceSplitLineage(source));
+            }
+            if !lineage_is_live(store, source) {
                 return Err(AnalyticShellPlanError::StaleLineage(source));
             }
         }
