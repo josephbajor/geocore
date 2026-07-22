@@ -433,7 +433,7 @@ fn classify_planar_face(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn classify_periodic_face(
+pub(super) fn classify_periodic_face(
     part: &Part<'_>,
     graph: &BodySectionGraph,
     other: &BodyId,
@@ -533,7 +533,7 @@ fn periodic_source_span_point(
     Ok(circle.eval(parameter))
 }
 
-fn classify_disk_face(
+pub(super) fn classify_disk_face(
     part: &Part<'_>,
     other: &BodyId,
     disk: &ArrangedDiskFace,
@@ -627,7 +627,7 @@ fn source_span_point(
         .eval(parameter))
 }
 
-fn classify_anchor(
+pub(super) fn classify_anchor(
     part: &Part<'_>,
     other: &BodyId,
     point: Point3,
@@ -721,7 +721,7 @@ const fn caps_are_omitted_by_truth(
     }
 }
 
-const fn operand_side(operand: usize) -> OperandSide {
+pub(super) const fn operand_side(operand: usize) -> OperandSide {
     if operand == 0 {
         OperandSide::Left
     } else {
@@ -729,7 +729,7 @@ const fn operand_side(operand: usize) -> OperandSide {
     }
 }
 
-const fn as_boundary_classification(inside: bool) -> BoundaryFragmentClassification {
+pub(super) const fn as_boundary_classification(inside: bool) -> BoundaryFragmentClassification {
     if inside {
         BoundaryFragmentClassification::Interior
     } else {

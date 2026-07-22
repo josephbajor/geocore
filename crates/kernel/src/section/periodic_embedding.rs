@@ -795,7 +795,7 @@ fn certify_source_rings(
                 origin: boundary.origin(),
                 direction: boundary.dir(),
             },
-            use_: use_,
+            use_,
             winding: topology_winding,
         });
         ring_heights.push(boundary.origin().y);

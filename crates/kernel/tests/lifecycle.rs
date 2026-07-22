@@ -42,6 +42,8 @@ mod curved_two_port;
 mod curved_two_ring_union;
 #[path = "lifecycle/mixed_plane_cylinder_cycles.rs"]
 mod mixed_plane_cylinder_cycles;
+#[path = "lifecycle/parallel_cylinder_boolean.rs"]
+mod parallel_cylinder_boolean;
 
 #[test]
 fn sessions_own_independent_parts_and_policy() {

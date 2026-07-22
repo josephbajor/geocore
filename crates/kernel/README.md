@@ -38,7 +38,9 @@ The current facade supports:
   cap-retaining mixed Unite and cylinder-left Subtract across world, translated, permuted, and oblique
   frames, plus complete nonconvex ten-support star/cylinder Intersect through
   convex-certificate-independent mixed planning, typed empty/created/refused
-  outcomes, and Full validation;
+  outcomes, and Full validation, plus the Full-checked same-signed
+  nested-height parallel-cylinder Intersect lens prism across world/oblique
+  frames and operand swap;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
@@ -50,8 +52,9 @@ The current facade supports:
 Broader modeling operations and additional semantic edits remain under active
 development. The facade is additive: lower crates remain available to kernel
 implementation and trusted adapter work, but their raw layouts are not part of
-the facade compatibility promise. Parallel-cylinder Boolean support is not yet
-claimed; the next slice is a Full-checked parallel-cylinder lens-prism Intersect.
+the facade compatibility promise. Parallel-cylinder Intersect is deliberately
+limited to the certified strict-secant nested-height lens prism; Unite and
+Subtract are not yet claimed.
 
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic

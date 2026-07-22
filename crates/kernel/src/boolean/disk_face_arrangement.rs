@@ -1230,7 +1230,7 @@ fn build_source_arcs(
     roots: &[DiskBoundaryRootEvidence],
 ) -> Vec<DiskSourceArcLineage> {
     let traversal = match sense {
-        Sense::Forward => roots.iter().copied().collect::<Vec<_>>(),
+        Sense::Forward => roots.to_vec(),
         Sense::Reversed => roots.iter().rev().copied().collect::<Vec<_>>(),
     };
     (0..traversal.len())

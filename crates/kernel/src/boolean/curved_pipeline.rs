@@ -374,6 +374,11 @@ fn execute_stages(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     super::pipeline::validate_pipeline_budget(scope)?;
+    if cylinder_mask == [true, true] {
+        return super::parallel_cylinder_pipeline::execute_parallel_cylinder_intersect(
+            edit, operation, bodies, linear, scope,
+        );
+    }
     let (planar_operand, cylinder_operand) = match cylinder_mask {
         [true, false] => (1_usize, 0_usize),
         [false, true] => (0_usize, 1_usize),
@@ -601,7 +606,7 @@ fn execute_mixed_bounded_arc(
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
-fn realize_mixed_shell(
+pub(super) fn realize_mixed_shell(
     edit: &mut PartEdit<'_>,
     plan: &super::mixed_shell_plan::MixedShellProofPlan,
     linear: f64,
@@ -704,7 +709,7 @@ fn extract_planar_operand(
     }
 }
 
-fn extract_cylinder_operand(
+pub(super) fn extract_cylinder_operand(
     edit: &PartEdit<'_>,
     body: BodyId,
     operand: u8,
@@ -1025,7 +1030,7 @@ fn operand_side(operand: u8) -> OperandSide {
     }
 }
 
-fn adapt_operation(operation: PlanarBooleanOperation) -> RegularizedBooleanOperation {
+pub(super) fn adapt_operation(operation: PlanarBooleanOperation) -> RegularizedBooleanOperation {
     match operation {
         PlanarBooleanOperation::Unite => RegularizedBooleanOperation::Unite,
         PlanarBooleanOperation::Intersect => RegularizedBooleanOperation::Intersect,
@@ -1052,7 +1057,7 @@ fn charge_source_scan(scope: &mut OperationScope<'_, '_>, amount: usize) -> Resu
         .map_err(Error::from)
 }
 
-fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailure {
+pub(super) fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailure {
     match error {
         MixedBoundaryError::Execution(error) => PipelineFailure::Execution(error),
         MixedBoundaryError::IncompleteSection => {
@@ -1082,7 +1087,7 @@ fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailure {
     }
 }
 
-fn mixed_plan_failure(error: MixedShellPlanError) -> PipelineFailure {
+pub(super) fn mixed_plan_failure(error: MixedShellPlanError) -> PipelineFailure {
     match error {
         MixedShellPlanError::SectionIncomplete => {
             refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete)
@@ -1163,7 +1168,7 @@ fn refused_error(refusal: CurvedBooleanPipelineRefusal) -> PipelineFailure {
     PipelineFailure::Refused(refusal)
 }
 
-fn refused<T>(refusal: CurvedBooleanPipelineRefusal) -> StageResult<T> {
+pub(super) fn refused<T>(refusal: CurvedBooleanPipelineRefusal) -> StageResult<T> {
     Err(refused_error(refusal))
 }
 

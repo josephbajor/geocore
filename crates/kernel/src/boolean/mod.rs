@@ -60,6 +60,12 @@ mod mixed_periodic_arrangement;
 #[allow(dead_code)]
 mod mixed_shell_plan;
 #[allow(dead_code)]
+mod parallel_cylinder_boundary;
+#[allow(dead_code)]
+mod parallel_cylinder_pipeline;
+#[allow(dead_code)]
+mod parallel_cylinder_relation;
+#[allow(dead_code)]
 mod pipeline;
 #[allow(dead_code)]
 mod planar_bsp;
