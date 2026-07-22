@@ -375,7 +375,7 @@ fn execute_stages(
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     super::pipeline::validate_pipeline_budget(scope)?;
     if cylinder_mask == [true, true] {
-        return super::parallel_cylinder_pipeline::execute_parallel_cylinder_intersect(
+        return super::parallel_cylinder_pipeline::execute_parallel_cylinder_boolean(
             edit, operation, bodies, linear, scope,
         );
     }

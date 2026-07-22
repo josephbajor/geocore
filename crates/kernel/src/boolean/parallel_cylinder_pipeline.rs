@@ -1,4 +1,4 @@
-//! First Full-checked Boolean consumer of parallel-cylinder Section evidence.
+//! Full-checked Boolean consumer of parallel-cylinder Section evidence.
 
 use kcore::operation::OperationScope;
 use ktopo::entity::Body as TopologyBody;
@@ -21,17 +21,24 @@ use crate::session::PartEdit;
 
 /// Consume the strict nested-height parallel-cylinder theorem through the
 /// shared arrangement, truth-selection, planning, and Full-check path.
-pub(super) fn execute_parallel_cylinder_intersect(
+///
+/// Intersect is commutative and receives a canonical source order. Subtract
+/// preserves caller order and is admitted only for axial-inner minus outer;
+/// the reverse topology needs a different realization theorem.
+pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
     bodies: [BodyId; 2],
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
-    if operation != PlanarBooleanOperation::Intersect {
-        return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
-    }
-    let bodies = canonical_intersection_order(edit, bodies)?;
+    let bodies = match operation {
+        PlanarBooleanOperation::Intersect => canonical_intersection_order(edit, bodies)?,
+        PlanarBooleanOperation::Subtract => bodies,
+        PlanarBooleanOperation::Unite => {
+            return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+        }
+    };
     let first = extract_cylinder_operand(edit, bodies[0].clone(), 0, scope)?;
     let second = extract_cylinder_operand(edit, bodies[1].clone(), 1, scope)?;
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
@@ -39,6 +46,9 @@ pub(super) fn execute_parallel_cylinder_intersect(
     let ParallelCylinderRelationOutcome::Certified(relation) = relation else {
         return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
     };
+    if operation == PlanarBooleanOperation::Subtract && relation.inner_operand() != 0 {
+        return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+    }
     let prepared = prepare_parallel_cylinder_boundary(
         &edit.as_part(),
         &graph,
@@ -55,7 +65,7 @@ pub(super) fn execute_parallel_cylinder_intersect(
         })?;
     if selected.is_empty() {
         return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
-            "certified positive-volume parallel-cylinder intersection selected no boundary",
+            "certified positive-volume parallel-cylinder Boolean selected no boundary",
         ));
     }
     let plan = plan_mixed_shell(&edit.state.store, &graph, prepared.bindings(), selected)
