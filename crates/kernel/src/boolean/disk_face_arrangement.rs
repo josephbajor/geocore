@@ -10,12 +10,12 @@
 //! lets this module prove an arbitrary number of chords disjoint without
 //! geometric sampling.  One Section-certified simple circular arc is also an
 //! admitted separating cut: its exact topology-owned endpoint and trim proof
-//! supplies the embedding, without enumerating a lens layout.  Multiple or
-//! mixed circular-cut layouts remain outside the theorem.  The shared
+//! supplies the embedding, including a continuous lift across the pcurve
+//! parameter seam, without enumerating a lens layout. Multiple or mixed
+//! circular-cut layouts remain outside the theorem. The shared
 //! bounded-face core then proves source-span conservation, opposed cut uses,
 //! cell closure, and connected dual adjacency.  Partial root coverage,
-//! tangency, coincidence, parameter seams, branching, and crossings are typed
-//! refusals.
+//! tangency, coincidence, branching, and crossings are typed refusals.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -455,7 +455,6 @@ pub(crate) enum DiskArrangementError {
     MultipleCircularCuts,
     MixedCircularAndChordCuts,
     CoincidentCircularCut(DiskChordKey),
-    CircularCutAtParameterSeam(DiskChordKey),
     ConservationMismatch,
     Arrangement(FaceArrangementError<DiskSourceArcKey, DiskChordKey, usize>),
 }
@@ -1182,11 +1181,13 @@ fn validate_cuts(
         if cuts.len() != 1 {
             return Err(DiskArrangementError::MixedCircularAndChordCuts);
         }
-        if arc.topology == DiskCircularCutTopology::CoincidentBoundary {
-            return Err(DiskArrangementError::CoincidentCircularCut(arc.key));
-        }
-        if arc.wraps_pcurve_seam {
-            return Err(DiskArrangementError::CircularCutAtParameterSeam(arc.key));
+        match (arc.topology, arc.wraps_pcurve_seam) {
+            (DiskCircularCutTopology::CoincidentBoundary, _) => {
+                return Err(DiskArrangementError::CoincidentCircularCut(arc.key));
+            }
+            // Section's seam flag preserves the continuous carrier occurrence.
+            // Crossing the planar pcurve seam changes no disk incidence.
+            (DiskCircularCutTopology::Simple, false) | (DiskCircularCutTopology::Simple, true) => {}
         }
         return Ok(());
     }
@@ -1487,6 +1488,100 @@ mod tests {
         (topology, part.bodies().len())
     }
 
+    fn assert_real_section_seam_arc_arranges(
+        store: &Store,
+        graph: &BodySectionGraph,
+        cap: &FaceId,
+        operand: usize,
+        fragment_index: usize,
+        endpoints: &[SectionCurveFragmentEnd; 2],
+    ) {
+        let endpoint_ids = endpoints.each_ref().map(|endpoint| endpoint.endpoint());
+        let topology = disk_cap_topology(store, cap.raw()).unwrap();
+        for endpoint in endpoints {
+            let trim = endpoint.trim();
+            assert_eq!(trim.operand(), operand);
+            assert_eq!(trim.face(), *cap);
+            assert_eq!(trim.loop_id().raw(), topology.loop_id);
+            assert_eq!(trim.fin().raw(), topology.fin);
+            assert_eq!(trim.source_parameter().edge().raw(), topology.edge);
+            let SectionCurveEndpointTopology::Trim {
+                source_parameters, ..
+            } = graph.curve_endpoints()[endpoint.endpoint()].topology()
+            else {
+                panic!("seam-wrapping cap endpoint lost exact trim topology")
+            };
+            assert_eq!(
+                source_parameters[operand].as_ref(),
+                Some(trim.source_parameter())
+            );
+        }
+
+        let disk = arrange_section_disk_face(store, graph, cap, operand)
+            .expect("the real Section seam arc must arrange on its source cap");
+        assert_eq!(disk.proof().roots_conserved(), 2);
+        assert_eq!(disk.proof().source_arcs_conserved(), 2);
+        assert_eq!(disk.proof().opposed_cuts(), 1);
+        assert_eq!(disk.proof().cells(), 2);
+        assert_eq!(disk.proof().dual_edges(), 1);
+        assert!(disk.proof().dual_connected());
+        assert_eq!(
+            disk.arrangement().cut_fragments()[0].key().fragment(),
+            fragment_index
+        );
+        assert_eq!(
+            disk.arrangement().cut_fragments()[0]
+                .endpoints()
+                .map(|endpoint| *endpoint),
+            endpoint_ids
+        );
+        for arc in disk.source_arcs() {
+            assert_eq!(arc.edge(), topology.edge);
+            assert_eq!(arc.fin(), topology.fin);
+            assert_eq!(arc.key().sense(), topology.sense);
+            for root in arc.roots() {
+                let SectionCurveEndpointTopology::Trim {
+                    source_parameters, ..
+                } = graph.curve_endpoints()[root.key().endpoint()].topology()
+                else {
+                    panic!("arranged seam root lost exact trim topology")
+                };
+                let source = source_parameters[operand].as_ref().unwrap();
+                let enclosure = source.root_parameter_enclosure();
+                assert_eq!(root.key().source_root_ordinal(), source.root_ordinal());
+                assert_eq!(
+                    root.root_parameter().to_bits(),
+                    source.root_parameter().to_bits()
+                );
+                assert_eq!(
+                    root.root_enclosure().map(f64::to_bits),
+                    [enclosure.lo().to_bits(), enclosure.hi().to_bits()]
+                );
+            }
+        }
+        let mut arranged_incidence = disk
+            .source_arcs()
+            .iter()
+            .flat_map(|arc| {
+                arc.roots()
+                    .map(|root| (root.key().endpoint(), root.key().source_root_ordinal()))
+            })
+            .collect::<Vec<_>>();
+        arranged_incidence.sort_unstable();
+        arranged_incidence.dedup();
+        let mut section_incidence = endpoints
+            .iter()
+            .map(|endpoint| {
+                (
+                    endpoint.endpoint(),
+                    endpoint.trim().source_parameter().root_ordinal(),
+                )
+            })
+            .collect::<Vec<_>>();
+        section_incidence.sort_unstable();
+        assert_eq!(arranged_incidence, section_incidence);
+    }
+
     #[test]
     fn chord_counts_prove_cell_conservation_and_dual_classification() {
         let cases = [
@@ -1604,7 +1699,7 @@ mod tests {
     }
 
     #[test]
-    fn circular_cut_tangent_coincident_seam_and_branching_fail_closed() {
+    fn circular_cut_tangent_coincident_and_branching_fail_closed() {
         let mut tangent = boundary(2, DiskBoundaryCoverage::Complete);
         let tangent_key = tangent.roots[0].key();
         tangent.roots[0] = DiskBoundaryRootEvidence::with_contact(
@@ -1626,15 +1721,17 @@ mod tests {
                 DiskChordKey::new(2)
             ))
         );
-        assert_eq!(
-            arrange_disk_face_cuts(
-                boundary(2, DiskBoundaryCoverage::Complete),
-                [circular_cut(3, 0, 1, true)]
-            ),
-            Err(DiskArrangementError::CircularCutAtParameterSeam(
-                DiskChordKey::new(3)
-            ))
-        );
+        let seam = arrange_disk_face_cuts(
+            boundary(2, DiskBoundaryCoverage::Complete),
+            [circular_cut(3, 0, 1, true)],
+        )
+        .expect("a certified pcurve-seam lift preserves simple disk incidence");
+        let single_chart = arrange_disk_face_cuts(
+            boundary(2, DiskBoundaryCoverage::Complete),
+            [circular_cut(3, 0, 1, false)],
+        )
+        .unwrap();
+        assert_eq!(seam, single_chart);
         assert_eq!(
             arrange_disk_face_cuts(
                 boundary(4, DiskBoundaryCoverage::Complete),
@@ -1929,6 +2026,92 @@ mod tests {
                 }
             }
         }
+        assert_eq!(source_signature(&session, &part_id, &sources), before);
+    }
+
+    #[test]
+    fn section_adapter_arranges_a_real_partial_overlap_cap_arc_across_the_pcurve_seam() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (lower, upper) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let lower = edit
+                .create_cylinder(CylinderRequest::new(
+                    Frame::world().with_origin(Point3::new(0.0, 0.0, -2.0)),
+                    1.0,
+                    3.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let upper = edit
+                .create_cylinder(CylinderRequest::new(
+                    Frame::world().with_origin(Point3::new(0.5, 0.0, -1.0)),
+                    1.0,
+                    3.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (lower, upper)
+        };
+        let sources = [lower.clone(), upper.clone()];
+        let before = source_signature(&session, &part_id, &sources);
+        let graph = session
+            .part(part_id.clone())
+            .unwrap()
+            .section_bodies(SectionBodiesRequest::new(lower, upper))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(graph.completion(), SectionCompletion::Complete);
+        assert!(graph.gaps().is_empty());
+
+        let part = session.part(part_id.clone()).unwrap();
+        let store = &part.state.store;
+        let mut seam_cases = Vec::new();
+        for (operand, body) in sources.iter().enumerate() {
+            for raw_cap in store
+                .faces_of_body(body.raw())
+                .unwrap()
+                .into_iter()
+                .filter(|face| {
+                    store.get(*face).ok().is_some_and(|face| {
+                        matches!(store.surface(face.surface()), Ok(SurfaceGeom::Plane(_)))
+                    })
+                })
+            {
+                let cap = FaceId::new(part_id.clone(), raw_cap);
+                for (fragment_index, fragment) in graph.curve_fragments().iter().enumerate() {
+                    if graph.branches()[fragment.branch()].faces()[operand] != cap {
+                        continue;
+                    }
+                    let SectionCurveFragmentSpan::Arc {
+                        endpoints,
+                        wraps_pcurve_seam: true,
+                    } = fragment.span()
+                    else {
+                        continue;
+                    };
+                    assert_real_section_seam_arc_arranges(
+                        store,
+                        &graph,
+                        &cap,
+                        operand,
+                        fragment_index,
+                        endpoints,
+                    );
+                    seam_cases.push((operand, raw_cap, fragment_index));
+                }
+            }
+        }
+        assert_eq!(
+            seam_cases.len(),
+            1,
+            "the offset partial-overlap fixture must publish one seam arc: {seam_cases:?}"
+        );
         assert_eq!(source_signature(&session, &part_id, &sources), before);
     }
 

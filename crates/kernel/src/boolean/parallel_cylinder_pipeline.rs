@@ -19,12 +19,13 @@ use crate::BodyId;
 use crate::section::section_bodies_in_scope;
 use crate::session::PartEdit;
 
-/// Consume the strict nested-height parallel-cylinder theorem through the
+/// Consume the strict positive-overlap parallel-cylinder theorem through the
 /// shared arrangement, truth-selection, planning, and Full-check path.
 ///
-/// Intersect and Unite are commutative and receive a canonical source order.
-/// Subtract preserves caller order; the certified relation identifies which
-/// operand owns the shorter axial band for either ordered material meaning.
+/// Intersect admits either strict nesting or two uniquely owned overlap ends.
+/// Unite and Subtract currently require strict axial nesting and refuse other
+/// positive overlaps before boundary arrangement. Commutative operations
+/// receive a canonical source order; Subtract preserves caller order.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -45,6 +46,11 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let ParallelCylinderRelationOutcome::Certified(relation) = relation else {
         return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
     };
+    if relation.strict_nesting_operands().is_none()
+        && !matches!(operation, PlanarBooleanOperation::Intersect)
+    {
+        return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+    }
     let prepared = prepare_parallel_cylinder_boundary(
         &edit.as_part(),
         &graph,
@@ -119,7 +125,7 @@ fn plan_matches_relation(
             && (actual_endpoints == expected_endpoints
                 || actual_endpoints == [expected_endpoints[1], expected_endpoints[0]])
     });
-    let caps_match = relation.cap_boundaries().iter().all(|witness| {
+    let caps_match = relation.overlap_ends().iter().all(|witness| {
         let mut matches = plan
             .section_edges()
             .iter()

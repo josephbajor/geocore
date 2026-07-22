@@ -261,7 +261,7 @@ impl SectionPeriodicComponentEmbedding {
     }
 }
 
-/// Complete contractible-cycle and transverse-trace evidence for one cylinder face.
+/// Complete contractible-cycle and proper boundary-trace evidence for one cylinder face.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CertifiedSectionPeriodicFaceEmbedding {
     operand: usize,
@@ -342,7 +342,8 @@ pub enum SectionPeriodicEmbeddingGap {
         /// Directed terminal endpoint index (`0` start, `1` end).
         end: usize,
     },
-    /// A maximal trace did not connect the two distinct annulus boundaries.
+    /// Legacy gap retained for compatibility with transverse-only evidence readers.
+    /// Current certification admits proper traces returning to one source loop.
     BoundaryTraceNotTransverse {
         /// Graph component index.
         component: usize,
@@ -377,7 +378,7 @@ pub enum SectionPeriodicEmbeddingGap {
         /// Second component-local trace ordinal.
         second_trace: usize,
     },
-    /// A transverse trace could not be separated from a carried closed cycle.
+    /// A proper boundary trace could not be separated from a carried closed cycle.
     ComponentTraceIntersectionProofRequired {
         /// Fully carried component index.
         component: usize,
@@ -386,7 +387,7 @@ pub enum SectionPeriodicEmbeddingGap {
         /// Component-local trace ordinal.
         trace: usize,
     },
-    /// The universal-cover terminal order did not prove a noncrossing matching.
+    /// Exact terminal order did not prove a noncrossing boundary matching.
     BoundaryLoopMatchingProofRequired,
     /// An endpoint lacks an outward carrier-parameter enclosure.
     CarrierIntervalUnavailable {
@@ -1036,12 +1037,6 @@ fn certify_boundary_trace(
     else {
         unreachable!("two directed trace terminals were constructed")
     };
-    if start.source_loop_ordinal == end.source_loop_ordinal {
-        return Err(SectionPeriodicEmbeddingGap::BoundaryTraceNotTransverse {
-            component: component_index,
-            trace,
-        });
-    }
     Ok(PendingBoundaryTrace {
         component: component_index,
         trace,
@@ -1902,7 +1897,10 @@ fn finish_boundary_traces(
             terminals,
         });
     }
-    certify_noncrossing_loop_matching(&boundary_traces)?;
+    certify_noncrossing_boundary_matching(
+        &boundary_traces,
+        source_loop_roots.each_ref().map(Vec::len),
+    )?;
     Ok((source_loop_roots, boundary_traces))
 }
 
@@ -1970,32 +1968,111 @@ fn public_boundary_root(
     }
 }
 
-fn certify_noncrossing_loop_matching(
+#[derive(Clone, Copy)]
+struct BoundaryPairing {
+    loops: [usize; 2],
+    cyclic_orders: [usize; 2],
+    source_u: [Interval; 2],
+    cylinder_chart_shifts: [i64; 2],
+}
+
+fn certify_noncrossing_boundary_matching(
     traces: &[SectionPeriodicBoundaryTraceEmbedding],
+    source_root_counts: [usize; 2],
 ) -> Result<(), SectionPeriodicEmbeddingGap> {
-    let mut matching = Vec::with_capacity(traces.len());
-    for trace in traces {
-        let first = trace
-            .terminals
-            .iter()
-            .find(|root| root.source_loop_ordinal == 0);
-        let second = trace
-            .terminals
-            .iter()
-            .find(|root| root.source_loop_ordinal == 1);
-        let (Some(first), Some(second)) = (first, second) else {
+    let pairings = traces
+        .iter()
+        .map(|trace| BoundaryPairing {
+            loops: trace
+                .terminals
+                .each_ref()
+                .map(|root| root.source_loop_ordinal),
+            cyclic_orders: trace.terminals.each_ref().map(|root| root.cyclic_order),
+            source_u: trace
+                .terminals
+                .each_ref()
+                .map(|root| public_uv_interval(root.source_uv[0])),
+            cylinder_chart_shifts: trace
+                .terminals
+                .each_ref()
+                .map(|root| root.cylinder_chart_shift),
+        })
+        .collect::<Vec<_>>();
+    certify_boundary_pairings(&pairings, source_root_counts)
+}
+
+fn certify_boundary_pairings(
+    pairings: &[BoundaryPairing],
+    source_root_counts: [usize; 2],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    let mut transverse = Vec::with_capacity(pairings.len());
+    let mut covered = source_root_counts.map(|count| vec![false; count]);
+    for pairing in pairings {
+        if pairing.loops.into_iter().any(|loop_| loop_ >= 2) {
             return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
-        };
-        let start = public_uv_interval(first.source_uv[0]);
-        let shift = second
-            .cylinder_chart_shift
-            .checked_sub(first.cylinder_chart_shift)
+        }
+        for terminal in 0..2 {
+            let source_loop = pairing.loops[terminal];
+            let order = pairing.cyclic_orders[terminal];
+            let Some(seen) = covered
+                .get_mut(source_loop)
+                .and_then(|roots| roots.get_mut(order))
+            else {
+                return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+            };
+            if core::mem::replace(seen, true) {
+                return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+            }
+        }
+        if pairing.loops[0] == pairing.loops[1] {
+            if pairing.cyclic_orders[0] == pairing.cyclic_orders[1] {
+                return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+            }
+            continue;
+        }
+        let first = usize::from(pairing.loops[0] != 0);
+        let second = 1 - first;
+        let shift = pairing.cylinder_chart_shifts[second]
+            .checked_sub(pairing.cylinder_chart_shifts[first])
             .and_then(integer_period_interval)
             .ok_or(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)?;
-        let destination = public_uv_interval(second.source_uv[0]) + shift;
-        matching.push((start, destination));
+        transverse.push((pairing.source_u[first], pairing.source_u[second] + shift));
     }
-    certify_universal_cover_matching(matching)
+    if covered.into_iter().flatten().any(|root| !root) {
+        return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+    }
+    certify_universal_cover_matching(transverse)?;
+
+    for source_loop in 0..2 {
+        let returning = pairings
+            .iter()
+            .filter(|pairing| pairing.loops == [source_loop; 2])
+            .collect::<Vec<_>>();
+        for first in 0..returning.len() {
+            for second in (first + 1)..returning.len() {
+                let [first_start, first_end] = returning[first].cyclic_orders;
+                let [second_start, second_end] = returning[second].cyclic_orders;
+                let count = source_root_counts[source_loop];
+                if cyclically_between(second_start, first_start, first_end, count)
+                    != cyclically_between(second_end, first_start, first_end, count)
+                {
+                    return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cyclically_between(value: usize, start: usize, end: usize, count: usize) -> bool {
+    if value >= count || start >= count || end >= count || start == end {
+        return false;
+    }
+    if start < end {
+        start < value && value < end
+    } else {
+        start < value || value < end
+    }
 }
 
 fn certify_universal_cover_matching(
@@ -2459,6 +2536,43 @@ mod tests {
         let inconsistent_winding = vec![point_pair(0.2, 0.2), point_pair(1.0, PERIOD + 1.0)];
         assert_eq!(
             certify_universal_cover_matching(inconsistent_winding),
+            Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)
+        );
+    }
+
+    fn boundary_pairing(loops: [usize; 2], cyclic_orders: [usize; 2]) -> BoundaryPairing {
+        BoundaryPairing {
+            loops,
+            cyclic_orders,
+            source_u: cyclic_orders.map(|order| Interval::point(0.25 + order as f64)),
+            cylinder_chart_shifts: [0, 0],
+        }
+    }
+
+    #[test]
+    fn singleton_returning_boundary_trace_has_exact_one_ring_coverage() {
+        let returning = boundary_pairing([0, 0], [0, 1]);
+        assert_eq!(certify_boundary_pairings(&[returning], [2, 0]), Ok(()));
+        assert_eq!(
+            certify_boundary_pairings(&[returning], [1, 1]),
+            Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)
+        );
+    }
+
+    #[test]
+    fn same_ring_pairing_accepts_nested_or_disjoint_and_refuses_alternation() {
+        let nested = [
+            boundary_pairing([1, 1], [0, 3]),
+            boundary_pairing([1, 1], [1, 2]),
+        ];
+        assert_eq!(certify_boundary_pairings(&nested, [0, 4]), Ok(()));
+
+        let alternating = [
+            boundary_pairing([1, 1], [0, 2]),
+            boundary_pairing([1, 1], [1, 3]),
+        ];
+        assert_eq!(
+            certify_boundary_pairings(&alternating, [0, 4]),
             Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)
         );
     }

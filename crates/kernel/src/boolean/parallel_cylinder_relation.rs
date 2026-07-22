@@ -2,11 +2,12 @@
 //!
 //! The section graph remains the general intersection authority.  This module
 //! only recognizes the strict finite lens-prism relation needed by the first
-//! Cylinder/Cylinder `Intersect`: same-directed exactly parallel axes, strict
-//! transverse radial secancy, one strictly nested axial interval, and one
-//! closed section component alternating between two rulings and the two inner
-//! cap arcs.  Every join is owned by the section graph's source-edge/root
-//! identity; rounded points are never used as topology keys.
+//! Cylinder/Cylinder Boolean slices: same-directed exactly parallel axes,
+//! strict transverse radial secancy, a strict positive axial overlap with two
+//! uniquely owned physical ends, and one closed section component alternating
+//! between two rulings and the matching cap arcs.  Every join is owned by the
+//! section graph's source-edge/root identity; rounded points are never used as
+//! topology keys.
 
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
@@ -46,8 +47,10 @@ pub(super) enum ParallelCylinderRelationGap {
     SourceAxialOrder,
     /// Both source cap intervals describe the same two axial planes.
     AxialIntervalsEqual,
-    /// Neither source cap interval is strictly contained by the other.
-    AxialIntervalsNotStrictlyNested,
+    /// A physical overlap end is shared by both source cap intervals.
+    AxialOverlapEndNotUnique,
+    /// The source cap intervals are disjoint or touch without positive overlap.
+    AxialOverlapNotStrictlyPositive,
     /// The supplied section is not globally complete and gap-free.
     SectionIncomplete,
     /// Fixed collection counts, component coverage, or alternation did not match.
@@ -56,13 +59,14 @@ pub(super) enum ParallelCylinderRelationGap {
     SectionOperandBinding,
     /// A branch carrier, pcurve family, range, or residual proof did not match.
     SectionBranchEvidence,
-    /// A trim endpoint did not retain the required inner cap-ring provenance.
+    /// A trim endpoint did not retain the required overlap-end cap-ring provenance.
     SectionEndpointProvenance,
 }
 
-/// One inner cap and the unique section arc cut into it.
+/// One physical axial-overlap end and the unique section arc cut into its cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ParallelCylinderCapBoundaryWitness {
+pub(super) struct ParallelCylinderOverlapEndWitness {
+    operand: usize,
     boundary: usize,
     cap_face: RawFaceId,
     edge: RawEdgeId,
@@ -71,8 +75,13 @@ pub(super) struct ParallelCylinderCapBoundaryWitness {
     root_ordinals: [usize; 2],
 }
 
-impl ParallelCylinderCapBoundaryWitness {
-    /// Inner source boundary ordinal in authored-axis order.
+impl ParallelCylinderOverlapEndWitness {
+    /// Operand owning this physical overlap end.
+    pub(super) const fn operand(&self) -> usize {
+        self.operand
+    }
+
+    /// Owning source boundary ordinal in authored-axis order.
     pub(super) const fn boundary(&self) -> usize {
         self.boundary
     }
@@ -108,9 +117,9 @@ impl ParallelCylinderCapBoundaryWitness {
 pub(super) struct ParallelCylinderRulingWitness {
     branch: usize,
     fragment: usize,
-    /// Endpoint indices in low/high inner-cap boundary order.
+    /// Endpoint indices in low/high physical-overlap-end order.
     endpoints: [usize; 2],
-    /// Source-root ordinals in low/high inner-cap boundary order.
+    /// Source-root ordinals in low/high physical-overlap-end order.
     root_ordinals: [usize; 2],
 }
 
@@ -125,36 +134,34 @@ impl ParallelCylinderRulingWitness {
         self.fragment
     }
 
-    /// Endpoint indices in low/high inner-cap boundary order.
+    /// Endpoint indices in low/high physical-overlap-end order.
     pub(super) const fn endpoints(&self) -> [usize; 2] {
         self.endpoints
     }
 
-    /// Source-root ordinals in low/high inner-cap boundary order.
+    /// Source-root ordinals in low/high physical-overlap-end order.
     pub(super) const fn root_ordinals(&self) -> [usize; 2] {
         self.root_ordinals
     }
 }
 
-/// Complete operation-local proof of the strict nested lens-prism relation.
+/// Complete operation-local proof of the strict finite lens-prism relation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CertifiedParallelCylinderLensRelation {
-    inner_operand: usize,
-    outer_operand: usize,
     component: usize,
-    cap_boundaries: [ParallelCylinderCapBoundaryWitness; 2],
+    overlap_ends: [ParallelCylinderOverlapEndWitness; 2],
     rulings: [ParallelCylinderRulingWitness; 2],
 }
 
 impl CertifiedParallelCylinderLensRelation {
-    /// Operand whose complete cap interval is strictly inside the other.
-    pub(super) const fn inner_operand(&self) -> usize {
-        self.inner_operand
-    }
-
-    /// Operand whose cap interval strictly contains the other.
-    pub(super) const fn outer_operand(&self) -> usize {
-        self.outer_operand
+    /// Return `[inner, outer]` only when the overlap is strict axial nesting.
+    pub(super) const fn strict_nesting_operands(&self) -> Option<[usize; 2]> {
+        if self.overlap_ends[0].operand == self.overlap_ends[1].operand {
+            let inner = self.overlap_ends[0].operand;
+            Some([inner, 1 - inner])
+        } else {
+            None
+        }
     }
 
     /// Unique closed section-component index.
@@ -162,9 +169,9 @@ impl CertifiedParallelCylinderLensRelation {
         self.component
     }
 
-    /// Low/high inner-cap arc witnesses.
-    pub(super) const fn cap_boundaries(&self) -> &[ParallelCylinderCapBoundaryWitness; 2] {
-        &self.cap_boundaries
+    /// Low/high physical-overlap-end cap-arc witnesses.
+    pub(super) const fn overlap_ends(&self) -> &[ParallelCylinderOverlapEndWitness; 2] {
+        &self.overlap_ends
     }
 
     /// Two rulings sorted by their low/high source-root ordinal pair.
@@ -182,8 +189,8 @@ pub(super) enum ParallelCylinderRelationOutcome {
     Indeterminate(ParallelCylinderRelationGap),
 }
 
-/// Certify the exact strict-nesting relation consumed by the first
-/// parallel-cylinder Boolean realization slice.
+/// Certify the exact strict-overlap relation consumed by the first
+/// parallel-cylinder Boolean realization slices.
 pub(super) fn certify_parallel_cylinder_relation(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
@@ -194,11 +201,11 @@ pub(super) fn certify_parallel_cylinder_relation(
         .charge(PLANAR_BOOLEAN_BSP_WORK, PARALLEL_CYLINDER_RELATION_WORK)
         .map_err(Error::from)?;
 
-    let (inner_operand, outer_operand) = match certify_source_relation(cylinders) {
+    let overlap_ends = match certify_source_relation(cylinders) {
         Ok(relation) => relation,
         Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
     };
-    match certify_section_relation(graph, cylinders, inner_operand, outer_operand) {
+    match certify_section_relation(graph, cylinders, overlap_ends) {
         Ok(certificate) => Ok(ParallelCylinderRelationOutcome::Certified(Box::new(
             certificate,
         ))),
@@ -208,7 +215,7 @@ pub(super) fn certify_parallel_cylinder_relation(
 
 fn certify_source_relation(
     cylinders: [&CertifiedCylinderSource; 2],
-) -> core::result::Result<(usize, usize), ParallelCylinderRelationGap> {
+) -> core::result::Result<[SourceOverlapEnd; 2], ParallelCylinderRelationGap> {
     let cylinder_a = cylinders[0].cylinder();
     let cylinder_b = cylinders[1].cylinder();
     let axis_a = cylinder_a.frame().z();
@@ -261,14 +268,44 @@ fn certify_source_relation(
         cylinders[1].boundaries()[1].center(),
         cylinders[0].boundaries()[1].center(),
     )?;
-    match (low, high) {
-        (Orientation::Positive, Orientation::Negative) => Ok((1, 0)),
-        (Orientation::Negative, Orientation::Positive) => Ok((0, 1)),
-        (Orientation::Zero, Orientation::Zero) => {
-            Err(ParallelCylinderRelationGap::AxialIntervalsEqual)
-        }
-        _ => Err(ParallelCylinderRelationGap::AxialIntervalsNotStrictlyNested),
+    if low == Orientation::Zero && high == Orientation::Zero {
+        return Err(ParallelCylinderRelationGap::AxialIntervalsEqual);
     }
+    let low_end = match low {
+        Orientation::Positive => SourceOverlapEnd {
+            operand: 1,
+            boundary: 0,
+        },
+        Orientation::Negative => SourceOverlapEnd {
+            operand: 0,
+            boundary: 0,
+        },
+        Orientation::Zero => {
+            return Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique);
+        }
+    };
+    let high_end = match high {
+        Orientation::Positive => SourceOverlapEnd {
+            operand: 0,
+            boundary: 1,
+        },
+        Orientation::Negative => SourceOverlapEnd {
+            operand: 1,
+            boundary: 1,
+        },
+        Orientation::Zero => {
+            return Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique);
+        }
+    };
+    if axial_compare(
+        axis_a,
+        cylinders[high_end.operand].boundaries()[high_end.boundary].center(),
+        cylinders[low_end.operand].boundaries()[low_end.boundary].center(),
+    )? != Orientation::Positive
+    {
+        return Err(ParallelCylinderRelationGap::AxialOverlapNotStrictlyPositive);
+    }
+    Ok([low_end, high_end])
 }
 
 fn certify_strict_radial_secancy(
@@ -316,10 +353,16 @@ fn axial_compare(
         .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceOverlapEnd {
+    operand: usize,
+    boundary: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct BoundEndpoint {
     endpoint: usize,
-    boundary: usize,
+    overlap_end: usize,
     root_ordinal: usize,
 }
 
@@ -341,15 +384,14 @@ struct PendingRuling {
 struct PendingCapArc {
     branch: usize,
     fragment: usize,
-    boundary: usize,
+    overlap_end: usize,
     ends: [BoundEndpoint; 2],
 }
 
 fn certify_section_relation(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
-    inner_operand: usize,
-    outer_operand: usize,
+    overlap_ends: [SourceOverlapEnd; 2],
 ) -> core::result::Result<CertifiedParallelCylinderLensRelation, ParallelCylinderRelationGap> {
     if graph.completion() != crate::SectionCompletion::Complete || !graph.gaps().is_empty() {
         return Err(ParallelCylinderRelationGap::SectionIncomplete);
@@ -397,8 +439,7 @@ fn certify_section_relation(
                 rulings.push(certify_ruling(
                     graph,
                     cylinders,
-                    inner_operand,
-                    outer_operand,
+                    overlap_ends,
                     branch_index,
                     fragment_index,
                     branch,
@@ -410,14 +451,13 @@ fn certify_section_relation(
                 let arc = certify_cap_arc(
                     graph,
                     cylinders,
-                    inner_operand,
-                    outer_operand,
+                    overlap_ends,
                     branch_index,
                     fragment_index,
                     branch,
                     endpoints,
                 )?;
-                if cap_arcs[arc.boundary].replace(arc).is_some() {
+                if cap_arcs[arc.overlap_end].replace(arc).is_some() {
                     return Err(ParallelCylinderRelationGap::SectionLayout);
                 }
             }
@@ -479,11 +519,11 @@ fn certify_section_relation(
     for arc in [cap_low, cap_high] {
         for end in arc.ends {
             if end.root_ordinal >= 2
-                || arc_endpoint_by_root[arc.boundary][end.root_ordinal] != usize::MAX
+                || arc_endpoint_by_root[arc.overlap_end][end.root_ordinal] != usize::MAX
             {
                 return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
             }
-            arc_endpoint_by_root[arc.boundary][end.root_ordinal] = end.endpoint;
+            arc_endpoint_by_root[arc.overlap_end][end.root_ordinal] = end.endpoint;
         }
     }
     if arc_endpoint_by_root
@@ -495,18 +535,21 @@ fn certify_section_relation(
     }
     for ruling in pending_rulings {
         for end in ruling.ends {
-            if arc_endpoint_by_root[end.boundary][end.root_ordinal] != end.endpoint {
+            if arc_endpoint_by_root[end.overlap_end][end.root_ordinal] != end.endpoint {
                 return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
             }
         }
     }
 
     pending_rulings.sort_by_key(|ruling| {
-        let by_boundary = ends_by_boundary(ruling.ends);
-        [by_boundary[0].root_ordinal, by_boundary[1].root_ordinal]
+        let by_overlap_end = ends_by_overlap_end(ruling.ends);
+        [
+            by_overlap_end[0].root_ordinal,
+            by_overlap_end[1].root_ordinal,
+        ]
     });
     let rulings = pending_rulings.map(|ruling| {
-        let ends = ends_by_boundary(ruling.ends);
+        let ends = ends_by_overlap_end(ruling.ends);
         ParallelCylinderRulingWitness {
             branch: ruling.branch,
             fragment: ruling.fragment,
@@ -514,23 +557,23 @@ fn certify_section_relation(
             root_ordinals: [ends[0].root_ordinal, ends[1].root_ordinal],
         }
     });
-    let cap_boundaries = [cap_low, cap_high].map(|arc| {
+    let overlap_ends = [cap_low, cap_high].map(|arc| {
         let mut roots = [arc.ends[0].root_ordinal, arc.ends[1].root_ordinal];
         roots.sort_unstable();
-        ParallelCylinderCapBoundaryWitness {
-            boundary: arc.boundary,
-            cap_face: cylinders[inner_operand].boundaries()[arc.boundary].cap_face(),
-            edge: cylinders[inner_operand].boundaries()[arc.boundary].edge(),
+        let source_end = overlap_ends[arc.overlap_end];
+        ParallelCylinderOverlapEndWitness {
+            operand: source_end.operand,
+            boundary: source_end.boundary,
+            cap_face: cylinders[source_end.operand].boundaries()[source_end.boundary].cap_face(),
+            edge: cylinders[source_end.operand].boundaries()[source_end.boundary].edge(),
             branch: arc.branch,
             fragment: arc.fragment,
             root_ordinals: roots,
         }
     });
     Ok(CertifiedParallelCylinderLensRelation {
-        inner_operand,
-        outer_operand,
         component: 0,
-        cap_boundaries,
+        overlap_ends,
         rulings,
     })
 }
@@ -565,15 +608,14 @@ fn certify_periodic_bindings(
 fn certify_ruling(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
-    inner_operand: usize,
-    outer_operand: usize,
+    overlap_ends: [SourceOverlapEnd; 2],
     branch_index: usize,
     fragment_index: usize,
     branch: &SectionBranch,
     endpoints: &[crate::SectionRulingFragmentEnd; 2],
 ) -> core::result::Result<PendingRuling, ParallelCylinderRelationGap> {
-    if branch.faces()[inner_operand].raw() != cylinders[inner_operand].side_face()
-        || branch.faces()[outer_operand].raw() != cylinders[outer_operand].side_face()
+    if branch.faces()[0].raw() != cylinders[0].side_face()
+        || branch.faces()[1].raw() != cylinders[1].side_face()
         || branch.topology() != SectionBranchTopology::Open
         || branch.endpoint_sites() != [0, 1]
         || branch.fragment_sites().len() != 2
@@ -598,14 +640,13 @@ fn certify_ruling(
             return Err(ParallelCylinderRelationGap::SectionBranchEvidence);
         }
         let trims = end.trims();
-        if trims[outer_operand].is_some() {
-            return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
-        }
-        let Some(trim) = trims[inner_operand].as_ref() else {
-            return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
+        let (trim_operand, trim) = match trims {
+            [Some(trim), None] => (0, trim),
+            [None, Some(trim)] => (1, trim),
+            _ => return Err(ParallelCylinderRelationGap::SectionEndpointProvenance),
         };
-        if trim.operand() != inner_operand
-            || trim.face().raw() != cylinders[inner_operand].side_face()
+        if trim.operand() != trim_operand
+            || trim.face().raw() != cylinders[trim_operand].side_face()
             || !valid_interval(trim.carrier_parameter().lo(), trim.carrier_parameter().hi())
         {
             return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
@@ -613,14 +654,14 @@ fn certify_ruling(
         let binding = bind_endpoint(
             graph,
             cylinders,
-            [inner_operand, outer_operand],
+            overlap_ends,
             EndpointBindRequest {
                 endpoint: end.endpoint(),
                 source_parameter: trim.source_parameter(),
                 trim: [trim.edge_parameter().lo(), trim.edge_parameter().hi()],
             },
         )?;
-        if ends[binding.boundary].replace(binding).is_some() {
+        if ends[binding.overlap_end].replace(binding).is_some() {
             return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
         }
     }
@@ -638,22 +679,28 @@ fn certify_ruling(
 fn certify_cap_arc(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
-    inner_operand: usize,
-    outer_operand: usize,
+    overlap_ends: [SourceOverlapEnd; 2],
     branch_index: usize,
     fragment_index: usize,
     branch: &SectionBranch,
     endpoints: &[crate::SectionCurveFragmentEnd; 2],
 ) -> core::result::Result<PendingCapArc, ParallelCylinderRelationGap> {
-    let boundary = cylinders[inner_operand]
-        .boundaries()
-        .iter()
-        .position(|boundary| branch.faces()[inner_operand].raw() == boundary.cap_face())
-        .ok_or(ParallelCylinderRelationGap::SectionOperandBinding)?;
-    if branch.faces()[outer_operand].raw() != cylinders[outer_operand].side_face()
+    let mut matching_ends = overlap_ends.into_iter().enumerate().filter(|(_, end)| {
+        branch.faces()[end.operand].raw()
+            == cylinders[end.operand].boundaries()[end.boundary].cap_face()
+    });
+    let Some((overlap_end, source_end)) = matching_ends.next() else {
+        return Err(ParallelCylinderRelationGap::SectionOperandBinding);
+    };
+    if matching_ends.next().is_some() {
+        return Err(ParallelCylinderRelationGap::SectionOperandBinding);
+    }
+    let cap_operand = source_end.operand;
+    let side_operand = 1 - cap_operand;
+    if branch.faces()[side_operand].raw() != cylinders[side_operand].side_face()
         || branch.topology() != SectionBranchTopology::Closed
-        || !matches!(branch.pcurves()[inner_operand], SectionUvCurve::Circle(_))
-        || !matches!(branch.pcurves()[outer_operand], SectionUvCurve::Line(_))
+        || !matches!(branch.pcurves()[cap_operand], SectionUvCurve::Circle(_))
+        || !matches!(branch.pcurves()[side_operand], SectionUvCurve::Line(_))
     {
         return Err(ParallelCylinderRelationGap::SectionOperandBinding);
     }
@@ -681,8 +728,9 @@ fn certify_cap_arc(
         let trim = end.trim();
         if !finite_vec3(end.point())
             || !end.carrier_parameter().is_finite()
-            || trim.operand() != inner_operand
-            || trim.face().raw() != cylinders[inner_operand].boundaries()[boundary].cap_face()
+            || trim.operand() != cap_operand
+            || trim.face().raw()
+                != cylinders[cap_operand].boundaries()[source_end.boundary].cap_face()
             || !valid_interval(trim.edge_parameter().lo(), trim.edge_parameter().hi())
             || !valid_interval(trim.pcurve_half_angle().lo(), trim.pcurve_half_angle().hi())
         {
@@ -691,14 +739,14 @@ fn certify_cap_arc(
         let binding = bind_endpoint(
             graph,
             cylinders,
-            [inner_operand, outer_operand],
+            overlap_ends,
             EndpointBindRequest {
                 endpoint: end.endpoint(),
                 source_parameter: trim.source_parameter(),
                 trim: [trim.edge_parameter().lo(), trim.edge_parameter().hi()],
             },
         )?;
-        if binding.boundary != boundary {
+        if binding.overlap_end != overlap_end {
             return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
         }
         ends[end_index] = Some(binding);
@@ -712,7 +760,7 @@ fn certify_cap_arc(
     Ok(PendingCapArc {
         branch: branch_index,
         fragment: fragment_index,
-        boundary,
+        overlap_end,
         ends: [first, second],
     })
 }
@@ -720,10 +768,9 @@ fn certify_cap_arc(
 fn bind_endpoint(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
-    operands: [usize; 2],
+    overlap_ends: [SourceOverlapEnd; 2],
     request: EndpointBindRequest<'_>,
 ) -> core::result::Result<BoundEndpoint, ParallelCylinderRelationGap> {
-    let [inner_operand, outer_operand] = operands;
     let [trim_lo, trim_hi] = request.trim;
     let endpoint_index = request.endpoint;
     let source_parameter = request.source_parameter;
@@ -731,11 +778,17 @@ fn bind_endpoint(
         .curve_endpoints()
         .get(endpoint_index)
         .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
-    let boundary = cylinders[inner_operand]
-        .boundaries()
-        .iter()
-        .position(|boundary| source_parameter.edge().raw() == boundary.edge())
-        .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
+    let mut matching_ends = overlap_ends.into_iter().enumerate().filter(|(_, end)| {
+        source_parameter.edge().raw() == cylinders[end.operand].boundaries()[end.boundary].edge()
+    });
+    let Some((overlap_end, source_end)) = matching_ends.next() else {
+        return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
+    };
+    if matching_ends.next().is_some() {
+        return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
+    }
+    let cap_operand = source_end.operand;
+    let side_operand = 1 - cap_operand;
     let SectionCurveEndpointTopology::Trim {
         sites,
         source_parameters,
@@ -744,18 +797,18 @@ fn bind_endpoint(
         return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
     };
     if !matches!(
-        &sites[inner_operand],
-        SectionSite::EdgeInterior(edge) if edge.raw() == cylinders[inner_operand].boundaries()[boundary].edge()
+        &sites[cap_operand],
+        SectionSite::EdgeInterior(edge) if edge.raw() == cylinders[cap_operand].boundaries()[source_end.boundary].edge()
     ) || !matches!(
-        &sites[outer_operand],
-        SectionSite::FaceInterior(face) if face.raw() == cylinders[outer_operand].side_face()
-    ) || source_parameters[inner_operand].as_ref() != Some(source_parameter)
-        || source_parameters[outer_operand].is_some()
-        || endpoint.edge_parameters()[outer_operand].is_some()
+        &sites[side_operand],
+        SectionSite::FaceInterior(face) if face.raw() == cylinders[side_operand].side_face()
+    ) || source_parameters[cap_operand].as_ref() != Some(source_parameter)
+        || source_parameters[side_operand].is_some()
+        || endpoint.edge_parameters()[side_operand].is_some()
     {
         return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
     }
-    let common = endpoint.edge_parameters()[inner_operand]
+    let common = endpoint.edge_parameters()[cap_operand]
         .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
     let root_enclosure = source_parameter.root_parameter_enclosure();
     if source_parameter.root_ordinal() >= 2
@@ -771,7 +824,7 @@ fn bind_endpoint(
     }
     Ok(BoundEndpoint {
         endpoint: endpoint_index,
-        boundary,
+        overlap_end,
         root_ordinal: source_parameter.root_ordinal(),
     })
 }
@@ -806,7 +859,7 @@ fn record_endpoint(
         return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
     }
     kinds[end.endpoint] |= kind;
-    let binding = (end.boundary, end.root_ordinal);
+    let binding = (end.overlap_end, end.root_ordinal);
     if let Some(existing) = bindings[end.endpoint] {
         if existing != binding {
             return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
@@ -817,8 +870,8 @@ fn record_endpoint(
     Ok(())
 }
 
-fn ends_by_boundary(ends: [BoundEndpoint; 2]) -> [BoundEndpoint; 2] {
-    if ends[0].boundary == 0 {
+fn ends_by_overlap_end(ends: [BoundEndpoint; 2]) -> [BoundEndpoint; 2] {
+    if ends[0].overlap_end == 0 {
         ends
     } else {
         [ends[1], ends[0]]
@@ -922,7 +975,11 @@ mod tests {
         }
     }
 
-    fn fixture(placement: Placement) -> Fixture {
+    fn fixture_with_axial_intervals(
+        placement: Placement,
+        first: (f64, f64),
+        second: (f64, f64),
+    ) -> Fixture {
         let frame = shared_frame(placement);
         let mut session = Kernel::new().create_session();
         let part = session.create_part();
@@ -930,9 +987,9 @@ mod tests {
             let mut edit = session.edit_part(part.clone()).unwrap();
             let outer = edit
                 .create_cylinder(CylinderRequest::new(
-                    frame.with_origin(frame.point_at(-0.5, 0.0, -2.0)),
+                    frame.with_origin(frame.point_at(-0.5, 0.0, first.0)),
                     1.0,
-                    4.0,
+                    first.1,
                 ))
                 .unwrap()
                 .into_result()
@@ -940,9 +997,9 @@ mod tests {
                 .body();
             let inner = edit
                 .create_cylinder(CylinderRequest::new(
-                    frame.with_origin(frame.point_at(0.5, 0.0, -1.0)),
+                    frame.with_origin(frame.point_at(0.5, 0.0, second.0)),
                     1.0,
-                    2.0,
+                    second.1,
                 ))
                 .unwrap()
                 .into_result()
@@ -956,6 +1013,14 @@ mod tests {
             outer,
             inner,
         }
+    }
+
+    fn fixture(placement: Placement) -> Fixture {
+        fixture_with_axial_intervals(placement, (-2.0, 4.0), (-1.0, 2.0))
+    }
+
+    fn partial_overlap_fixture(placement: Placement) -> Fixture {
+        fixture_with_axial_intervals(placement, (-1.0, 2.0), (0.0, 2.0))
     }
 
     fn section(fixture: &Fixture, swapped: bool) -> BodySectionGraph {
@@ -1033,6 +1098,14 @@ mod tests {
         }
     }
 
+    fn certified_relation(
+        fixture: &Fixture,
+        graph: &BodySectionGraph,
+        sources: &[CertifiedCylinderSource; 2],
+    ) -> CertifiedParallelCylinderLensRelation {
+        certified(certify(fixture, graph, sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap())
+    }
+
     #[test]
     fn strict_world_and_oblique_relations_are_replay_and_swap_deterministic() {
         for placement in [Placement::World, Placement::Oblique] {
@@ -1043,46 +1116,22 @@ mod tests {
             let forward_sources = sources(&fixture, false);
             let swapped_sources = sources(&fixture, true);
 
-            let forward = certified(
-                certify(
-                    &fixture,
-                    &forward_graph,
-                    &forward_sources,
-                    PARALLEL_CYLINDER_RELATION_WORK,
-                )
-                .unwrap(),
-            );
-            let replay = certified(
-                certify(
-                    &fixture,
-                    &replay_graph,
-                    &forward_sources,
-                    PARALLEL_CYLINDER_RELATION_WORK,
-                )
-                .unwrap(),
-            );
-            let swapped = certified(
-                certify(
-                    &fixture,
-                    &swapped_graph,
-                    &swapped_sources,
-                    PARALLEL_CYLINDER_RELATION_WORK,
-                )
-                .unwrap(),
-            );
+            let forward = certified_relation(&fixture, &forward_graph, &forward_sources);
+            let replay = certified_relation(&fixture, &replay_graph, &forward_sources);
+            let swapped = certified_relation(&fixture, &swapped_graph, &swapped_sources);
             assert_eq!(forward, replay);
-            assert_eq!((forward.inner_operand(), forward.outer_operand()), (1, 0));
-            assert_eq!((swapped.inner_operand(), swapped.outer_operand()), (0, 1));
+            assert_eq!(forward.strict_nesting_operands(), Some([1, 0]));
+            assert_eq!(swapped.strict_nesting_operands(), Some([0, 1]));
             assert_eq!(forward.component(), 0);
             assert_eq!(swapped.component(), 0);
             assert_eq!(
-                forward.cap_boundaries().map(|witness| (
+                forward.overlap_ends().map(|witness| (
                     witness.boundary(),
                     witness.cap_face(),
                     witness.edge(),
                     witness.root_ordinals()
                 )),
-                swapped.cap_boundaries().map(|witness| (
+                swapped.overlap_ends().map(|witness| (
                     witness.boundary(),
                     witness.cap_face(),
                     witness.edge(),
@@ -1093,7 +1142,8 @@ mod tests {
                 forward.rulings().map(|witness| witness.root_ordinals()),
                 swapped.rulings().map(|witness| witness.root_ordinals())
             );
-            for (boundary, witness) in forward.cap_boundaries().iter().enumerate() {
+            for (boundary, witness) in forward.overlap_ends().iter().enumerate() {
+                assert_eq!(witness.operand(), 1);
                 assert_eq!(witness.boundary(), boundary);
                 assert_eq!(witness.root_ordinals(), [0, 1]);
                 assert!(witness.branch() < forward_graph.branches().len());
@@ -1104,6 +1154,62 @@ mod tests {
                 assert!(witness.fragment() < forward_graph.curve_fragments().len());
                 assert!(witness.endpoints().into_iter().all(|endpoint| endpoint < 4));
             }
+        }
+    }
+
+    #[test]
+    fn partial_overlap_ends_are_physical_replay_and_swap_deterministic() {
+        for placement in [Placement::World, Placement::Oblique] {
+            let fixture = partial_overlap_fixture(placement);
+            let forward_graph = section(&fixture, false);
+            let replay_graph = section(&fixture, false);
+            let swapped_graph = section(&fixture, true);
+            let forward_sources = sources(&fixture, false);
+            let swapped_sources = sources(&fixture, true);
+
+            let forward = certified_relation(&fixture, &forward_graph, &forward_sources);
+            let replay = certified_relation(&fixture, &replay_graph, &forward_sources);
+            let swapped = certified_relation(&fixture, &swapped_graph, &swapped_sources);
+
+            assert_eq!(forward, replay);
+            assert_eq!(forward.strict_nesting_operands(), None);
+            assert_eq!(swapped.strict_nesting_operands(), None);
+            assert_eq!(
+                forward.overlap_ends().map(|witness| (
+                    witness.boundary(),
+                    witness.cap_face(),
+                    witness.edge(),
+                    witness.root_ordinals(),
+                )),
+                swapped.overlap_ends().map(|witness| (
+                    witness.boundary(),
+                    witness.cap_face(),
+                    witness.edge(),
+                    witness.root_ordinals(),
+                ))
+            );
+            assert_eq!(
+                forward
+                    .overlap_ends()
+                    .map(|witness| (witness.operand(), witness.boundary())),
+                [(1, 0), (0, 1)]
+            );
+            assert_eq!(
+                swapped
+                    .overlap_ends()
+                    .map(|witness| (witness.operand(), witness.boundary())),
+                [(0, 0), (1, 1)]
+            );
+            assert_eq!(
+                forward.rulings().map(|witness| witness.root_ordinals()),
+                swapped.rulings().map(|witness| witness.root_ordinals())
+            );
+            assert!(
+                forward
+                    .overlap_ends()
+                    .iter()
+                    .all(|witness| witness.root_ordinals() == [0, 1])
+            );
         }
     }
 
@@ -1264,7 +1370,40 @@ mod tests {
         );
         assert_eq!(
             certify_source_relation([&partial[0], &partial[1]]),
-            Err(ParallelCylinderRelationGap::AxialIntervalsNotStrictlyNested)
+            Ok([
+                SourceOverlapEnd {
+                    operand: 1,
+                    boundary: 0,
+                },
+                SourceOverlapEnd {
+                    operand: 0,
+                    boundary: 1,
+                },
+            ])
+        );
+
+        for second_low in [0.0, 0.25] {
+            let no_overlap = analytic_sources(
+                world.with_origin(Point3::new(-0.5, 0.0, -2.0)),
+                2.0,
+                world.with_origin(Point3::new(0.5, 0.0, second_low)),
+                2.0,
+            );
+            assert_eq!(
+                certify_source_relation([&no_overlap[0], &no_overlap[1]]),
+                Err(ParallelCylinderRelationGap::AxialOverlapNotStrictlyPositive)
+            );
+        }
+
+        let shared_low = analytic_sources(
+            world.with_origin(Point3::new(-0.5, 0.0, -1.0)),
+            3.0,
+            world.with_origin(Point3::new(0.5, 0.0, -1.0)),
+            2.0,
+        );
+        assert_eq!(
+            certify_source_relation([&shared_low[0], &shared_low[1]]),
+            Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique)
         );
 
         let tangent = analytic_sources(

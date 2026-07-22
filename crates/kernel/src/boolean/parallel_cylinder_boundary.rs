@@ -1,9 +1,10 @@
-//! Exact face arrangements for a strictly nested parallel-cylinder section.
+//! Exact face arrangements for a strict-overlap parallel-cylinder section.
 //!
-//! Both side faces are ordinary periodic arrangements and every cut inner cap
-//! is an ordinary disk arrangement. This bridge only gathers those general
-//! arrangements, classifies their connected duals against the opposite solid,
-//! and exposes them to the shared truth selector and mixed-shell planner.
+//! Both side faces are ordinary periodic arrangements and every physical
+//! overlap-end cap is an ordinary disk arrangement. This bridge only gathers
+//! those general arrangements, classifies their connected duals against the
+//! opposite solid, and exposes them to the shared truth selector and
+//! mixed-shell planner.
 
 // The shared boundary error keeps exact arrangement diagnostics inline. This
 // operation-local bridge preserves that typed contract rather than boxing it.
@@ -21,7 +22,7 @@ use super::mixed_boundary::{
     classify_periodic_face, operand_side,
 };
 use super::mixed_cap_boundary::{
-    MixedCylinderCapRing, bind_cylinder_cap_rings, classified_exterior_cap,
+    MixedCylinderCapRing, bind_cylinder_cap_ring, classified_exterior_cap,
 };
 use super::mixed_periodic_arrangement::{
     MixedPeriodicFaceArrangement, arrange_mixed_periodic_face,
@@ -92,9 +93,9 @@ impl PreparedParallelCylinderBoundary {
     }
 }
 
-/// Arrange both side annuli, both cut inner caps, and both exterior outer caps.
+/// Arrange both side annuli, both overlap-end caps, and both exterior caps.
 ///
-/// The caller owns the strict axial-containment and complete-section theorem.
+/// The caller owns the strict axial-overlap and complete-section theorem.
 /// This function verifies its topological consequences before exposing any
 /// arrangement to truth selection.
 pub(super) fn prepare_parallel_cylinder_boundary(
@@ -158,8 +159,10 @@ fn prepare_periodic_faces(
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PreparedPeriodicFaces, MixedBoundaryError> {
-    if [relation.inner_operand(), relation.outer_operand()] != [0, 1]
-        && [relation.inner_operand(), relation.outer_operand()] != [1, 0]
+    if relation
+        .overlap_ends()
+        .iter()
+        .any(|witness| witness.operand() >= cylinders.len())
     {
         return Err(MixedBoundaryError::SourceTopology);
     }
@@ -215,20 +218,27 @@ fn prepare_cap_faces(
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PreparedCapFaces, MixedBoundaryError> {
     let store = &part.state.store;
-    let inner = relation.inner_operand();
-    let outer = relation.outer_operand();
     let mut disks = Vec::with_capacity(2);
     let mut classified = Vec::new();
-    for witness in relation.cap_boundaries() {
-        let boundary = cylinders[inner]
+    let mut cut_boundaries = [Vec::with_capacity(2), Vec::with_capacity(2)];
+    for witness in relation.overlap_ends() {
+        let operand = witness.operand();
+        let opposite = 1_usize
+            .checked_sub(operand)
+            .ok_or(MixedBoundaryError::SourceTopology)?;
+        let boundary = cylinders[operand]
             .boundaries()
             .get(witness.boundary())
             .ok_or(MixedBoundaryError::SourceTopology)?;
-        if boundary.cap_face() != witness.cap_face() || boundary.edge() != witness.edge() {
+        if cut_boundaries[operand].contains(&witness.boundary())
+            || boundary.cap_face() != witness.cap_face()
+            || boundary.edge() != witness.edge()
+        {
             return Err(MixedBoundaryError::SourceTopology);
         }
-        let cap_face = FaceId::new(bodies[inner].part().clone(), witness.cap_face());
-        let arrangement = arrange_section_disk_face(store, graph, &cap_face, inner)
+        cut_boundaries[operand].push(witness.boundary());
+        let cap_face = FaceId::new(bodies[operand].part().clone(), witness.cap_face());
+        let arrangement = arrange_section_disk_face(store, graph, &cap_face, operand)
             .map_err(|_| MixedBoundaryError::SourceTopology)?;
         let [cut] = arrangement.arrangement().cut_fragments() else {
             return Err(MixedBoundaryError::SourceTopology);
@@ -246,9 +256,9 @@ fn prepare_cap_faces(
         {
             return Err(MixedBoundaryError::SourceTopology);
         }
-        let source = source_face_key(store, graph, &cap_face, inner)
+        let source = source_face_key(store, graph, &cap_face, operand)
             .map_err(|_| MixedBoundaryError::SourceTopology)?;
-        let classes = classify_disk_face(part, &bodies[outer], &arrangement, linear, scope)?;
+        let classes = classify_disk_face(part, &bodies[opposite], &arrangement, linear, scope)?;
         classified.extend(arrangement.arrangement().cells().iter().map(|cell| {
             let class = match classes[&cell.key()] {
                 DiskCellClassification::Interior => {
@@ -260,43 +270,48 @@ fn prepare_cap_faces(
             };
             ClassifiedBoundaryFragment::new(
                 MixedShellCellKey::disk(source, cell.key()),
-                operand_side(inner),
+                operand_side(operand),
                 (),
                 class,
             )
         }));
         disks.push(PreparedDiskFace {
             face: cap_face,
-            operand: inner,
+            operand,
             arrangement,
         });
     }
 
-    let periodic_face = periodic
-        .iter()
-        .find(|face| face.operand == outer)
-        .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
     let mut caps = Vec::with_capacity(2);
-    for boundary in cylinders[outer].boundaries() {
-        if classify_anchor(part, &bodies[inner], boundary.center(), linear, scope)? {
-            return Err(MixedBoundaryError::CylinderCapNotExterior);
+    for operand in 0..2 {
+        let opposite = 1 - operand;
+        let periodic_face = periodic
+            .iter()
+            .find(|face| face.operand == operand)
+            .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
+        for (boundary_index, boundary) in cylinders[operand].boundaries().iter().enumerate() {
+            if cut_boundaries[operand].contains(&boundary_index) {
+                continue;
+            }
+            if classify_anchor(part, &bodies[opposite], boundary.center(), linear, scope)? {
+                return Err(MixedBoundaryError::CylinderCapNotExterior);
+            }
+            let ring = bind_cylinder_cap_ring(
+                store,
+                graph,
+                cylinders[operand],
+                operand,
+                boundary_index,
+                &periodic_face.face,
+                &periodic_face.arrangement,
+            )
+            .map_err(|_| MixedBoundaryError::SourceTopology)?;
+            classified.push(classified_exterior_cap(
+                MixedShellCellKey::cylinder_cap(ring.cap_source(), ring.boundary()),
+                operand,
+            ));
+            caps.push(ring);
         }
-    }
-    let bound = bind_cylinder_cap_rings(
-        store,
-        graph,
-        cylinders[outer],
-        outer,
-        &periodic_face.face,
-        &periodic_face.arrangement,
-    )
-    .map_err(|_| MixedBoundaryError::SourceTopology)?;
-    for ring in bound {
-        classified.push(classified_exterior_cap(
-            MixedShellCellKey::cylinder_cap(ring.cap_source(), ring.boundary()),
-            outer,
-        ));
-        caps.push(ring);
     }
     if periodic.len() != 2 || disks.len() != 2 || caps.len() != 2 {
         return Err(MixedBoundaryError::SourceTopology);
@@ -328,28 +343,26 @@ fn validate_periodic_fragments(
         .iter()
         .map(|witness| witness.fragment())
         .collect::<Vec<_>>();
-    if operand == relation.outer_operand() {
-        expected.extend(
-            relation
-                .cap_boundaries()
-                .iter()
-                .map(|witness| witness.fragment()),
-        );
-    }
+    expected.extend(
+        relation
+            .overlap_ends()
+            .iter()
+            .filter(|witness| witness.operand() != operand)
+            .map(|witness| witness.fragment()),
+    );
     actual.sort_unstable();
     expected.sort_unstable();
     if actual != expected {
         return Err(MixedBoundaryError::SourceTopology);
     }
-    if operand == relation.inner_operand() {
-        validate_inner_periodic_roots(arrangement, relation)?;
-    }
+    validate_owned_periodic_roots(arrangement, relation, operand)?;
     Ok(())
 }
 
-fn validate_inner_periodic_roots(
+fn validate_owned_periodic_roots(
     arrangement: &MixedPeriodicFaceArrangement,
     relation: &CertifiedParallelCylinderLensRelation,
+    operand: usize,
 ) -> Result<(), MixedBoundaryError> {
     let mut actual = arrangement
         .source_spans()
@@ -361,7 +374,16 @@ fn validate_inner_periodic_roots(
     let mut expected = relation
         .rulings()
         .iter()
-        .flat_map(|witness| witness.endpoints().into_iter().zip(witness.root_ordinals()))
+        .flat_map(|witness| {
+            witness
+                .endpoints()
+                .into_iter()
+                .zip(witness.root_ordinals())
+                .enumerate()
+                .filter_map(|(overlap_end, root)| {
+                    (relation.overlap_ends()[overlap_end].operand() == operand).then_some(root)
+                })
+        })
         .collect::<Vec<_>>();
     actual.sort_unstable();
     actual.dedup();
@@ -412,4 +434,16 @@ fn parallel_boundary_work(
         .checked_add(u64::try_from(fragments).ok()?.checked_mul(4)?)?
         .checked_add(u64::try_from(endpoints).ok()?.checked_mul(2)?)?
         .checked_add(u64::try_from(components).ok()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parallel_boundary_work_is_an_exact_collection_ceiling() {
+        assert_eq!(parallel_boundary_work(6, 4, 4, 1), Some(31));
+        assert_eq!(parallel_boundary_work(0, 0, 0, 0), Some(0));
+        assert_eq!(parallel_boundary_work(usize::MAX, usize::MAX, 0, 0), None);
+    }
 }

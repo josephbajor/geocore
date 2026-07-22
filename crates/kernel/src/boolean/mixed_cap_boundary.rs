@@ -101,6 +101,50 @@ pub(crate) fn bind_cylinder_cap_rings(
     periodic_face: &FaceId,
     periodic_arrangement: &MixedPeriodicFaceArrangement,
 ) -> Result<[MixedCylinderCapRing; 2], MixedCylinderCapRingGap> {
+    let source_spans = periodic_arrangement.source_spans();
+    if source_spans.len() != 2 || source_spans.iter().any(|span| !span.is_whole_loop()) {
+        return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
+    }
+    let rings = [
+        bind_cylinder_cap_ring(
+            store,
+            graph,
+            cylinder,
+            cylinder_operand,
+            0,
+            periodic_face,
+            periodic_arrangement,
+        )?,
+        bind_cylinder_cap_ring(
+            store,
+            graph,
+            cylinder,
+            cylinder_operand,
+            1,
+            periodic_face,
+            periodic_arrangement,
+        )?,
+    ];
+    if rings[0].edge == rings[1].edge
+        || rings[0].cap_source == rings[1].cap_source
+        || rings[0].side_loop_key == rings[1].side_loop_key
+    {
+        return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
+    }
+    Ok(rings)
+}
+
+/// Bind one uncut certified cap edge even when the sibling source loop is cut.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bind_cylinder_cap_ring(
+    store: &Store,
+    graph: &BodySectionGraph,
+    cylinder: &CertifiedCylinderSource,
+    cylinder_operand: usize,
+    boundary: usize,
+    periodic_face: &FaceId,
+    periodic_arrangement: &MixedPeriodicFaceArrangement,
+) -> Result<MixedCylinderCapRing, MixedCylinderCapRingGap> {
     if periodic_face.raw() != cylinder.side_face() {
         return Err(MixedCylinderCapRingGap::PeriodicFaceMismatch);
     }
@@ -118,121 +162,109 @@ pub(crate) fn bind_cylinder_cap_rings(
             _ => None,
         })
         .ok_or(MixedCylinderCapRingGap::MissingPeriodicEvidence)?;
-    let source_spans = periodic_arrangement.source_spans();
-    if source_spans.len() != 2
-        || source_spans.iter().any(|span| !span.is_whole_loop())
-        || evidence.source_loops()[0] == evidence.source_loops()[1]
-    {
+    if evidence.source_loops()[0] == evidence.source_loops()[1] {
         return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
     }
 
-    let bind = |boundary: usize| {
-        let source_boundary = cylinder
-            .boundaries()
-            .get(boundary)
-            .ok_or(MixedCylinderCapRingGap::BoundaryIncidenceMismatch)?;
-        let cap_face = FaceId::new(periodic_face.part().clone(), source_boundary.cap_face());
-        let cap_source = source_face_key(store, graph, &cap_face, cylinder_operand)
-            .map_err(|_| MixedCylinderCapRingGap::CapSourceMismatch)?;
-        let raw_cap_face = store
-            .get(source_boundary.cap_face())
-            .map_err(|_| MixedCylinderCapRingGap::CapLoopMismatch)?;
-        let [cap_loop] = raw_cap_face.loops() else {
-            return Err(MixedCylinderCapRingGap::CapLoopMismatch);
-        };
-        let raw_cap_loop = store
-            .get(*cap_loop)
-            .map_err(|_| MixedCylinderCapRingGap::CapLoopMismatch)?;
-        let [cap_fin] = raw_cap_loop.fins() else {
-            return Err(MixedCylinderCapRingGap::CapLoopMismatch);
-        };
-        let raw_cap_fin = store
-            .get(*cap_fin)
-            .map_err(|_| MixedCylinderCapRingGap::CapLoopMismatch)?;
-        if raw_cap_loop.face() != source_boundary.cap_face()
-            || raw_cap_fin.parent() != *cap_loop
-            || raw_cap_fin.edge() != source_boundary.edge()
-        {
-            return Err(MixedCylinderCapRingGap::CapLoopMismatch);
-        }
-
-        let edge = store
-            .get(source_boundary.edge())
-            .map_err(|_| MixedCylinderCapRingGap::BoundaryIncidenceMismatch)?;
-        if edge.vertices() != [None, None]
-            || edge.bounds().is_some()
-            || edge.tolerance().is_some()
-            || edge.fins().len() != 2
-            || !edge.fins().contains(cap_fin)
-        {
-            return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
-        }
-
-        let mut side_match = None;
-        for (topology_ordinal, loop_id) in evidence.source_loops().iter().enumerate() {
-            let raw_loop = store
-                .get(loop_id.raw())
-                .map_err(|_| MixedCylinderCapRingGap::SourceLoopMismatch)?;
-            let [side_fin] = raw_loop.fins() else {
-                return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
-            };
-            let raw_side_fin = store
-                .get(*side_fin)
-                .map_err(|_| MixedCylinderCapRingGap::SourceLoopMismatch)?;
-            if raw_loop.face() != cylinder.side_face() || raw_side_fin.parent() != loop_id.raw() {
-                return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
-            }
-            if raw_side_fin.edge() == source_boundary.edge()
-                && side_match
-                    .replace((
-                        topology_ordinal,
-                        loop_id.raw(),
-                        *side_fin,
-                        raw_side_fin.sense(),
-                    ))
-                    .is_some()
-            {
-                return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
-            }
-        }
-        let Some((topology_ordinal, side_loop, side_fin, side_sense)) = side_match else {
-            return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
-        };
-        if side_sense == raw_cap_fin.sense() || !edge.fins().contains(&side_fin) {
-            return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
-        }
-        let loop_keys = source_spans
-            .iter()
-            .filter(|span| span.key().topology_ordinal() == topology_ordinal)
-            .map(|span| *span.key())
-            .collect::<Vec<_>>();
-        let [side_loop_key] = loop_keys.as_slice() else {
-            return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
-        };
-
-        Ok(MixedCylinderCapRing {
-            boundary,
-            operand: cylinder_operand,
-            cap_face,
-            cap_source,
-            side_source,
-            side_loop_key: *side_loop_key,
-            edge: source_boundary.edge(),
-            cap_loop: *cap_loop,
-            cap_fin: *cap_fin,
-            side_loop,
-            side_fin,
-        })
+    let source_boundary = cylinder
+        .boundaries()
+        .get(boundary)
+        .ok_or(MixedCylinderCapRingGap::BoundaryIncidenceMismatch)?;
+    let cap_face = FaceId::new(periodic_face.part().clone(), source_boundary.cap_face());
+    let cap_source = source_face_key(store, graph, &cap_face, cylinder_operand)
+        .map_err(|_| MixedCylinderCapRingGap::CapSourceMismatch)?;
+    let raw_cap_face = store
+        .get(source_boundary.cap_face())
+        .map_err(|_| MixedCylinderCapRingGap::CapLoopMismatch)?;
+    let [cap_loop] = raw_cap_face.loops() else {
+        return Err(MixedCylinderCapRingGap::CapLoopMismatch);
     };
+    let raw_cap_loop = store
+        .get(*cap_loop)
+        .map_err(|_| MixedCylinderCapRingGap::CapLoopMismatch)?;
+    let [cap_fin] = raw_cap_loop.fins() else {
+        return Err(MixedCylinderCapRingGap::CapLoopMismatch);
+    };
+    let raw_cap_fin = store
+        .get(*cap_fin)
+        .map_err(|_| MixedCylinderCapRingGap::CapLoopMismatch)?;
+    if raw_cap_loop.face() != source_boundary.cap_face()
+        || raw_cap_fin.parent() != *cap_loop
+        || raw_cap_fin.edge() != source_boundary.edge()
+    {
+        return Err(MixedCylinderCapRingGap::CapLoopMismatch);
+    }
 
-    let rings = [bind(0)?, bind(1)?];
-    if rings[0].edge == rings[1].edge
-        || rings[0].cap_source == rings[1].cap_source
-        || rings[0].side_loop_key == rings[1].side_loop_key
+    let edge = store
+        .get(source_boundary.edge())
+        .map_err(|_| MixedCylinderCapRingGap::BoundaryIncidenceMismatch)?;
+    if edge.vertices() != [None, None]
+        || edge.bounds().is_some()
+        || edge.tolerance().is_some()
+        || edge.fins().len() != 2
+        || !edge.fins().contains(cap_fin)
     {
         return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
     }
-    Ok(rings)
+
+    let mut side_match = None;
+    for (topology_ordinal, loop_id) in evidence.source_loops().iter().enumerate() {
+        let raw_loop = store
+            .get(loop_id.raw())
+            .map_err(|_| MixedCylinderCapRingGap::SourceLoopMismatch)?;
+        let [side_fin] = raw_loop.fins() else {
+            return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
+        };
+        let raw_side_fin = store
+            .get(*side_fin)
+            .map_err(|_| MixedCylinderCapRingGap::SourceLoopMismatch)?;
+        if raw_loop.face() != cylinder.side_face() || raw_side_fin.parent() != loop_id.raw() {
+            return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
+        }
+        if raw_side_fin.edge() == source_boundary.edge()
+            && side_match
+                .replace((
+                    topology_ordinal,
+                    loop_id.raw(),
+                    *side_fin,
+                    raw_side_fin.sense(),
+                ))
+                .is_some()
+        {
+            return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
+        }
+    }
+    let Some((topology_ordinal, side_loop, side_fin, side_sense)) = side_match else {
+        return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
+    };
+    if side_sense == raw_cap_fin.sense() || !edge.fins().contains(&side_fin) {
+        return Err(MixedCylinderCapRingGap::BoundaryIncidenceMismatch);
+    }
+    let spans = periodic_arrangement
+        .source_spans()
+        .iter()
+        .filter(|span| span.key().topology_ordinal() == topology_ordinal)
+        .collect::<Vec<_>>();
+    let [span] = spans.as_slice() else {
+        return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
+    };
+    if !span.is_whole_loop() {
+        return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
+    }
+
+    Ok(MixedCylinderCapRing {
+        boundary,
+        operand: cylinder_operand,
+        cap_face,
+        cap_source,
+        side_source,
+        side_loop_key: *span.key(),
+        edge: source_boundary.edge(),
+        cap_loop: *cap_loop,
+        cap_fin: *cap_fin,
+        side_loop,
+        side_fin,
+    })
 }
 
 /// Present one certified exterior cap to representation-independent truth.

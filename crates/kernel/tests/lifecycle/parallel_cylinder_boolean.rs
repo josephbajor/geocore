@@ -44,11 +44,29 @@ fn fixture(placement: Placement) -> Fixture {
     fixture_with_half_heights(placement, OUTER_HALF_HEIGHT, INNER_HALF_HEIGHT)
 }
 
+fn partial_overlap_fixture(placement: Placement) -> Fixture {
+    fixture_with_axial_intervals(placement, [-2.0, 1.0], [-1.0, 2.0])
+}
+
 fn fixture_with_half_heights(
     placement: Placement,
     outer_half_height: f64,
     inner_half_height: f64,
 ) -> Fixture {
+    fixture_with_axial_intervals(
+        placement,
+        [-outer_half_height, outer_half_height],
+        [-inner_half_height, inner_half_height],
+    )
+}
+
+fn fixture_with_axial_intervals(
+    placement: Placement,
+    outer_interval: [f64; 2],
+    inner_interval: [f64; 2],
+) -> Fixture {
+    assert!(outer_interval[0] < outer_interval[1]);
+    assert!(inner_interval[0] < inner_interval[1]);
     let frame = shared_frame(placement);
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
@@ -56,9 +74,9 @@ fn fixture_with_half_heights(
         let mut edit = session.edit_part(part_id.clone()).unwrap();
         let outer = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(-AXIS_OFFSET, 0.0, -outer_half_height)),
+                frame.with_origin(frame.point_at(-AXIS_OFFSET, 0.0, outer_interval[0])),
                 RADIUS,
-                2.0 * outer_half_height,
+                outer_interval[1] - outer_interval[0],
             ))
             .unwrap()
             .into_result()
@@ -66,9 +84,9 @@ fn fixture_with_half_heights(
             .body();
         let inner = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(AXIS_OFFSET, 0.0, -inner_half_height)),
+                frame.with_origin(frame.point_at(AXIS_OFFSET, 0.0, inner_interval[0])),
                 RADIUS,
-                2.0 * inner_half_height,
+                inner_interval[1] - inner_interval[0],
             ))
             .unwrap()
             .into_result()
@@ -219,6 +237,25 @@ fn expected_volume() -> f64 {
 
 fn expected_surface_area() -> f64 {
     4.0 * core::f64::consts::PI - 3.0_f64.sqrt()
+}
+
+fn expected_intersection_centroidal_inertia(frame: Frame) -> [[f64; 3]; 3] {
+    let pi = core::f64::consts::PI;
+    let root_three = 3.0_f64.sqrt();
+    let area = expected_volume() / 2.0;
+    // Direct integration of the symmetric unit-circle lens gives its planar
+    // second moments. Extruding that lens over z in [-1, 1] gives the axial
+    // moment below. This oracle therefore applies equally to the nested and
+    // partial-overlap fixtures whenever their intersection is that same prism.
+    let planar_x_squared = pi / 3.0 - 9.0 * root_three / 16.0;
+    let planar_y_squared = pi / 6.0 - 3.0 * root_three / 16.0;
+    let axial_squared = 2.0 * area / 3.0;
+    let local = [
+        [2.0 * planar_y_squared + axial_squared, 0.0, 0.0],
+        [0.0, 2.0 * planar_x_squared + axial_squared, 0.0],
+        [0.0, 0.0, 2.0 * (planar_x_squared + planar_y_squared)],
+    ];
+    rotate_tensor(frame, local)
 }
 
 fn expected_subtract_cross_section_area() -> f64 {
@@ -414,6 +451,67 @@ fn assert_xt_equal(actual: &[u8], expected: &[u8], message: &str) {
         "{message} at X_T line {}:\nleft: {left}\nright: {right}",
         line + 1
     );
+}
+
+fn assert_partial_intersection_created(
+    fixture: &Fixture,
+    outcome: OperationOutcome<BooleanOutcome>,
+) -> Vec<u8> {
+    let result = outcome.into_result().unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+        panic!("partial-overlap parallel-cylinder Intersect returned {result:#?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.reports().len(), 1);
+    assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
+    let result = created.bodies()[0].clone();
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    assert_eq!(body_topology(&part, result.clone()), [4, 6, 4]);
+    let full = part
+        .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
+    let BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = part
+        .body_properties(BodyPropertiesRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap()
+    else {
+        panic!("partial-overlap lens-prism analytic properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    // The two height-three cylinders overlap over z in [-1, 1], so their
+    // result is mathematically identical to the independently integrated
+    // height-two lens prism used by these analytic oracles.
+    assert_scalar_matches_analytic(properties.volume(), expected_volume(), "volume");
+    assert_scalar_matches_analytic(
+        properties.surface_area(),
+        expected_surface_area(),
+        "surface area",
+    );
+    assert_point_matches_analytic(properties.centroid(), fixture.frame.origin());
+    assert_inertia_matches_analytic(
+        properties.centroidal_inertia().value(),
+        properties.centroidal_inertia().error_bound(),
+        expected_intersection_centroidal_inertia(fixture.frame),
+    );
+    let first = part
+        .export_xt(ExportXtRequest::new(result.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let second = part
+        .export_xt(ExportXtRequest::new(result))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(first.bytes(), second.bytes());
+    first.bytes().to_vec()
 }
 
 fn assert_inner_subtract_created(
@@ -680,6 +778,32 @@ fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
 }
 
 #[test]
+fn partial_axial_overlap_intersection_full_commits_a_deterministic_lens_prism() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let mut canonical_bytes: Option<Vec<u8>> = None;
+        for swapped in [false, true] {
+            for _ in 0..2 {
+                let mut fixture = partial_overlap_fixture(placement);
+                assert_source_bodies_preserved(&fixture, 2);
+                let outcome = run(&mut fixture, swapped, OperationSettings::new());
+                let bytes = assert_partial_intersection_created(&fixture, outcome);
+                assert_source_bodies_preserved(&fixture, 3);
+                if let Some(canonical) = canonical_bytes.as_ref() {
+                    assert_xt_equal(
+                        &bytes,
+                        canonical,
+                        "operand swap or repeat changed partial-overlap Intersect X_T bytes",
+                    );
+                } else {
+                    canonical_bytes = Some(bytes.clone());
+                }
+                assert_fast_self_import(&mut fixture.session, &bytes);
+            }
+        }
+    }
+}
+
+#[test]
 fn parallel_cylinder_unite_full_commits_a_deterministic_connected_union() {
     for placement in [Placement::World, Placement::Oblique] {
         let mut canonical_bytes: Option<Vec<u8>> = None;
@@ -727,6 +851,57 @@ fn unsupported_equal_height_parallel_cylinder_unite_refuses_atomically() {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum UnsupportedPartialOverlapCase {
+    Unite { swapped: bool },
+    InnerMinusOuter,
+    OuterMinusInner,
+}
+
+fn run_unsupported_partial_overlap_case(
+    fixture: &mut Fixture,
+    case: UnsupportedPartialOverlapCase,
+) -> OperationOutcome<BooleanOutcome> {
+    match case {
+        UnsupportedPartialOverlapCase::Unite { swapped } => {
+            run_unite(fixture, swapped, OperationSettings::new())
+        }
+        UnsupportedPartialOverlapCase::InnerMinusOuter => {
+            run_subtract(fixture, false, OperationSettings::new())
+        }
+        UnsupportedPartialOverlapCase::OuterMinusInner => {
+            run_subtract(fixture, true, OperationSettings::new())
+        }
+    }
+}
+
+#[test]
+fn unsupported_partial_overlap_unite_and_subtract_refuse_atomically() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for case in [
+            UnsupportedPartialOverlapCase::Unite { swapped: false },
+            UnsupportedPartialOverlapCase::Unite { swapped: true },
+            UnsupportedPartialOverlapCase::InnerMinusOuter,
+            UnsupportedPartialOverlapCase::OuterMinusInner,
+        ] {
+            let mut fixture = partial_overlap_fixture(placement);
+            assert_source_bodies_preserved(&fixture, 2);
+            let before = fixture_signature(&fixture);
+            let outcome = run_unsupported_partial_overlap_case(&mut fixture, case);
+            assert!(matches!(
+                outcome.into_result().unwrap(),
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            assert_eq!(
+                fixture_signature(&fixture),
+                before,
+                "partial-overlap {case:?} mutated the part for {placement:?}"
+            );
+            assert_source_bodies_preserved(&fixture, 2);
+        }
+    }
+}
+
 #[test]
 fn parallel_cylinder_inner_minus_outer_full_commits_a_deterministic_crescent_prism() {
     for placement in [Placement::World, Placement::Oblique] {
@@ -770,9 +945,20 @@ fn parallel_cylinder_outer_minus_inner_full_commits_a_deterministic_notched_cyli
 #[derive(Clone, Copy)]
 enum RealizationCase {
     Intersection,
+    PartialOverlapIntersection,
     Unite,
     InnerMinusOuter,
     OuterMinusInner,
+}
+
+fn realization_fixture(case: RealizationCase, placement: Placement) -> Fixture {
+    match case {
+        RealizationCase::PartialOverlapIntersection => partial_overlap_fixture(placement),
+        RealizationCase::Intersection
+        | RealizationCase::Unite
+        | RealizationCase::InnerMinusOuter
+        | RealizationCase::OuterMinusInner => fixture(placement),
+    }
 }
 
 fn run_realization_case(
@@ -781,7 +967,9 @@ fn run_realization_case(
     settings: OperationSettings,
 ) -> OperationOutcome<BooleanOutcome> {
     match case {
-        RealizationCase::Intersection => run(fixture, false, settings),
+        RealizationCase::Intersection | RealizationCase::PartialOverlapIntersection => {
+            run(fixture, false, settings)
+        }
         RealizationCase::Unite => run_unite(fixture, false, settings),
         RealizationCase::InnerMinusOuter => run_subtract(fixture, false, settings),
         RealizationCase::OuterMinusInner => run_subtract(fixture, true, settings),
@@ -790,7 +978,7 @@ fn run_realization_case(
 
 fn assert_realization_budget_case(case: RealizationCase) {
     let baseline = run_realization_case(
-        &mut fixture(Placement::World),
+        &mut realization_fixture(case, Placement::World),
         case,
         OperationSettings::new(),
     );
@@ -819,7 +1007,7 @@ fn assert_realization_budget_case(case: RealizationCase) {
         )
     };
     let admitted = run_realization_case(
-        &mut fixture(Placement::World),
+        &mut realization_fixture(case, Placement::World),
         case,
         settings_at(usage.consumed),
     );
@@ -828,7 +1016,7 @@ fn assert_realization_budget_case(case: RealizationCase) {
         BooleanOutcome::Success(BooleanResult::Created(_))
     ));
 
-    let mut denied_fixture = fixture(Placement::World);
+    let mut denied_fixture = realization_fixture(case, Placement::World);
     let before = fixture_signature(&denied_fixture);
     let denied = run_realization_case(&mut denied_fixture, case, settings_at(usage.consumed - 1));
     let expected = kernel::LimitSnapshot {
@@ -844,6 +1032,7 @@ fn assert_realization_budget_case(case: RealizationCase) {
 fn parallel_cylinder_realization_budget_accepts_n_and_refuses_n_minus_one_atomically() {
     for case in [
         RealizationCase::Intersection,
+        RealizationCase::PartialOverlapIntersection,
         RealizationCase::Unite,
         RealizationCase::InnerMinusOuter,
         RealizationCase::OuterMinusInner,

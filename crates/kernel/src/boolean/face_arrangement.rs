@@ -830,6 +830,22 @@ where
     })
 }
 
+/// Derive the canonical cycles of a proof-owned rotation system before a
+/// surface-specific theorem assigns them to cells or the source exterior.
+pub(crate) fn preview_bounded_surface_cycles<S, C, V>(
+    input: &FaceArrangementInput<S, C, V>,
+) -> FaceResult<S, C, V, Vec<ArrangementCycle<S, C, V>>>
+where
+    S: Clone + Ord,
+    C: Clone + Ord,
+    V: Clone + Ord,
+{
+    let canonical = canonicalize_input(input.clone())?;
+    let mut cycles = traverse_cycles(&canonical)?;
+    cycles.sort_unstable();
+    Ok(cycles)
+}
+
 fn resolve_cycle_assignments<S, C, V, K>(
     cycles: &[ArrangementCycle<S, C, V>],
     cycle_of: &BTreeMap<ArrangementDartKey<S, C>, usize>,
