@@ -247,6 +247,49 @@ fn endpoint_free_edge_preserves_live_source_lineage() {
 }
 
 #[test]
+fn analytic_face_merge_lineage_preserves_caller_source_order() {
+    fn assemble(reversed: bool) -> Vec<LineageEvent> {
+        let mut store = Store::new();
+        let source_body = make::block(&mut store, &Frame::world(), [3.0, 3.0, 3.0]).unwrap();
+        let source_faces = store.faces_of_body(source_body).unwrap();
+        let ordered = if reversed {
+            [source_faces[1], source_faces[0]]
+        } else {
+            [source_faces[0], source_faces[1]]
+        };
+        let mut input = full_cylinder_input();
+        input.faces[0] = input.faces[0]
+            .clone()
+            .with_merge_sources([EntityRef::Face(ordered[0]), EntityRef::Face(ordered[1])]);
+
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&input, 1.0e-12)
+            .unwrap();
+        let result = output
+            .faces()
+            .iter()
+            .find_map(|(key, face)| (key.value() == 0).then_some(*face))
+            .unwrap();
+        let journal = transaction.commit_checked(&[output.body()]).unwrap();
+        assert_eq!(
+            journal.lineage(),
+            [LineageEvent::Merge {
+                sources: vec![EntityRef::Face(ordered[0]), EntityRef::Face(ordered[1]),],
+                result: EntityRef::Face(result),
+            }],
+        );
+        journal.lineage().to_vec()
+    }
+
+    let forward = assemble(false);
+    let replayed = assemble(false);
+    let reversed = assemble(true);
+    assert_eq!(forward, replayed);
+    assert_ne!(forward, reversed);
+}
+
+#[test]
 fn deterministic_journal_lineage_and_rollback_reuse_the_same_handles() {
     let first = assemble_with_lineage();
     let second = assemble_with_lineage();

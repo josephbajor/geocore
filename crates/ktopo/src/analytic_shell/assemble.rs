@@ -460,8 +460,11 @@ impl Transaction<'_> {
         edges: &BTreeMap<AnalyticEdgeKey, EdgeId>,
     ) {
         for face in prepared.faces() {
+            let result = EntityRef::Face(faces[&face.key()]);
             if let Some(source) = face.source() {
-                self.record_derived_from(EntityRef::Face(faces[&face.key()]), source);
+                self.record_derived_from(result, source);
+            } else if let Some(sources) = face.merge_sources() {
+                self.record_merge(sources.to_vec(), result);
             }
         }
         for &key in prepared.edge_order() {

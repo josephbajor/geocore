@@ -41,6 +41,8 @@ mod convex_cylindrical_shell_proof;
 mod cylindrical_host_proof;
 #[path = "mixed_profile_prism_proof.rs"]
 mod mixed_profile_prism_proof;
+#[path = "parallel_cylinder_contact_shell_proof.rs"]
+mod parallel_cylinder_contact_shell_proof;
 #[path = "portal_cylinder_shell_proof.rs"]
 mod portal_cylinder_shell_proof;
 #[path = "two_host_axial_chain_shell_proof.rs"]
@@ -55,6 +57,8 @@ pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 pub(crate) use cylindrical_host_proof::CYLINDRICAL_HOST_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use mixed_profile_prism_proof::MIXED_PROFILE_PRISM_WORK;
+#[cfg(test)]
+pub(crate) use parallel_cylinder_contact_shell_proof::PARALLEL_CYLINDER_CONTACT_SHELL_WORK;
 
 /// Cumulative exact contact work for coplanar shell-facet partitions.
 pub(crate) const SHELL_FACET_PAIR_WORK: StageId =
@@ -79,6 +83,7 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
         .overlaid(&cap_reaching_cylinder_shell_proof::cap_reaching_cylinder_proof_budget())
+        .overlaid(&parallel_cylinder_contact_shell_proof::parallel_cylinder_contact_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::two_host_axial_chain_proof_budget())
         .overlaid(&chord_portal_shell_proof::chord_portal_shell_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
@@ -183,6 +188,15 @@ fn certify_shell_impl(
         shell_id,
         scope.as_deref_mut(),
     )? {
+        return Ok(certification);
+    }
+    if let Some(certification) =
+        parallel_cylinder_contact_shell_proof::certify_parallel_cylinder_contact_shell(
+            store,
+            shell_id,
+            scope.as_deref_mut(),
+        )?
+    {
         return Ok(certification);
     }
     if let Some(certification) = mixed_profile_prism_proof::certify_mixed_profile_prism(

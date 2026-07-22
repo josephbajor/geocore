@@ -401,6 +401,7 @@ pub struct AnalyticShellFace {
     domain: FaceDomain,
     loops: Vec<AnalyticShellLoop>,
     source: Option<EntityRef>,
+    merge_sources: Option<[EntityRef; 2]>,
 }
 
 impl AnalyticShellFace {
@@ -419,12 +420,23 @@ impl AnalyticShellFace {
             domain,
             loops,
             source: None,
+            merge_sources: None,
         }
     }
 
     /// Retain the source entity for transaction-journal lineage.
     pub const fn with_source(mut self, source: EntityRef) -> Self {
         self.source = Some(source);
+        self
+    }
+
+    /// Retain ordered source faces for one transaction-journal merge event.
+    ///
+    /// Merge lineage is mutually exclusive with [`Self::with_source`]. The
+    /// preflight requires two distinct, live face identities. The binary form
+    /// keeps lineage validation constant-work under the analytic-shell plan.
+    pub const fn with_merge_sources(mut self, sources: [EntityRef; 2]) -> Self {
+        self.merge_sources = Some(sources);
         self
     }
 
@@ -456,6 +468,11 @@ impl AnalyticShellFace {
     /// Optional source entity.
     pub const fn source(&self) -> Option<EntityRef> {
         self.source
+    }
+
+    /// Ordered source identities for an optional merge lineage event.
+    pub const fn merge_sources(&self) -> Option<[EntityRef; 2]> {
+        self.merge_sources
     }
 }
 
@@ -802,6 +819,10 @@ pub enum AnalyticShellPlanError {
     UnusedVertex(AnalyticVertexKey),
     /// Optional source lineage refers to an entity absent from the store.
     StaleLineage(EntityRef),
+    /// A face declared both derivation and merge lineage.
+    ConflictingFaceLineage(AnalyticFaceKey),
+    /// Face merge lineage needs at least two distinct face sources.
+    InvalidFaceMergeLineage(AnalyticFaceKey),
     /// The carrier/surface/pcurve representation family has no exact certifier.
     UnsupportedPairing(AnalyticEdgeKey),
     /// An admitted pairing failed its whole-interval certificate.
@@ -1062,6 +1083,25 @@ fn prepare_faces(
             && !lineage_is_live(store, source)
         {
             return Err(AnalyticShellPlanError::StaleLineage(source));
+        }
+        if face.source.is_some() && face.merge_sources.is_some() {
+            return Err(AnalyticShellPlanError::ConflictingFaceLineage(face.key));
+        }
+        if let Some(sources) = face.merge_sources {
+            let valid = sources[0] != sources[1]
+                && sources
+                    .iter()
+                    .all(|source| matches!(source, EntityRef::Face(_)));
+            if !valid {
+                return Err(AnalyticShellPlanError::InvalidFaceMergeLineage(face.key));
+            }
+            if let Some(source) = sources
+                .iter()
+                .copied()
+                .find(|source| !lineage_is_live(store, *source))
+            {
+                return Err(AnalyticShellPlanError::StaleLineage(source));
+            }
         }
         let mut copy = face.clone();
         for (loop_index, loop_) in copy.loops.iter_mut().enumerate() {
@@ -2087,6 +2127,66 @@ pub(crate) mod tests {
             Err(AnalyticShellPlanError::StaleLineage(EntityRef::Edge(
                 stale_edge
             )))
+        );
+    }
+
+    #[test]
+    fn face_merge_lineage_preflight_is_binary_typed_live_and_exclusive() {
+        let mut store = Store::new();
+        let source_body = crate::make::block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+        let source_faces = store.faces_of_body(source_body).unwrap();
+        let valid_sources = [
+            EntityRef::Face(source_faces[0]),
+            EntityRef::Face(source_faces[1]),
+        ];
+
+        let mut valid = full_cylinder_input();
+        valid.faces[0].merge_sources = Some(valid_sources);
+        assert!(prepare_analytic_shell(&valid, &store, 1.0e-12).is_ok());
+
+        let mut conflicting = valid.clone();
+        conflicting.faces[0].source = Some(EntityRef::Face(source_faces[2]));
+        assert_eq!(
+            prepare_analytic_shell(&conflicting, &store, 1.0e-12),
+            Err(AnalyticShellPlanError::ConflictingFaceLineage(
+                AnalyticFaceKey::new(0),
+            )),
+        );
+
+        let mut duplicate = full_cylinder_input();
+        duplicate.faces[0].merge_sources = Some([valid_sources[0], valid_sources[0]]);
+        assert_eq!(
+            prepare_analytic_shell(&duplicate, &store, 1.0e-12),
+            Err(AnalyticShellPlanError::InvalidFaceMergeLineage(
+                AnalyticFaceKey::new(0),
+            )),
+        );
+
+        let mut wrong_kind = full_cylinder_input();
+        wrong_kind.faces[0].merge_sources = Some([valid_sources[0], EntityRef::Body(source_body)]);
+        assert_eq!(
+            prepare_analytic_shell(&wrong_kind, &store, 1.0e-12),
+            Err(AnalyticShellPlanError::InvalidFaceMergeLineage(
+                AnalyticFaceKey::new(0),
+            )),
+        );
+
+        let stale_face = {
+            let mut transaction = store.transaction().unwrap();
+            let output = transaction
+                .assemble_analytic_shell(&full_cylinder_input(), 1.0e-12)
+                .unwrap();
+            let face = output.faces()[0].1;
+            transaction.rollback().unwrap();
+            face
+        };
+        let mut stale = full_cylinder_input();
+        stale.faces[0].merge_sources = Some([valid_sources[0], EntityRef::Face(stale_face)]);
+        assert_eq!(
+            prepare_analytic_shell(&stale, &store, 1.0e-12),
+            Err(AnalyticShellPlanError::StaleLineage(EntityRef::Face(
+                stale_face,
+            ))),
         );
     }
 

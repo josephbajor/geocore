@@ -629,6 +629,11 @@ impl<'a> Transaction<'a> {
             .push(LineageEvent::DerivedFrom { derived, source });
     }
 
+    /// Record one semantic merge produced by an in-crate assembler.
+    pub(crate) fn record_merge(&mut self, sources: Vec<EntityRef>, result: EntityRef) {
+        self.lineage.push(LineageEvent::Merge { sources, result });
+    }
+
     /// Open the unstable low-level reconstruction/assembly seam for this
     /// transaction.
     ///
