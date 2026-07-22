@@ -6,12 +6,10 @@
 //! overlap ends.  The two rulings retain every contributing source-ring root;
 //! a unique end additionally retains its ordinary Plane/Cylinder cap arc.
 
-use kcore::predicates::{Orientation, affine_dot3};
-use kgeom::vec::{Point3, Vec3};
 use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId};
 
 use super::*;
-use crate::{SectionCompletion, SectionPeriodicFaceEmbeddingEvidence};
+use crate::{SectionCompletion, SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence};
 
 /// One exact topology-owned root on a retained source cap ring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +172,28 @@ impl CertifiedParallelCylinderCoincidentCapRelation {
             .filter(|end| end.cap_arc.is_some())
             .count()
     }
+
+    /// Original graph fragments admitted by the operation-local periodic
+    /// projection for one cylinder side. Boundary-coincident overlay arcs are
+    /// deliberately absent: they lie on topology-owned source rings rather
+    /// than cutting the open side face.
+    pub(crate) fn periodic_fragment_subset(&self, operand: usize) -> Vec<usize> {
+        let mut fragments = self
+            .rulings
+            .iter()
+            .map(|ruling| ruling.fragment())
+            .collect::<Vec<_>>();
+        fragments.extend(self.overlap_ends.iter().filter_map(|end| {
+            (end.source(operand).is_none())
+                .then(|| {
+                    end.cap_arc()
+                        .map(ParallelCylinderSectionCapArcWitness::fragment)
+                })
+                .flatten()
+        }));
+        fragments.sort_unstable();
+        fragments
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,7 +225,10 @@ pub(super) fn reconcile_shared_overlap_ends(
     if graph.completion() != SectionCompletion::Indeterminate {
         return Ok(source_ends);
     }
-    if graph.curve_fragments().len() > 3 || graph.curve_endpoints().len() > 4 {
+    if graph.branches().len() > 6
+        || graph.curve_fragments().len() > 6
+        || graph.curve_endpoints().len() != 4
+    {
         return Ok(source_ends);
     }
 
@@ -313,6 +336,16 @@ pub(super) fn reconcile_shared_overlap_ends(
         };
         upgraded[end_index] = true;
     }
+    let shared_end_count = source_ends
+        .iter()
+        .filter(|end| end.contributor_count() == 2)
+        .count();
+    if shared_end_count > 0
+        && (graph.branches().len() != 4 + shared_end_count
+            || graph.curve_fragments().len() != 4 + shared_end_count)
+    {
+        return Err(ParallelCylinderRelationGap::SectionLayout);
+    }
     Ok(source_ends)
 }
 
@@ -329,9 +362,8 @@ pub(crate) fn certify_coincident_cap_relation(
     if shared_end_count == 0 || graph.completion() != SectionCompletion::Indeterminate {
         return Err(ParallelCylinderRelationGap::SectionIncomplete);
     }
-    let unique_end_count = 2 - shared_end_count;
     if graph.branches().len() != 4 + shared_end_count
-        || graph.curve_fragments().len() != 2 + unique_end_count
+        || graph.curve_fragments().len() != 4 + shared_end_count
         || graph.curve_endpoints().len() != 4
         || !graph.curve_components().is_empty()
         || !graph.vertices().is_empty()
@@ -341,15 +373,17 @@ pub(crate) fn certify_coincident_cap_relation(
     {
         return Err(ParallelCylinderRelationGap::SectionLayout);
     }
-    certify_periodic_bindings(graph, cylinders, source_ends)?;
     certify_expected_gaps(graph, cylinders, source_ends)?;
 
     let mut covered_branches = vec![false; graph.branches().len()];
     let mut rulings = Vec::with_capacity(2);
-    let mut cap_arcs: [Option<PendingCapArc>; 2] = [None, None];
+    let mut cap_arcs: [[Option<PendingCapArc>; 2]; 2] = [[None; 2]; 2];
     for (fragment_index, fragment) in graph.curve_fragments().iter().enumerate() {
         let branch_index = fragment.branch();
-        if branch_index >= covered_branches.len() || covered_branches[branch_index] {
+        if branch_index >= covered_branches.len()
+            || covered_branches[branch_index]
+            || fragment.source_ordinal() != 0
+        {
             return Err(ParallelCylinderRelationGap::SectionLayout);
         }
         covered_branches[branch_index] = true;
@@ -376,8 +410,12 @@ pub(crate) fn certify_coincident_cap_relation(
                     branch,
                     endpoints,
                 )?;
-                if source_ends[arc.overlap_end].contributor_count() != 1
-                    || cap_arcs[arc.overlap_end].replace(arc).is_some()
+                if source_ends[arc.overlap_end]
+                    .boundary_for(arc.cap_operand)
+                    .is_none()
+                    || cap_arcs[arc.overlap_end][arc.cap_operand]
+                        .replace(arc)
+                        .is_some()
                 {
                     return Err(ParallelCylinderRelationGap::SectionLayout);
                 }
@@ -388,31 +426,18 @@ pub(crate) fn certify_coincident_cap_relation(
         }
     }
     if rulings.len() != 2
-        || source_ends
-            .iter()
-            .enumerate()
-            .any(|(end, source)| cap_arcs[end].is_some() != (source.contributor_count() == 1))
+        || source_ends.iter().enumerate().any(|(end, source)| {
+            (0..2).any(|operand| {
+                cap_arcs[end][operand].is_some() != source.boundary_for(operand).is_some()
+            })
+        })
     {
         return Err(ParallelCylinderRelationGap::SectionLayout);
-    }
-    for (end_index, source_end) in source_ends.iter().copied().enumerate() {
-        if source_end.contributor_count() != 2 {
-            continue;
-        }
-        for operand in 0..2 {
-            certify_shared_cap_branch(
-                graph,
-                cylinders,
-                source_ends,
-                end_index,
-                operand,
-                &mut covered_branches,
-            )?;
-        }
     }
     if covered_branches.into_iter().any(|covered| !covered) {
         return Err(ParallelCylinderRelationGap::SectionLayout);
     }
+    certify_periodic_bindings(graph, cylinders, &rulings, &cap_arcs)?;
 
     let [first, second] = rulings.as_slice() else {
         unreachable!("the ruling count was checked")
@@ -431,9 +456,12 @@ pub(crate) fn certify_coincident_cap_relation(
         }
     });
 
-    certify_endpoint_incidence(graph, source_ends, &pending_rulings, cap_arcs)?;
+    certify_endpoint_incidence(graph, source_ends, &pending_rulings, &cap_arcs)?;
     let overlap_ends = core::array::from_fn(|end| {
-        build_end_witness(graph, cylinders, source_ends, end, &rulings, cap_arcs[end])
+        let cap_arc = (source_ends[end].contributor_count() == 1)
+            .then(|| cap_arcs[end].iter().flatten().copied().next())
+            .flatten();
+        build_end_witness(graph, cylinders, source_ends, end, &rulings, cap_arc)
     });
     let [low, high] = overlap_ends;
     Ok(CertifiedParallelCylinderCoincidentCapRelation {
@@ -445,138 +473,41 @@ pub(crate) fn certify_coincident_cap_relation(
 fn certify_periodic_bindings(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
-    source_ends: [SourceOverlapEnd; 2],
+    rulings: &[PendingCoincidentRuling],
+    cap_arcs: &[[Option<PendingCapArc>; 2]; 2],
 ) -> core::result::Result<(), ParallelCylinderRelationGap> {
     if graph.periodic_face_embeddings().len() != 2 {
         return Err(ParallelCylinderRelationGap::SectionOperandBinding);
     }
     let mut seen = [false; 2];
     for evidence in graph.periodic_face_embeddings() {
-        let SectionPeriodicFaceEmbeddingEvidence::Certified(evidence) = evidence else {
+        let SectionPeriodicFaceEmbeddingEvidence::Indeterminate {
+            operand,
+            face,
+            gap: SectionPeriodicEmbeddingGap::UnstitchedFragmentPath { fragment },
+        } = evidence
+        else {
             return Err(ParallelCylinderRelationGap::SectionOperandBinding);
         };
-        let operand = evidence.operand();
+        let operand = *operand;
         if operand >= 2
             || seen[operand]
-            || evidence.face().raw() != cylinders[operand].side_face()
-            || !evidence.components().is_empty()
+            || face.raw() != cylinders[operand].side_face()
+            || !(rulings.iter().any(|ruling| ruling.fragment == *fragment)
+                || cap_arcs
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .any(|arc| arc.cap_operand == 1 - operand && arc.fragment == *fragment))
         {
             return Err(ParallelCylinderRelationGap::SectionOperandBinding);
         }
-        certify_periodic_source_loops(evidence, cylinders[operand], source_ends, operand)?;
-        certify_face_local_trace_shape(graph, evidence, cylinders[operand], source_ends, operand)?;
         seen[operand] = true;
     }
     if seen.into_iter().all(|value| value) {
         Ok(())
     } else {
         Err(ParallelCylinderRelationGap::SectionOperandBinding)
-    }
-}
-
-fn certify_periodic_source_loops(
-    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
-    cylinder: &CertifiedCylinderSource,
-    source_ends: [SourceOverlapEnd; 2],
-    operand: usize,
-) -> core::result::Result<(), ParallelCylinderRelationGap> {
-    let source_loops = evidence.source_loops();
-    if source_loops[0] == source_loops[1] {
-        return Err(ParallelCylinderRelationGap::SectionOperandBinding);
-    }
-    let mut covered_boundaries = [false; 2];
-    for (loop_ordinal, (source_loop, roots)) in source_loops
-        .iter()
-        .zip(evidence.source_loop_roots())
-        .enumerate()
-    {
-        let Some(boundary) = cylinder
-            .boundaries()
-            .iter()
-            .position(|boundary| boundary.side_loop() == source_loop.raw())
-        else {
-            return Err(ParallelCylinderRelationGap::SectionOperandBinding);
-        };
-        if covered_boundaries[boundary] {
-            return Err(ParallelCylinderRelationGap::SectionOperandBinding);
-        }
-        covered_boundaries[boundary] = true;
-        let contributes = source_ends
-            .iter()
-            .any(|end| end.boundary_for(operand) == Some(boundary));
-        if roots.len() != if contributes { 2 } else { 0 } {
-            return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
-        }
-        let mut root_ordinals = [false; 2];
-        for (cyclic_order, root) in roots.iter().enumerate() {
-            let source = root.source_parameter();
-            if root.source_loop_ordinal() != loop_ordinal
-                || root.cyclic_order() != cyclic_order
-                || source.edge().raw() != cylinder.boundaries()[boundary].edge()
-                || source.root_ordinal() >= root_ordinals.len()
-                || root_ordinals[source.root_ordinal()]
-            {
-                return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
-            }
-            root_ordinals[source.root_ordinal()] = true;
-        }
-        if contributes && root_ordinals.into_iter().any(|covered| !covered) {
-            return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
-        }
-    }
-    if covered_boundaries.into_iter().all(|covered| covered) {
-        Ok(())
-    } else {
-        Err(ParallelCylinderRelationGap::SectionOperandBinding)
-    }
-}
-
-fn certify_face_local_trace_shape(
-    graph: &BodySectionGraph,
-    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
-    cylinder: &CertifiedCylinderSource,
-    source_ends: [SourceOverlapEnd; 2],
-    operand: usize,
-) -> core::result::Result<(), ParallelCylinderRelationGap> {
-    let contributed_ends = source_ends
-        .iter()
-        .filter(|end| end.boundary_for(operand).is_some())
-        .count();
-    let traces = evidence.boundary_traces();
-    if traces.len() != contributed_ends
-        || traces.iter().any(|trace| {
-            trace.source_component().is_some()
-                || trace.fragments().len() != if contributed_ends == 2 { 1 } else { 3 }
-        })
-    {
-        return Err(ParallelCylinderRelationGap::SectionLayout);
-    }
-
-    let mut expected = graph
-        .curve_fragments()
-        .iter()
-        .enumerate()
-        .filter_map(|(fragment, value)| {
-            graph
-                .branches()
-                .get(value.branch())
-                .filter(|branch| branch.faces()[operand].raw() == cylinder.side_face())
-                .map(|_| fragment)
-        })
-        .collect::<Vec<_>>();
-    let mut actual = traces
-        .iter()
-        .flat_map(|trace| trace.fragments().iter().map(|fragment| fragment.fragment()))
-        .collect::<Vec<_>>();
-    expected.sort_unstable();
-    actual.sort_unstable();
-    if expected == actual
-        && actual.len() == 2 + usize::from(contributed_ends == 1)
-        && actual.windows(2).all(|pair| pair[0] != pair[1])
-    {
-        Ok(())
-    } else {
-        Err(ParallelCylinderRelationGap::SectionLayout)
     }
 }
 
@@ -795,69 +726,6 @@ fn ruling_endpoint_matches_source_end(
     Ok(true)
 }
 
-fn certify_shared_cap_branch(
-    graph: &BodySectionGraph,
-    cylinders: [&CertifiedCylinderSource; 2],
-    source_ends: [SourceOverlapEnd; 2],
-    overlap_end: usize,
-    cap_operand: usize,
-    covered: &mut [bool],
-) -> core::result::Result<(), ParallelCylinderRelationGap> {
-    let side_operand = 1 - cap_operand;
-    let cap_boundary = source_ends[overlap_end]
-        .boundary_for(cap_operand)
-        .ok_or(ParallelCylinderRelationGap::SectionLayout)?;
-    let side_boundary = source_ends[overlap_end]
-        .boundary_for(side_operand)
-        .ok_or(ParallelCylinderRelationGap::SectionLayout)?;
-    let mut expected_faces = [cylinders[0].side_face(), cylinders[1].side_face()];
-    expected_faces[cap_operand] = cylinders[cap_operand].boundaries()[cap_boundary].cap_face();
-    let mut matches = graph
-        .branches()
-        .iter()
-        .enumerate()
-        .filter(|(index, branch)| {
-            !covered[*index]
-                && branch.faces()[0].raw() == expected_faces[0]
-                && branch.faces()[1].raw() == expected_faces[1]
-        });
-    let Some((branch_index, branch)) = matches.next() else {
-        return Err(ParallelCylinderRelationGap::SectionLayout);
-    };
-    if matches.next().is_some() {
-        return Err(ParallelCylinderRelationGap::SectionLayout);
-    }
-    let SectionCarrier::Circle {
-        center,
-        normal,
-        x_direction,
-        radius,
-    } = branch.carrier()
-    else {
-        return Err(ParallelCylinderRelationGap::SectionBranchEvidence);
-    };
-    let expected_center = cylinders[side_operand].boundaries()[side_boundary].center();
-    let axis = cylinders[side_operand].cylinder().frame().z();
-    let raw_carrier_matches_source = vectors_are_exactly_parallel(normal, axis)
-        && axial_compare(axis, center, expected_center)? == Orientation::Zero
-        && points_are_exactly_axis_aligned(center, expected_center, axis);
-    if branch.topology() != SectionBranchTopology::Closed
-        || !matches!(branch.pcurves()[cap_operand], SectionUvCurve::Circle(_))
-        || !matches!(branch.pcurves()[side_operand], SectionUvCurve::Line(_))
-        || !finite_vec3(center)
-        || !finite_vec3(normal)
-        || !finite_vec3(x_direction)
-        || radius != cylinders[side_operand].cylinder().radius()
-        || (!raw_carrier_matches_source
-            && !has_certified_plane_cylinder_circle_traces(branch, cap_operand, side_operand))
-        || !valid_branch_evidence(branch)
-    {
-        return Err(ParallelCylinderRelationGap::SectionBranchEvidence);
-    }
-    covered[branch_index] = true;
-    Ok(())
-}
-
 fn build_end_witness(
     graph: &BodySectionGraph,
     cylinders: [&CertifiedCylinderSource; 2],
@@ -969,7 +837,7 @@ fn certify_endpoint_incidence(
     graph: &BodySectionGraph,
     source_ends: [SourceOverlapEnd; 2],
     rulings: &[PendingCoincidentRuling; 2],
-    cap_arcs: [Option<PendingCapArc>; 2],
+    cap_arcs: &[[Option<PendingCapArc>; 2]; 2],
 ) -> core::result::Result<(), ParallelCylinderRelationGap> {
     let mut incidence = [0_u8; 4];
     for ruling in rulings {
@@ -982,7 +850,7 @@ fn certify_endpoint_incidence(
                 .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
         }
     }
-    for arc in cap_arcs.into_iter().flatten() {
+    for arc in cap_arcs.iter().flatten().flatten() {
         for end in arc.ends {
             let slot = incidence
                 .get_mut(end.endpoint)
@@ -994,11 +862,9 @@ fn certify_endpoint_incidence(
     }
     for ruling in rulings {
         for end in ruling.endpoints {
-            let expected = if source_ends[end.overlap_end].contributor_count() == 1 {
-                2
-            } else {
-                1
-            };
+            let expected = 1_u8
+                .checked_add(source_ends[end.overlap_end].contributor_count() as u8)
+                .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
             if incidence[end.endpoint] != expected {
                 return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
             }
@@ -1018,17 +884,4 @@ fn ends_by_physical_end(ends: [BoundCoincidentEndpoint; 2]) -> [BoundCoincidentE
     } else {
         [ends[1], ends[0]]
     }
-}
-
-fn points_are_exactly_axis_aligned(point: Point3, origin: Point3, axis: Vec3) -> bool {
-    [
-        Vec3::new(0.0, axis.z, -axis.y),
-        Vec3::new(-axis.z, 0.0, axis.x),
-        Vec3::new(axis.y, -axis.x, 0.0),
-    ]
-    .into_iter()
-    .all(|normal| {
-        affine_dot3(normal.to_array(), point.to_array(), origin.to_array(), 0.0)
-            .is_some_and(|value| value.sign() == Orientation::Zero)
-    })
 }

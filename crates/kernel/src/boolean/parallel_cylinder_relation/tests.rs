@@ -9,7 +9,8 @@ use kgeom::vec::{Point2, Point3, Vec3};
 
 use super::*;
 use crate::{
-    BodyId, CylinderRequest, Kernel, PartId, SectionBodiesRequest, SectionCompletion, Session,
+    BodyId, CylinderRequest, FaceId, Kernel, PartId, SectionBodiesRequest, SectionCompletion,
+    Session,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -477,6 +478,160 @@ fn coincident_cap_relations_certify_equal_and_shared_end_graphs_generically() {
             assert_coincident_cap_relation(&shared_upper, false, 1, &context);
             assert_coincident_cap_relation(&shared_upper, true, 1, &format!("{context} swapped"));
         }
+    }
+}
+
+#[test]
+fn coincident_cap_periodic_projection_excludes_boundary_overlays_and_rejects_hostile_subsets() {
+    assert_eq!(
+        crate::section::periodic_face_fragment_subset_work(0),
+        Some(2)
+    );
+    assert_eq!(
+        crate::section::periodic_face_fragment_subset_work(1),
+        Some(3)
+    );
+    assert_eq!(
+        crate::section::periodic_face_fragment_subset_work(2),
+        Some(5)
+    );
+    assert_eq!(
+        crate::section::periodic_face_fragment_subset_work(3),
+        Some(8)
+    );
+    if usize::BITS == 64 {
+        assert_eq!(
+            crate::section::periodic_face_fragment_subset_work(usize::MAX),
+            None
+        );
+    }
+
+    for fixture in [
+        fixture_with_axial_intervals(Placement::World, (-1.0, 2.0), (-1.0, 2.0)),
+        fixture_with_axial_intervals(Placement::World, (-1.0, 3.0), (-1.0, 2.0)),
+    ] {
+        let graph = section(&fixture, false);
+        let sources = sources(&fixture, false);
+        let relation = certified_coincident_caps(
+            certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+        );
+        let shared_ends = relation
+            .overlap_ends()
+            .iter()
+            .filter(|end| end.is_shared())
+            .count();
+        let selected_union = (0..2)
+            .flat_map(|operand| relation.periodic_fragment_subset(operand))
+            .collect::<std::collections::BTreeSet<_>>();
+        let overlay_fragments = (0..graph.curve_fragments().len())
+            .filter(|fragment| !selected_union.contains(fragment))
+            .collect::<Vec<_>>();
+        assert_eq!(overlay_fragments.len(), 2 * shared_ends);
+
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        for operand in 0..2 {
+            let face = FaceId::new(fixture.part.clone(), sources[operand].side_face());
+            let selected = relation.periodic_fragment_subset(operand);
+            assert!(selected.windows(2).all(|pair| pair[0] < pair[1]));
+            assert_eq!(
+                selected
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                selected_union
+                    .iter()
+                    .copied()
+                    .filter(|fragment| {
+                        graph.branches()[graph.curve_fragments()[*fragment].branch()].faces()
+                            [operand]
+                            == face
+                    })
+                    .collect(),
+            );
+            crate::section::certify_periodic_face_fragment_subset(
+                &part.state.store,
+                face.part(),
+                &graph,
+                operand,
+                face.clone(),
+                &selected,
+                Tolerances::default().linear(),
+            )
+            .unwrap();
+
+            let overlay = overlay_fragments
+                .iter()
+                .copied()
+                .find(|fragment| {
+                    graph.branches()[graph.curve_fragments()[*fragment].branch()].faces()[operand]
+                        == face
+                })
+                .expect("every shared end contributes one side-carried boundary overlay");
+            let mut contaminated = selected.clone();
+            contaminated.push(overlay);
+            assert!(
+                crate::section::certify_periodic_face_fragment_subset(
+                    &part.state.store,
+                    face.part(),
+                    &graph,
+                    operand,
+                    face.clone(),
+                    &contaminated,
+                    Tolerances::default().linear(),
+                )
+                .is_err(),
+                "a boundary-coincident overlay must not be promoted to an interior side cut",
+            );
+
+            let duplicate = [selected[0], selected[0]];
+            assert_eq!(
+                crate::section::certify_periodic_face_fragment_subset(
+                    &part.state.store,
+                    face.part(),
+                    &graph,
+                    operand,
+                    face.clone(),
+                    &duplicate,
+                    Tolerances::default().linear(),
+                ),
+                Err(crate::SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
+                    fragment: selected[0],
+                }),
+            );
+
+            let wrong_face = FaceId::new(
+                fixture.part.clone(),
+                sources[operand].boundaries()[0].cap_face(),
+            );
+            assert_eq!(
+                crate::section::certify_periodic_face_fragment_subset(
+                    &part.state.store,
+                    wrong_face.part(),
+                    &graph,
+                    operand,
+                    wrong_face.clone(),
+                    &selected,
+                    Tolerances::default().linear(),
+                ),
+                Err(crate::SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
+                    fragment: selected[0],
+                }),
+            );
+        }
+
+        let face = FaceId::new(fixture.part.clone(), sources[0].side_face());
+        assert_eq!(
+            crate::section::certify_periodic_face_fragment_subset(
+                &part.state.store,
+                face.part(),
+                &graph,
+                2,
+                face.clone(),
+                &[],
+                Tolerances::default().linear(),
+            ),
+            Err(crate::SectionPeriodicEmbeddingGap::SourceFaceTopology),
+        );
     }
 }
 

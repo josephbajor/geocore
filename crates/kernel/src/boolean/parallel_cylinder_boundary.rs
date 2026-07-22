@@ -50,6 +50,7 @@ struct PreparedPeriodicFace {
     face: FaceId,
     operand: usize,
     arrangement: MixedPeriodicFaceArrangement,
+    embedding: Option<crate::CertifiedSectionPeriodicFaceEmbedding>,
 }
 
 struct PreparedDiskFace {
@@ -85,6 +86,7 @@ impl PreparedParallelCylinderBoundary {
                 face: face.face.clone(),
                 operand: face.operand,
                 arrangement: &face.arrangement,
+                embedding: face.embedding.as_ref(),
             })
             .chain(self.disks.iter().map(|face| MixedArrangementBinding::Disk {
                 face: face.face.clone(),
@@ -209,6 +211,7 @@ fn prepare_periodic_faces(
             face,
             operand,
             arrangement,
+            embedding: None,
         });
     }
     Ok(PreparedPeriodicFaces {

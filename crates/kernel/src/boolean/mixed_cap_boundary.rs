@@ -148,8 +148,6 @@ pub(crate) fn bind_cylinder_cap_ring(
     if periodic_face.raw() != cylinder.side_face() {
         return Err(MixedCylinderCapRingGap::PeriodicFaceMismatch);
     }
-    let side_source = source_face_key(store, graph, periodic_face, cylinder_operand)
-        .map_err(|_| MixedCylinderCapRingGap::PeriodicSourceMismatch)?;
     let evidence = graph
         .periodic_face_embeddings()
         .iter()
@@ -162,6 +160,39 @@ pub(crate) fn bind_cylinder_cap_ring(
             _ => None,
         })
         .ok_or(MixedCylinderCapRingGap::MissingPeriodicEvidence)?;
+    bind_cylinder_cap_ring_from_embedding(
+        store,
+        graph,
+        cylinder,
+        cylinder_operand,
+        boundary,
+        periodic_face,
+        periodic_arrangement,
+        evidence,
+    )
+}
+
+/// Bind one source cap to an operation-local periodic projection that retains
+/// original graph fragment and topology identities.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bind_cylinder_cap_ring_from_embedding(
+    store: &Store,
+    graph: &BodySectionGraph,
+    cylinder: &CertifiedCylinderSource,
+    cylinder_operand: usize,
+    boundary: usize,
+    periodic_face: &FaceId,
+    periodic_arrangement: &MixedPeriodicFaceArrangement,
+    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
+) -> Result<MixedCylinderCapRing, MixedCylinderCapRingGap> {
+    if periodic_face.raw() != cylinder.side_face()
+        || evidence.operand() != cylinder_operand
+        || evidence.face() != *periodic_face
+    {
+        return Err(MixedCylinderCapRingGap::PeriodicFaceMismatch);
+    }
+    let side_source = source_face_key(store, graph, periodic_face, cylinder_operand)
+        .map_err(|_| MixedCylinderCapRingGap::PeriodicSourceMismatch)?;
     if evidence.source_loops()[0] == evidence.source_loops()[1] {
         return Err(MixedCylinderCapRingGap::SourceLoopMismatch);
     }

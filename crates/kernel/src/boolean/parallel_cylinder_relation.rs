@@ -1041,6 +1041,7 @@ struct PendingCapArc {
     branch: usize,
     fragment: usize,
     overlap_end: usize,
+    cap_operand: usize,
     ends: [BoundEndpoint; 2],
 }
 
@@ -1341,17 +1342,26 @@ fn certify_cap_arc(
     branch: &SectionBranch,
     endpoints: &[crate::SectionCurveFragmentEnd; 2],
 ) -> core::result::Result<PendingCapArc, ParallelCylinderRelationGap> {
-    let mut matching_ends = overlap_ends.into_iter().enumerate().filter(|(_, end)| {
-        branch.faces()[end.operand].raw()
-            == cylinders[end.operand].boundaries()[end.boundary].cap_face()
-    });
-    let Some((overlap_end, source_end)) = matching_ends.next() else {
+    let mut matching_contributors = Vec::new();
+    for (overlap_end, source_end) in overlap_ends.into_iter().enumerate() {
+        for cap_operand in 0..2 {
+            let Some(boundary) = source_end.boundary_for(cap_operand) else {
+                continue;
+            };
+            if branch.faces()[cap_operand].raw()
+                == cylinders[cap_operand].boundaries()[boundary].cap_face()
+            {
+                matching_contributors.push((overlap_end, source_end, cap_operand, boundary));
+            }
+        }
+    }
+    let [(overlap_end, _source_end, cap_operand, boundary)] = matching_contributors.as_slice()
+    else {
         return Err(ParallelCylinderRelationGap::SectionOperandBinding);
     };
-    if matching_ends.next().is_some() {
-        return Err(ParallelCylinderRelationGap::SectionOperandBinding);
-    }
-    let cap_operand = source_end.operand;
+    let overlap_end = *overlap_end;
+    let cap_operand = *cap_operand;
+    let boundary = *boundary;
     let side_operand = 1 - cap_operand;
     if branch.faces()[side_operand].raw() != cylinders[side_operand].side_face()
         || branch.topology() != SectionBranchTopology::Closed
@@ -1386,8 +1396,7 @@ fn certify_cap_arc(
         if !finite_vec3(end.point())
             || !end.carrier_parameter().is_finite()
             || trim.operand() != cap_operand
-            || trim.face().raw()
-                != cylinders[cap_operand].boundaries()[source_end.boundary].cap_face()
+            || trim.face().raw() != cylinders[cap_operand].boundaries()[boundary].cap_face()
             || !valid_interval(trim.edge_parameter().lo(), trim.edge_parameter().hi())
             || !valid_interval(trim.pcurve_half_angle().lo(), trim.pcurve_half_angle().hi())
         {
@@ -1418,6 +1427,7 @@ fn certify_cap_arc(
         branch: branch_index,
         fragment: fragment_index,
         overlap_end,
+        cap_operand,
         ends: [first, second],
     })
 }
@@ -1435,16 +1445,26 @@ fn bind_endpoint(
         .curve_endpoints()
         .get(endpoint_index)
         .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
-    let mut matching_ends = overlap_ends.into_iter().enumerate().filter(|(_, end)| {
-        source_parameter.edge().raw() == cylinders[end.operand].boundaries()[end.boundary].edge()
-    });
-    let Some((overlap_end, source_end)) = matching_ends.next() else {
+    let mut matching_contributors = Vec::new();
+    for (overlap_end, source_end) in overlap_ends.into_iter().enumerate() {
+        for cap_operand in 0..2 {
+            let Some(boundary) = source_end.boundary_for(cap_operand) else {
+                continue;
+            };
+            if source_parameter.edge().raw() == cylinders[cap_operand].boundaries()[boundary].edge()
+            {
+                matching_contributors.push((overlap_end, source_end, cap_operand, boundary));
+            }
+        }
+    }
+    let [(overlap_end, source_end, cap_operand, boundary)] = matching_contributors.as_slice()
+    else {
         return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
     };
-    if matching_ends.next().is_some() {
-        return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
-    }
-    let cap_operand = source_end.operand;
+    let overlap_end = *overlap_end;
+    let source_end = *source_end;
+    let cap_operand = *cap_operand;
+    let boundary = *boundary;
     let side_operand = 1 - cap_operand;
     let SectionCurveEndpointTopology::Trim {
         sites,
@@ -1455,15 +1475,43 @@ fn bind_endpoint(
     };
     if !matches!(
         &sites[cap_operand],
-        SectionSite::EdgeInterior(edge) if edge.raw() == cylinders[cap_operand].boundaries()[source_end.boundary].edge()
-    ) || !matches!(
-        &sites[side_operand],
-        SectionSite::FaceInterior(face) if face.raw() == cylinders[side_operand].side_face()
+        SectionSite::EdgeInterior(edge) if edge.raw() == cylinders[cap_operand].boundaries()[boundary].edge()
     ) || source_parameters[cap_operand].as_ref() != Some(source_parameter)
-        || source_parameters[side_operand].is_some()
-        || endpoint.edge_parameters()[side_operand].is_some()
     {
         return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
+    }
+    match source_end.boundary_for(side_operand) {
+        Some(peer_boundary) => {
+            let expected_edge = cylinders[side_operand].boundaries()[peer_boundary].edge();
+            let peer = source_parameters[side_operand]
+                .as_ref()
+                .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
+            let peer_interval = peer.root_parameter_enclosure();
+            let common = endpoint.edge_parameters()[side_operand]
+                .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
+            if !matches!(
+                &sites[side_operand],
+                SectionSite::EdgeInterior(edge) if edge.raw() == expected_edge
+            ) || peer.edge().raw() != expected_edge
+                || peer.root_ordinal() >= 2
+                || !peer.root_parameter().is_finite()
+                || !valid_interval(peer_interval.lo(), peer_interval.hi())
+                || !peer_interval.contains(peer.root_parameter())
+                || !valid_interval(common.lo(), common.hi())
+            {
+                return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
+            }
+        }
+        None => {
+            if !matches!(
+                &sites[side_operand],
+                SectionSite::FaceInterior(face) if face.raw() == cylinders[side_operand].side_face()
+            ) || source_parameters[side_operand].is_some()
+                || endpoint.edge_parameters()[side_operand].is_some()
+            {
+                return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
+            }
+        }
     }
     let common = endpoint.edge_parameters()[cap_operand]
         .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;

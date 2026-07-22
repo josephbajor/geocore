@@ -23,7 +23,8 @@ use kgeom::curve2d::Line2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point2;
 use ktopo::entity::{
-    EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, Loop, LoopId as RawLoopId,
+    EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, FinPcurve, Loop,
+    LoopId as RawLoopId,
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
@@ -103,8 +104,30 @@ pub(crate) struct ClosedConicTrimSite {
     /// Numeric carrier-parameter representative. It is geometric evidence,
     /// never authority for crossing identity or order.
     pub(crate) carrier_parameter: f64,
+    /// Outward carrier-parameter enclosure derived from the projective root.
+    /// This interval, never `carrier_parameter`, is used when the same root
+    /// must be transported through another topology-owned pcurve.
+    pub(crate) carrier_parameter_enclosure: Interval,
     /// Intrinsic source-edge parameter enclosure.
     pub(crate) edge_parameter: Interval,
+}
+
+/// Exact topology and parameter-map evidence for a closed carrier that is one
+/// whole-period boundary loop of its source face.
+///
+/// This is deliberately not a successful trim result by itself: coincidence
+/// remains a graph gap. The merge layer may retain it only beside an
+/// independently certified strict disk clip, where its periodic map can bind
+/// both source-ring identities to every published endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CertifiedCoincidentSourceBoundary {
+    pub(crate) face: RawFaceId,
+    pub(crate) loop_id: RawLoopId,
+    pub(crate) fin: RawFinId,
+    pub(crate) edge: RawEdgeId,
+    trace: SectionUvLine,
+    boundary: Line2d,
+    use_: FinPcurve,
 }
 
 /// One maximal connected portion certified inside a face trim.
@@ -128,6 +151,10 @@ pub(crate) enum ClosedConicClipOutcome {
     /// An empty vector is a certified miss; one site-less wrapping fragment
     /// is the complete closed carrier.
     Fragments(Vec<ClosedConicFragment>),
+    /// The carrier is coefficient-identical to exactly one topology-owned
+    /// whole-period source-ring trim. It is not globally complete evidence;
+    /// a peer strict clip and two-sided source-root proof are still required.
+    CoincidentSourceBoundary(CertifiedCoincidentSourceBoundary),
     /// The trim topology could not be certified.
     Indeterminate(ClosedConicClipGap),
 }
@@ -201,6 +228,175 @@ fn intersect(x: Interval, y: Interval) -> Option<Interval> {
     let lo = x.lo().max(y.lo());
     let hi = x.hi().min(y.hi());
     (lo <= hi).then(|| Interval::new(lo, hi))
+}
+
+/// Lift one finite projective root into the branch's authored carrier range.
+///
+/// The rounded period index is only a search seed. Acceptance requires one
+/// and only one outward enclosure to lie strictly inside the half-open source
+/// period, so a seam-straddling root can only fail closed.
+pub(super) fn carrier_parameter_enclosure(
+    half_angle: Interval,
+    scale: f64,
+    offset: f64,
+    carrier_range: ParamRange,
+) -> core::result::Result<Interval, ClosedConicClipGap> {
+    if !finite(half_angle)
+        || !scale.is_finite()
+        || !offset.is_finite()
+        || scale.abs() != 1.0
+        || !carrier_range.is_finite()
+        || carrier_range.width() != core::f64::consts::TAU
+    {
+        return Err(ClosedConicClipGap::ArithmeticGuard);
+    }
+    let natural = twice_atan_interval(half_angle)?;
+    let unlifted = (natural - Interval::point(offset))
+        .checked_div(Interval::point(scale))
+        .filter(|value| finite(*value))
+        .ok_or(ClosedConicClipGap::ArithmeticGuard)?;
+    let midpoint = 0.5 * unlifted.lo() + 0.5 * unlifted.hi();
+    let base = ((carrier_range.lo - midpoint) / core::f64::consts::TAU).round();
+    if !midpoint.is_finite() || !base.is_finite() {
+        return Err(ClosedConicClipGap::ArithmeticGuard);
+    }
+    let mut accepted = None;
+    for offset in [-1.0, 0.0, 1.0] {
+        let shift = Interval::point(base + offset) * Interval::point(core::f64::consts::TAU);
+        let candidate = unlifted + shift;
+        if !finite(candidate) {
+            return Err(ClosedConicClipGap::ArithmeticGuard);
+        }
+        if candidate.lo() > carrier_range.lo
+            && candidate.hi() < carrier_range.hi
+            && accepted.replace(candidate).is_some()
+        {
+            return Err(ClosedConicClipGap::ParameterSeamContact);
+        }
+    }
+    accepted.ok_or(ClosedConicClipGap::ParameterSeamContact)
+}
+
+fn twice_atan_interval(value: Interval) -> core::result::Result<Interval, ClosedConicClipGap> {
+    if !finite(value) {
+        return Err(ClosedConicClipGap::ArithmeticGuard);
+    }
+    let mut lo = 2.0 * math::atan(value.lo());
+    let mut hi = 2.0 * math::atan(value.hi());
+    if !lo.is_finite() || !hi.is_finite() || lo > hi {
+        return Err(ClosedConicClipGap::ArithmeticGuard);
+    }
+    for _ in 0..4 {
+        lo = lo.next_down();
+        hi = hi.next_up();
+    }
+    Ok(Interval::new(lo, hi))
+}
+
+/// Map one certified carrier-root enclosure onto the coincident source ring's
+/// intrinsic edge parameter. Integer-period search is finite and accepted
+/// only when exactly one full-period pcurve copy contains the whole interval.
+pub(crate) fn coincident_source_edge_parameter(
+    evidence: CertifiedCoincidentSourceBoundary,
+    carrier_parameter: Interval,
+) -> core::result::Result<Interval, ClosedConicClipGap> {
+    if !finite(carrier_parameter) {
+        return Err(ClosedConicClipGap::ArithmeticGuard);
+    }
+    let trace = evidence.trace;
+    let longitude = Interval::point(trace.origin().x)
+        + Interval::point(trace.direction().x) * carrier_parameter;
+    periodic_edge_parameter_interval(longitude, evidence.boundary, evidence.use_)
+}
+
+fn periodic_edge_parameter_interval(
+    longitude: Interval,
+    boundary: Line2d,
+    use_: FinPcurve,
+) -> core::result::Result<Interval, ClosedConicClipGap> {
+    let period = core::f64::consts::TAU;
+    let active = use_.range();
+    let map = use_.edge_to_pcurve();
+    let direction = boundary.dir();
+    let [chart_winding, chart_height] = use_.chart().period_shifts();
+    let [closure_winding, closure_height] = use_
+        .closure_winding()
+        .ok_or(ClosedConicClipGap::UnsupportedTrim)?;
+    let edge_parameters = [map.inverse(active.lo), map.inverse(active.hi)];
+    let rate = direction.x * map.scale();
+    let winding_matches_rate =
+        closure_winding == 1 && rate > 0.0 || closure_winding == -1 && rate < 0.0;
+    if !finite(longitude)
+        || !active.is_finite()
+        || direction.x == 0.0
+        || direction.y != 0.0
+        || chart_height != 0
+        || closure_height != 0
+        || !matches!(closure_winding, 1 | -1)
+        || !winding_matches_rate
+        || direction.x.abs() * active.width() != period
+        || edge_parameters.into_iter().any(|value| !value.is_finite())
+        || edge_parameters[0].min(edge_parameters[1]) != 0.0
+        || edge_parameters[0].max(edge_parameters[1]) != period
+        || use_.seam().is_some()
+    {
+        return Err(ClosedConicClipGap::UnsupportedTrim);
+    }
+
+    let chart_shift = Interval::point(f64::from(chart_winding)) * Interval::point(period);
+    let longitude_at = |parameter: f64| {
+        Interval::point(boundary.origin().x)
+            + Interval::point(direction.x) * Interval::point(parameter)
+            + chart_shift
+    };
+    let endpoints = [longitude_at(active.lo), longitude_at(active.hi)];
+    if endpoints.into_iter().any(|value| !finite(value)) {
+        return Err(ClosedConicClipGap::ArithmeticGuard);
+    }
+    let active_longitudes = Interval::new(
+        endpoints[0].lo().min(endpoints[1].lo()),
+        endpoints[0].hi().max(endpoints[1].hi()),
+    );
+    let possible_windings = (active_longitudes - longitude)
+        .checked_div(Interval::point(period))
+        .filter(|value| finite(*value))
+        .ok_or(ClosedConicClipGap::ArithmeticGuard)?;
+    let first = possible_windings.lo().ceil();
+    let last = possible_windings.hi().floor();
+    if !first.is_finite()
+        || !last.is_finite()
+        || first > last
+        || first < i32::MIN as f64
+        || last > i32::MAX as f64
+        || last - first > 2.0
+    {
+        return Err(ClosedConicClipGap::ParameterSeamContact);
+    }
+
+    let mut accepted = None;
+    for winding in (first as i32)..=(last as i32) {
+        let numerator = longitude + Interval::point(f64::from(winding)) * Interval::point(period)
+            - chart_shift
+            - Interval::point(boundary.origin().x);
+        let q = numerator
+            .checked_div(Interval::point(direction.x))
+            .filter(|value| finite(*value))
+            .ok_or(ClosedConicClipGap::ArithmeticGuard)?;
+        if q.hi() < active.lo || q.lo() >= active.hi {
+            continue;
+        }
+        if q.lo() < active.lo || q.hi() >= active.hi {
+            return Err(ClosedConicClipGap::ParameterSeamContact);
+        }
+        let edge_parameter = (q - Interval::point(map.offset()))
+            .checked_div(Interval::point(map.scale()))
+            .filter(|value| finite(*value))
+            .ok_or(ClosedConicClipGap::ArithmeticGuard)?;
+        if accepted.replace(edge_parameter).is_some() {
+            return Err(ClosedConicClipGap::ParameterSeamContact);
+        }
+    }
+    accepted.ok_or(ClosedConicClipGap::ParameterSeamContact)
 }
 
 fn add(a: IntervalPoint2, b: IntervalPoint2) -> IntervalPoint2 {
@@ -597,6 +793,15 @@ fn segment_crossings(
     let mut crossings = Vec::new();
     for half_angle in roots {
         charge(scope, 1)?;
+        let carrier_parameter_enclosure = match carrier_parameter_enclosure(
+            half_angle,
+            source.map_scale,
+            source.map_offset,
+            source.carrier_range,
+        ) {
+            Ok(parameter) => parameter,
+            Err(gap) => return Ok(Err(gap)),
+        };
         let point = match circle_point_from_half_angle(source, half_angle) {
             Some(point) => point,
             None => return Ok(Err(ClosedConicClipGap::ArithmeticGuard)),
@@ -633,6 +838,7 @@ fn segment_crossings(
                 root_ordinal: 0,
                 pcurve_half_angle: half_angle,
                 carrier_parameter: carrier_parameter_representative(source, half_angle),
+                carrier_parameter_enclosure,
                 edge_parameter,
             },
         });
@@ -739,6 +945,7 @@ fn clip_longitude_to_periodic_trim(
     .any(|value| !value.is_finite())
         || direction.x == 0.0
         || direction.y != 0.0
+        || direction.x.abs() * carrier_range.width() != core::f64::consts::TAU
         || carrier_range.width() != core::f64::consts::TAU
     {
         return Ok(ClosedConicClipOutcome::Indeterminate(
@@ -753,6 +960,7 @@ fn clip_longitude_to_periodic_trim(
     }
     let trace_height = Interval::point(origin.y);
     let mut inside = false;
+    let mut coincident = None;
     for &loop_id in face_data.loops() {
         charge(scope, 1)?;
         let ring = read(store.get::<Loop>(loop_id))?;
@@ -779,6 +987,7 @@ fn clip_longitude_to_periodic_trim(
             ) != WholeFinIncidence::Certified
             || edge.vertices != [None, None]
             || edge.bounds.is_some()
+            || edge.tolerance().is_some()
             || !matches!(read(store.curve(curve_id))?, CurveGeom::Circle(_))
             || use_
                 .closure_winding()
@@ -800,14 +1009,48 @@ fn clip_longitude_to_periodic_trim(
                 ClosedConicClipGap::UnsupportedTrim,
             ));
         }
+        let active = use_.range();
+        let map = use_.edge_to_pcurve();
+        let edge_parameters = [map.inverse(active.lo), map.inverse(active.hi)];
+        let [winding, height_winding] = use_
+            .closure_winding()
+            .expect("validated whole-period winding");
+        let rate = boundary.dir().x * map.scale();
+        if !active.is_finite()
+            || !matches!(winding, 1 | -1)
+            || height_winding != 0
+            || boundary.dir().x.abs() * active.width() != core::f64::consts::TAU
+            || edge_parameters.into_iter().any(|value| !value.is_finite())
+            || edge_parameters[0].min(edge_parameters[1]) != 0.0
+            || edge_parameters[0].max(edge_parameters[1]) != core::f64::consts::TAU
+            || !(winding == 1 && rate > 0.0 || winding == -1 && rate < 0.0)
+        {
+            return Ok(ClosedConicClipOutcome::Indeterminate(
+                ClosedConicClipGap::UnsupportedTrim,
+            ));
+        }
         let boundary_height = Interval::point(boundary.origin().y);
         if trace_height.hi() < boundary_height.lo() {
             inside = !inside;
         } else if trace_height.lo() <= boundary_height.hi() {
-            return Ok(ClosedConicClipOutcome::Indeterminate(
-                ClosedConicClipGap::CoincidentBoundary,
-            ));
+            if origin.y != boundary.origin().y || coincident.is_some() {
+                return Ok(ClosedConicClipOutcome::Indeterminate(
+                    ClosedConicClipGap::CoincidentBoundary,
+                ));
+            }
+            coincident = Some(CertifiedCoincidentSourceBoundary {
+                face,
+                loop_id,
+                fin: *fin_id,
+                edge: fin.edge,
+                trace,
+                boundary: *boundary,
+                use_,
+            });
         }
+    }
+    if let Some(evidence) = coincident {
+        return Ok(ClosedConicClipOutcome::CoincidentSourceBoundary(evidence));
     }
     Ok(ClosedConicClipOutcome::Fragments(
         inside
@@ -827,7 +1070,7 @@ mod tests {
         AccountingMode, BudgetPlan, LimitSpec, OperationContext, OperationScope, ResourceKind,
         SessionPolicy,
     };
-    use kcore::tolerance::Tolerances;
+    use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
     use kgeom::frame::Frame;
     use kgeom::vec::Vec2;
     use ktopo::entity::BodyId as RawBodyId;
@@ -1014,33 +1257,64 @@ mod tests {
         let side = face_where(&store, body, |surface| {
             matches!(surface, SurfaceGeom::Cylinder(_))
         });
-        let run = |height| {
-            with_scope(|scope| {
-                clip_closed_conic_to_face(
-                    &store,
-                    side,
-                    SectionUvCurve::Line(SectionUvLine {
-                        origin: Point2::new(0.0, height),
-                        direction: Point2::new(1.0, 0.0),
-                    }),
-                    ParamRange::new(0.0, core::f64::consts::TAU),
-                    scope,
-                )
-                .unwrap()
-            })
+        let boundary = {
+            let run = |height| {
+                with_scope(|scope| {
+                    clip_closed_conic_to_face(
+                        &store,
+                        side,
+                        SectionUvCurve::Line(SectionUvLine {
+                            origin: Point2::new(0.0, height),
+                            direction: Point2::new(1.0, 0.0),
+                        }),
+                        ParamRange::new(0.0, core::f64::consts::TAU),
+                        scope,
+                    )
+                    .unwrap()
+                })
+            };
+            assert!(matches!(
+                run(1.0),
+                ClosedConicClipOutcome::Fragments(ref fragments)
+                    if fragments.len() == 1 && fragments[0].start.is_none()
+            ));
+            assert!(matches!(
+                run(3.0),
+                ClosedConicClipOutcome::Fragments(ref fragments) if fragments.is_empty()
+            ));
+            let ClosedConicClipOutcome::CoincidentSourceBoundary(boundary) = run(0.0) else {
+                panic!("exact ring coincidence must retain topology-owned evidence")
+            };
+            boundary
         };
-        assert!(matches!(
-            run(1.0),
-            ClosedConicClipOutcome::Fragments(ref fragments)
-                if fragments.len() == 1 && fragments[0].start.is_none()
-        ));
-        assert!(matches!(
-            run(3.0),
-            ClosedConicClipOutcome::Fragments(ref fragments) if fragments.is_empty()
-        ));
+        assert_eq!(boundary.face, side);
+        let mapped = coincident_source_edge_parameter(boundary, Interval::point(1.0)).unwrap();
+        assert!(mapped.contains(1.0));
+
+        let loop_id = store.get(side).unwrap().loops()[0];
+        let fin = store.get(loop_id).unwrap().fins()[0];
+        let edge = store.get(fin).unwrap().edge();
+        let mut transaction = store.transaction().unwrap();
+        transaction.assembly().get_mut(edge).unwrap().tolerance =
+            Some(ktopo::tolerance::EntityTolerance::imported_xt(2.0 * LINEAR_RESOLUTION).unwrap());
+        transaction.commit_checked_body(body).unwrap();
+        let tolerance_backed = with_scope(|scope| {
+            clip_closed_conic_to_face(
+                &store,
+                side,
+                SectionUvCurve::Line(SectionUvLine {
+                    origin: Point2::new(0.0, 0.0),
+                    direction: Point2::new(1.0, 0.0),
+                }),
+                ParamRange::new(0.0, core::f64::consts::TAU),
+                scope,
+            )
+            .unwrap()
+        });
         assert_eq!(
-            run(0.0),
-            ClosedConicClipOutcome::Indeterminate(ClosedConicClipGap::CoincidentBoundary)
+            tolerance_backed,
+            ClosedConicClipOutcome::Indeterminate(ClosedConicClipGap::UnsupportedTrim),
+            "a tolerance-backed ring cannot become exact coincidence evidence"
         );
     }
 

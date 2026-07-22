@@ -374,6 +374,31 @@ pub(crate) fn arrange_mixed_periodic_face_from_certified_embedding(
             ));
         }
     };
+    let expected = carried_occurrences(graph, &face, operand)?;
+    arrange_mixed_periodic_face_with_occurrences(graph, evidence, expected)
+}
+
+/// Adapt an operation-local periodic certificate whose fragment identities
+/// still address the original public Section graph.
+pub(crate) fn arrange_mixed_periodic_face_from_embedding(
+    graph: &BodySectionGraph,
+    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
+) -> Result<MixedPeriodicFaceArrangement, MixedPeriodicArrangementError> {
+    let face = evidence.face();
+    let operand = evidence.operand();
+    if operand >= graph.bodies().len() {
+        return Err(MixedPeriodicArrangementError::InvalidOperand(operand));
+    }
+    let expected = carried_occurrences_for_embedding(graph, &face, operand, evidence)?;
+    arrange_mixed_periodic_face_with_occurrences(graph, evidence, expected)
+}
+
+fn arrange_mixed_periodic_face_with_occurrences(
+    graph: &BodySectionGraph,
+    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
+    expected: CarriedOccurrences,
+) -> Result<MixedPeriodicFaceArrangement, MixedPeriodicArrangementError> {
+    let face = evidence.face();
     let raw_loops = evidence.source_loops().each_ref().map(|loop_id| {
         if loop_id.part() != face.part() {
             return Err(MixedPeriodicArrangementError::SourceLoopPartMismatch(
@@ -390,7 +415,6 @@ pub(crate) fn arrange_mixed_periodic_face_from_certified_embedding(
         ));
     }
 
-    let expected = carried_occurrences(graph, &face, operand)?;
     let components = adapt_components(graph, evidence.components())?;
     let actual = components
         .iter()
@@ -429,6 +453,58 @@ pub(crate) fn arrange_mixed_periodic_face_from_certified_embedding(
     } else {
         arrange_boundary_trace_spec(traces, source_roots, source_directions)
     }
+}
+
+fn carried_occurrences_for_embedding(
+    graph: &BodySectionGraph,
+    face: &FaceId,
+    operand: usize,
+    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
+) -> Result<CarriedOccurrences, MixedPeriodicArrangementError> {
+    if evidence.components().is_empty()
+        && evidence
+            .boundary_traces()
+            .iter()
+            .all(|trace| trace.source_component().is_none())
+    {
+        let mut boundary_carried = BTreeMap::new();
+        for trace in evidence.boundary_traces() {
+            let owner = PeriodicBoundaryTraceOwner::face_local(trace.component());
+            let mut fragments = BTreeMap::new();
+            for (&ordinal, embedded) in trace.component_ordinals().iter().zip(trace.fragments()) {
+                let fragment_index = embedded.fragment();
+                let fragment = graph.curve_fragments().get(fragment_index).ok_or(
+                    MixedPeriodicArrangementError::UnknownFragment {
+                        component: trace.component(),
+                        fragment: fragment_index,
+                    },
+                )?;
+                let branch = graph.branches().get(fragment.branch()).ok_or(
+                    MixedPeriodicArrangementError::UnknownBranch {
+                        fragment: fragment_index,
+                        branch: fragment.branch(),
+                    },
+                )?;
+                if branch.faces()[operand] != *face
+                    || fragments.insert(ordinal, fragment_index).is_some()
+                {
+                    return Err(MixedPeriodicArrangementError::FaceLocalPathUnavailable(
+                        fragment_index,
+                    ));
+                }
+            }
+            if boundary_carried.insert(owner, fragments).is_some() {
+                return Err(MixedPeriodicArrangementError::DuplicateComponentEvidence(
+                    trace.component(),
+                ));
+            }
+        }
+        return Ok(CarriedOccurrences {
+            fully_carried: BTreeSet::new(),
+            boundary_carried,
+        });
+    }
+    carried_occurrences(graph, face, operand)
 }
 
 fn select_evidence<'a>(

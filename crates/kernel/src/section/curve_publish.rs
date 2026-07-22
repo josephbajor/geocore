@@ -117,17 +117,22 @@ fn index_closed_root_scalars(
                     "certified closed root scalar referenced an unknown endpoint",
                 ));
             };
-            let Some(slot) = slots.get_mut(end.trim_operand) else {
-                return Err(inconsistent_topology(
-                    "certified closed root scalar has an invalid operand",
-                ));
-            };
-            if slot.is_some_and(|current| current != end.source_root_scalar) {
-                return Err(inconsistent_topology(
-                    "one closed source root retained inconsistent scalar materializations",
-                ));
+            for (operand, root) in end.endpoint_roots.into_iter().enumerate() {
+                let Some(root) = root else {
+                    continue;
+                };
+                let Some(slot) = slots.get_mut(operand) else {
+                    return Err(inconsistent_topology(
+                        "certified closed root scalar has an invalid operand",
+                    ));
+                };
+                if slot.is_some_and(|current| current != root.source_root_scalar) {
+                    return Err(inconsistent_topology(
+                        "one closed source root retained inconsistent scalar materializations",
+                    ));
+                }
+                *slot = Some(root.source_root_scalar);
             }
-            *slot = Some(end.source_root_scalar);
         }
     }
     Ok(indexed)
@@ -291,7 +296,7 @@ fn adapt_curve_fragment_end(
     endpoint: usize,
     evidence: ClosedFragmentEndEvidence,
 ) -> Option<SectionCurveFragmentEnd> {
-    let site = evidence.site;
+    let site = evidence.trim.site;
     Some(SectionCurveFragmentEnd {
         endpoint,
         point: carrier_point(branch.carrier, site.carrier_parameter)?,
@@ -304,7 +309,7 @@ fn adapt_curve_fragment_end(
             source_parameter: SectionSourceParameterKey::from_certified_root(
                 part,
                 super::root_identity::SourceRootKey::new(site.edge, site.root_ordinal),
-                evidence.source_root_scalar,
+                evidence.trim.source_root_scalar,
             ),
             edge_parameter: SectionEdgeParameterInterval::from_interval(site.edge_parameter),
             pcurve_half_angle: SectionProjectiveParameterInterval::from_interval(

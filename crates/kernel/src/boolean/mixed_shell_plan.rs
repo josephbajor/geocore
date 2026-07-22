@@ -143,6 +143,7 @@ pub(crate) enum MixedArrangementBinding<'a> {
         face: FaceId,
         operand: usize,
         arrangement: &'a MixedPeriodicFaceArrangement,
+        embedding: Option<&'a crate::CertifiedSectionPeriodicFaceEmbedding>,
     },
     CylinderCap {
         ring: &'a MixedCylinderCapRing,
@@ -722,6 +723,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
                     face,
                     operand,
                     arrangement,
+                    embedding,
                 },
                 MixedShellCellKind::Periodic(cell_key),
             ) => {
@@ -736,6 +738,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
                     face,
                     *operand,
                     arrangement,
+                    *embedding,
                     key.source,
                 )?;
                 for span in retained {
@@ -748,7 +751,14 @@ fn plan_mixed_shell_with_augmentation<'a>(
                         bounded_source_spans.push(span);
                     }
                 }
-                let lineage = periodic_cut_lineage(graph, face, *operand, arrangement, key.source)?;
+                let lineage = periodic_cut_lineage(
+                    graph,
+                    face,
+                    *operand,
+                    arrangement,
+                    *embedding,
+                    key.source,
+                )?;
                 let loops = cell
                     .boundaries()
                     .iter()
@@ -1108,6 +1118,7 @@ fn bind_periodic_source_spans(
     face: &FaceId,
     operand: usize,
     arrangement: &MixedPeriodicFaceArrangement,
+    embedding: Option<&crate::CertifiedSectionPeriodicFaceEmbedding>,
     source: MixedSourceFaceKey,
 ) -> Result<
     (
@@ -1120,16 +1131,20 @@ fn bind_periodic_source_spans(
     if operand != source.operand() {
         return Err(fail());
     }
-    let certified = graph
-        .periodic_face_embeddings()
-        .iter()
-        .find_map(|evidence| match evidence {
-            SectionPeriodicFaceEmbeddingEvidence::Certified(value)
-                if value.operand() == operand && value.face() == *face =>
-            {
-                Some(value)
-            }
-            _ => None,
+    let certified = embedding
+        .filter(|value| value.operand() == operand && value.face() == *face)
+        .or_else(|| {
+            graph
+                .periodic_face_embeddings()
+                .iter()
+                .find_map(|evidence| match evidence {
+                    SectionPeriodicFaceEmbeddingEvidence::Certified(value)
+                        if value.operand() == operand && value.face() == *face =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                })
         })
         .ok_or_else(fail)?;
     let mut source_spans = BTreeMap::new();
@@ -1369,18 +1384,23 @@ fn periodic_cut_lineage(
     face: &FaceId,
     operand: usize,
     arrangement: &MixedPeriodicFaceArrangement,
+    embedding: Option<&crate::CertifiedSectionPeriodicFaceEmbedding>,
     source: MixedSourceFaceKey,
 ) -> Result<BTreeMap<PeriodicCutFragmentKey, SectionUseLineage>, MixedShellPlanError> {
-    let certified = graph
-        .periodic_face_embeddings()
-        .iter()
-        .find_map(|evidence| match evidence {
-            SectionPeriodicFaceEmbeddingEvidence::Certified(value)
-                if value.operand() == operand && value.face() == *face =>
-            {
-                Some(value)
-            }
-            _ => None,
+    let certified = embedding
+        .filter(|value| value.operand() == operand && value.face() == *face)
+        .or_else(|| {
+            graph
+                .periodic_face_embeddings()
+                .iter()
+                .find_map(|evidence| match evidence {
+                    SectionPeriodicFaceEmbeddingEvidence::Certified(value)
+                        if value.operand() == operand && value.face() == *face =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                })
         });
     let Some(certified) = certified else {
         return Err(MixedShellPlanError::MissingPeriodicEmbedding {
@@ -2132,6 +2152,7 @@ mod tests {
                 &evidence.face(),
                 evidence.operand(),
                 &arrangement,
+                None,
                 source,
             )
             .unwrap();
@@ -2214,6 +2235,7 @@ mod tests {
             periodic_face,
             periodic_operand,
             periodic,
+            None,
             periodic_source,
         )
         .unwrap();
@@ -2324,6 +2346,7 @@ mod tests {
                             face: periodic_face,
                             operand: periodic_operand,
                             arrangement: &periodic,
+                            embedding: None,
                         })
                         .chain(planar.iter().map(|(face, output)| {
                             MixedArrangementBinding::Planar {
@@ -2410,6 +2433,7 @@ mod tests {
                         face: periodic_face.clone(),
                         operand: periodic_operand,
                         arrangement: &periodic,
+                        embedding: None,
                     });
                     bindings
                 };
@@ -2482,6 +2506,7 @@ mod tests {
                         face: periodic_face.clone(),
                         operand: periodic_operand,
                         arrangement: &periodic,
+                        embedding: None,
                     })
                     .chain(planar.iter().enumerate().map(
                         |(index, (face, output))| MixedArrangementBinding::Planar {
@@ -2505,6 +2530,7 @@ mod tests {
                     face: periodic_face.clone(),
                     operand: periodic_operand,
                     arrangement: &periodic,
+                    embedding: None,
                 })
                 .chain(planar.iter().map(|(face, output)| {
                     MixedArrangementBinding::Planar {
@@ -2541,6 +2567,7 @@ mod tests {
                             face: periodic_face,
                             operand: periodic_operand,
                             arrangement: &periodic,
+                            embedding: None,
                         }],
                         forged,
                     ),

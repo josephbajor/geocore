@@ -127,6 +127,7 @@ impl PreparedMixedBoundary {
                         face: face.face.clone(),
                         operand: face.operand,
                         arrangement: &face.arrangement,
+                        embedding: None,
                     }),
             )
             .chain(self.disks.iter().map(|face| MixedArrangementBinding::Disk {

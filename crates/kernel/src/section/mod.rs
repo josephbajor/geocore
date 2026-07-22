@@ -65,6 +65,9 @@ pub use periodic_embedding::{
     SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence,
     SectionPeriodicFragmentEmbedding, SectionUvParameterInterval,
 };
+pub(crate) use periodic_embedding::{
+    certify_periodic_face_fragment_subset, periodic_face_fragment_subset_work,
+};
 
 #[cfg(test)]
 mod tests;
@@ -86,7 +89,8 @@ use kops::intersect::{
     IntersectionBranchVertexEvent, intersect_bounded_graph_surfaces_in_scope,
 };
 use ktopo::entity::{BodyKind, FaceId as RawFaceId, Sense, SurfaceId as RawSurfaceId};
-use ktopo::geom::SurfaceGeom;
+use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use ktopo::store::Store;
 
 use crate::error::{Error, Result};
@@ -1321,9 +1325,13 @@ enum ClosedFragmentEvidenceSpan {
 
 #[derive(Debug, Clone, Copy)]
 struct ClosedFragmentEndEvidence {
+    /// The strict trim occurrence exposed on the public fragment end.
+    trim: CertifiedClosedSiteRoot,
     trim_operand: usize,
-    site: curved_clip::ClosedConicTrimSite,
-    source_root_scalar: root_identity::CertifiedSourceRootScalar,
+    /// Complete root evidence used by the endpoint join. A certified
+    /// coincident source boundary fills both slots; ordinary clips fill only
+    /// the operand that contributed the trim event.
+    endpoint_roots: [Option<CertifiedClosedSiteRoot>; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1360,6 +1368,10 @@ impl SectionAccumulator {
 enum ClosedTrimMerge {
     Empty,
     Fragments(Vec<MergedClosedFragment>),
+    /// Strict peer-disk fragments retained beside one certified coincident
+    /// source ring. Publication is useful partial evidence, while the
+    /// coincidence still keeps the graph globally indeterminate.
+    CoincidentBoundaryFragments(Vec<MergedClosedFragment>),
     UnsupportedIntersection,
     Gap(&'static str),
 }
@@ -1370,6 +1382,8 @@ struct MergedClosedFragment {
     /// `None` is a whole-period carrier; bounded fragments name the operand
     /// whose exact face trim contributed both endpoints.
     trim_operand: Option<usize>,
+    /// Topology-owned whole-period source ring coincident with the carrier.
+    coincident_boundary: Option<curved_clip::CertifiedCoincidentSourceBoundary>,
 }
 
 fn whole_closed_conic_fragment(fragments: &[curved_clip::ClosedConicFragment]) -> bool {
@@ -1392,7 +1406,7 @@ fn merge_closed_trim_outcomes(
     a: &curved_clip::ClosedConicClipOutcome,
     b: &curved_clip::ClosedConicClipOutcome,
 ) -> ClosedTrimMerge {
-    use curved_clip::ClosedConicClipOutcome::{Fragments, Indeterminate};
+    use curved_clip::ClosedConicClipOutcome::{CoincidentSourceBoundary, Fragments, Indeterminate};
 
     if matches!(a, Fragments(fragments) if fragments.is_empty())
         || matches!(b, Fragments(fragments) if fragments.is_empty())
@@ -1405,8 +1419,42 @@ fn merge_closed_trim_outcomes(
     if let Indeterminate(gap) = b {
         return ClosedTrimMerge::Gap(gap.reason());
     }
+    match (a, b) {
+        (CoincidentSourceBoundary(coincident), Fragments(fragments))
+        | (Fragments(fragments), CoincidentSourceBoundary(coincident)) => {
+            let trim_operand = usize::from(matches!(a, CoincidentSourceBoundary(_)));
+            if fragments.is_empty()
+                || fragments.iter().any(|fragment| {
+                    fragment.start.is_none()
+                        || fragment.end.is_none()
+                        || fragment.start == fragment.end
+                })
+            {
+                return ClosedTrimMerge::Gap(
+                    curved_clip::ClosedConicClipGap::CoincidentBoundary.reason(),
+                );
+            }
+            return ClosedTrimMerge::CoincidentBoundaryFragments(
+                fragments
+                    .iter()
+                    .copied()
+                    .map(|fragment| MergedClosedFragment {
+                        fragment,
+                        trim_operand: Some(trim_operand),
+                        coincident_boundary: Some(*coincident),
+                    })
+                    .collect(),
+            );
+        }
+        (CoincidentSourceBoundary(_), CoincidentSourceBoundary(_)) => {
+            return ClosedTrimMerge::Gap(
+                curved_clip::ClosedConicClipGap::CoincidentBoundary.reason(),
+            );
+        }
+        _ => {}
+    }
     let (Fragments(a), Fragments(b)) = (a, b) else {
-        unreachable!("indeterminate closed trim outcomes returned above")
+        unreachable!("non-fragment closed trim outcomes returned above")
     };
     let (a_whole, b_whole) = (
         whole_closed_conic_fragment(a),
@@ -1416,6 +1464,7 @@ fn merge_closed_trim_outcomes(
         return ClosedTrimMerge::Fragments(vec![MergedClosedFragment {
             fragment: a[0],
             trim_operand: None,
+            coincident_boundary: None,
         }]);
     }
     if a_whole {
@@ -1425,6 +1474,7 @@ fn merge_closed_trim_outcomes(
                 .map(|fragment| MergedClosedFragment {
                     fragment,
                     trim_operand: Some(1),
+                    coincident_boundary: None,
                 })
                 .collect(),
         );
@@ -1436,6 +1486,7 @@ fn merge_closed_trim_outcomes(
                 .map(|fragment| MergedClosedFragment {
                     fragment,
                     trim_operand: Some(0),
+                    coincident_boundary: None,
                 })
                 .collect(),
         );
@@ -1445,21 +1496,25 @@ fn merge_closed_trim_outcomes(
 
 fn certified_closed_trim_endpoint(
     source: closed_stitch::ClosedBranchSource,
-    trim_operand: usize,
-    site: curved_clip::ClosedConicTrimSite,
+    roots: [Option<CertifiedClosedSiteRoot>; 2],
 ) -> Option<closed_stitch::CertifiedClosedEndpoint> {
-    if trim_operand >= 2 || source.faces[trim_operand] != site.face {
-        return None;
-    }
     let mut sites = source.faces.map(stitch::SiteKey::Face);
-    sites[trim_operand] = stitch::SiteKey::Edge(site.edge);
     let mut keys = [None, None];
-    keys[trim_operand] = Some(closed_stitch::CertifiedSourceParameterKey::new(
-        site.edge,
-        site.root_ordinal,
-    ));
     let mut parameters = [None, None];
-    parameters[trim_operand] = Some(site.edge_parameter);
+    for (operand, root) in roots.into_iter().enumerate() {
+        let Some(root) = root else {
+            continue;
+        };
+        if source.faces[operand] != root.site.face {
+            return None;
+        }
+        sites[operand] = stitch::SiteKey::Edge(root.site.edge);
+        keys[operand] = Some(closed_stitch::CertifiedSourceParameterKey::new(
+            root.site.edge,
+            root.site.root_ordinal,
+        ));
+        parameters[operand] = Some(root.site.edge_parameter);
+    }
     Some(closed_stitch::CertifiedClosedEndpoint::trim_site(
         stitch::VertexKey {
             a: sites[0],
@@ -1499,31 +1554,33 @@ fn append_closed_fragments(
                 ClosedFragmentEvidenceSpan::Whole,
             ),
             (Some(trim_operand), Some(start), Some(end)) => {
-                let start = match certify_closed_site_root(
+                let start = match certify_closed_fragment_end(
                     store,
                     source,
                     trim_operand,
                     start,
+                    merged.coincident_boundary,
                     root_identity,
                     scope,
                 )? {
-                    Ok(site) => site,
+                    Ok(evidence) => evidence,
                     Err(reason) => return Ok(Err(reason)),
                 };
-                let end = match certify_closed_site_root(
+                let end = match certify_closed_fragment_end(
                     store,
                     source,
                     trim_operand,
                     end,
+                    merged.coincident_boundary,
                     root_identity,
                     scope,
                 )? {
-                    Ok(site) => site,
+                    Ok(evidence) => evidence,
                     Err(reason) => return Ok(Err(reason)),
                 };
                 let (Some(start_key), Some(end_key)) = (
-                    certified_closed_trim_endpoint(source, trim_operand, start.site),
-                    certified_closed_trim_endpoint(source, trim_operand, end.site),
+                    certified_closed_trim_endpoint(source, start.endpoint_roots),
+                    certified_closed_trim_endpoint(source, end.endpoint_roots),
                 ) else {
                     return Ok(Err(GAP_CLOSED_STITCH));
                 };
@@ -1533,18 +1590,7 @@ fn append_closed_fragments(
                         end: end_key,
                     },
                     ClosedFragmentEvidenceSpan::Arc {
-                        ends: [
-                            ClosedFragmentEndEvidence {
-                                trim_operand,
-                                site: start.site,
-                                source_root_scalar: start.source_root_scalar,
-                            },
-                            ClosedFragmentEndEvidence {
-                                trim_operand,
-                                site: end.site,
-                                source_root_scalar: end.source_root_scalar,
-                            },
-                        ],
+                        ends: [start, end],
                         wraps_pcurve_seam: merged.fragment.wraps_pcurve_seam,
                     },
                 )
@@ -1567,10 +1613,159 @@ fn append_closed_fragments(
     Ok(Ok(()))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn certify_closed_fragment_end(
+    store: &Store,
+    source: closed_stitch::ClosedBranchSource,
+    trim_operand: usize,
+    site: curved_clip::ClosedConicTrimSite,
+    coincident: Option<curved_clip::CertifiedCoincidentSourceBoundary>,
+    root_identity: &mut root_identity::RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<core::result::Result<ClosedFragmentEndEvidence, &'static str>> {
+    if trim_operand >= 2 {
+        return Ok(Err(GAP_CLOSED_STITCH));
+    }
+    let trim = match certify_closed_site_root(
+        store,
+        source,
+        trim_operand,
+        source.faces[1 - trim_operand],
+        site,
+        root_identity,
+        scope,
+    )? {
+        Ok(root) => root,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    let mut endpoint_roots = [None, None];
+    endpoint_roots[trim_operand] = Some(trim);
+
+    if let Some(coincident) = coincident {
+        let coincident_operand = 1 - trim_operand;
+        if coincident.face != source.faces[coincident_operand] {
+            return Ok(Err(GAP_CLOSED_STITCH));
+        }
+        let peer_side = match certify_disk_ring_peer_side(store, trim.site, scope)? {
+            Some(face) => face,
+            None => return Ok(Err(GAP_CLOSED_STITCH)),
+        };
+        let edge_parameter = match curved_clip::coincident_source_edge_parameter(
+            coincident,
+            trim.site.carrier_parameter_enclosure,
+        ) {
+            Ok(parameter) => parameter,
+            Err(gap) => return Ok(Err(gap.reason())),
+        };
+        let coincident_site = curved_clip::ClosedConicTrimSite {
+            face: coincident.face,
+            loop_id: coincident.loop_id,
+            fin: coincident.fin,
+            edge: coincident.edge,
+            root_ordinal: 0,
+            pcurve_half_angle: trim.site.pcurve_half_angle,
+            carrier_parameter: trim.site.carrier_parameter,
+            carrier_parameter_enclosure: trim.site.carrier_parameter_enclosure,
+            edge_parameter,
+        };
+        endpoint_roots[coincident_operand] = Some(
+            match certify_closed_site_root(
+                store,
+                source,
+                coincident_operand,
+                peer_side,
+                coincident_site,
+                root_identity,
+                scope,
+            )? {
+                Ok(root) => root,
+                Err(reason) => return Ok(Err(reason)),
+            },
+        );
+    }
+
+    Ok(Ok(ClosedFragmentEndEvidence {
+        trim,
+        trim_operand,
+        endpoint_roots,
+    }))
+}
+
+/// Re-prove that the strict clip site is a disk ring and recover the unique
+/// adjacent cylinder side face. This peer face is the opposing surface for
+/// the coincident ring's complete source-root query; it is never inferred
+/// from a metric point or from face ordering.
+fn certify_disk_ring_peer_side(
+    store: &Store,
+    site: curved_clip::ClosedConicTrimSite,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<Option<RawFaceId>> {
+    charge(scope, 1)?;
+    let face = read(store.get(site.face))?;
+    let loop_ = read(store.get(site.loop_id))?;
+    let fin = read(store.get(site.fin))?;
+    let edge = read(store.get(site.edge))?;
+    let (Some(curve), Some(use_)) = (edge.curve(), fin.pcurve()) else {
+        return Ok(None);
+    };
+    if face.loops() != [site.loop_id]
+        || !matches!(read(store.surface(face.surface()))?, SurfaceGeom::Plane(_))
+        || loop_.face() != site.face
+        || loop_.fins() != [site.fin]
+        || fin.parent() != site.loop_id
+        || fin.edge() != site.edge
+        || !matches!(read(store.pcurve(use_.curve()))?, Curve2dGeom::Circle(_))
+        || edge.tolerance().is_some()
+        || edge.vertices() != [None, None]
+        || edge.bounds().is_some()
+        || !matches!(read(store.curve(curve))?, CurveGeom::Circle(_))
+        || certify_whole_fin_incidence(
+            store,
+            site.face,
+            site.loop_id,
+            site.fin,
+            scope.context().tolerances().linear(),
+        ) != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    let [first, second] = edge.fins() else {
+        return Ok(None);
+    };
+    let peer_fin_id = if *first == site.fin && *second != site.fin {
+        *second
+    } else if *second == site.fin && *first != site.fin {
+        *first
+    } else {
+        return Ok(None);
+    };
+    let peer_fin = read(store.get(peer_fin_id))?;
+    let peer_loop = read(store.get(peer_fin.parent()))?;
+    let peer_face = read(store.get(peer_loop.face()))?;
+    if peer_fin.edge() != site.edge
+        || peer_loop.fins() != [peer_fin_id]
+        || !matches!(
+            read(store.surface(peer_face.surface()))?,
+            SurfaceGeom::Cylinder(_)
+        )
+        || certify_whole_fin_incidence(
+            store,
+            peer_loop.face(),
+            peer_fin.parent(),
+            peer_fin_id,
+            scope.context().tolerances().linear(),
+        ) != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    Ok(Some(peer_loop.face()))
+}
+
 fn certify_closed_site_root(
     store: &Store,
     source: closed_stitch::ClosedBranchSource,
     trim_operand: usize,
+    opposing_face: RawFaceId,
     mut site: curved_clip::ClosedConicTrimSite,
     root_identity: &mut root_identity::RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
@@ -1578,7 +1773,7 @@ fn certify_closed_site_root(
     if trim_operand >= 2 || source.faces[trim_operand] != site.face {
         return Ok(Err(GAP_CLOSED_STITCH));
     }
-    let query = root_identity::SourceRootQuery::new(site.edge, source.faces[1 - trim_operand]);
+    let query = root_identity::SourceRootQuery::new(site.edge, opposing_face);
     let root = match root_identity.resolve(store, query, site.edge_parameter, scope)? {
         root_identity::RootResolution::Resolved(root) => root,
         root_identity::RootResolution::Indeterminate(gap) => return Ok(Err(gap.reason())),

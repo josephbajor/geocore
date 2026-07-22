@@ -325,6 +325,23 @@ fn append_plane_cylinder_branch(
                 });
             }
         }
+        ClosedTrimMerge::CoincidentBoundaryFragments(fragments) => {
+            if let Err(reason) =
+                append_closed_fragments(store, branch_index, &fragments, root_identity, scope, acc)?
+            {
+                acc.gaps.push(SectionGap {
+                    reason,
+                    faces: facades.to_vec(),
+                });
+            }
+            // Publication is intentionally partial evidence. Removing a
+            // shared source boundary is a Boolean-owned arrangement theorem,
+            // so Section continues to report the exact coincidence gap.
+            acc.gaps.push(SectionGap {
+                reason: GAP_CLOSED_CONIC_COINCIDENT_BOUNDARY,
+                faces: facades.to_vec(),
+            });
+        }
         ClosedTrimMerge::UnsupportedIntersection => acc.gaps.push(SectionGap {
             reason: GAP_CURVED_TRIM_UNRESOLVED,
             faces: facades.to_vec(),

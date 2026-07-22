@@ -338,6 +338,15 @@ fn clip_secant(
     let mut crossings = Vec::with_capacity(2);
     for half_angle in half_angles {
         charge(scope, 1)?;
+        let carrier_parameter_enclosure = match super::curved_clip::carrier_parameter_enclosure(
+            half_angle,
+            branch.parameter_scale,
+            branch.parameter_offset,
+            branch.carrier_range,
+        ) {
+            Ok(parameter) => parameter,
+            Err(gap) => return Ok(Err(gap)),
+        };
         let Some(point) = circle_point(branch, half_angle) else {
             return Ok(Err(ClosedConicClipGap::ArithmeticGuard));
         };
@@ -354,6 +363,7 @@ fn clip_secant(
                 root_ordinal: 0,
                 pcurve_half_angle: half_angle,
                 carrier_parameter: carrier_parameter(branch, half_angle),
+                carrier_parameter_enclosure,
                 edge_parameter,
             },
         });

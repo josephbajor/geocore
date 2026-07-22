@@ -21,14 +21,19 @@ use crate::boolean::face_arrangement::ArrangementEdgeKey;
 use crate::boolean::mixed_boundary::{
     classify_periodic_face_from_source_point, periodic_source_span_point,
 };
-use crate::boolean::mixed_periodic_arrangement::arrange_mixed_periodic_face_from_certified_embedding;
+use crate::boolean::mixed_cap_boundary::bind_cylinder_cap_ring_from_embedding;
 use crate::boolean::mixed_periodic_arrangement::{
-    PeriodicArrangementCellKey, PeriodicSourceLoopKey, PeriodicSourceRootKey,
+    MixedPeriodicArrangementError, PeriodicArrangementCellKey, PeriodicSourceLoopKey,
+    PeriodicSourceRootKey, arrange_mixed_periodic_face_from_embedding,
 };
 use crate::boolean::mixed_shell_plan::MixedSourceFaceKey;
 use crate::boolean::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation;
 use crate::boolean::parallel_cylinder_relation::ParallelCylinderSourceRootWitness;
-use crate::{SectionCarrier, SectionCompletion, SectionCurveFragmentSpan};
+use crate::section::{certify_periodic_face_fragment_subset, periodic_face_fragment_subset_work};
+use crate::{
+    CertifiedSectionPeriodicFaceEmbedding, SectionCarrier, SectionCompletion,
+    SectionCurveFragmentSpan,
+};
 
 /// Canonical selector key for an arranged side cell or one physical cap end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -229,6 +234,7 @@ impl PreparedParallelCylinderCoincidentBoundary {
                 face: face.face.clone(),
                 operand: face.operand,
                 arrangement: &face.arrangement,
+                embedding: face.embedding.as_ref(),
             })
             .chain(
                 self.caps
@@ -294,12 +300,20 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
     {
         return Err(MixedBoundaryError::IncompleteSection);
     }
+    let fragment_subsets = [
+        relation.periodic_fragment_subset(0),
+        relation.periodic_fragment_subset(1),
+    ];
+    let projection_work = fragment_subsets.iter().try_fold(0_u64, |total, subset| {
+        total.checked_add(periodic_face_fragment_subset_work(subset.len())?)
+    });
     let work = parallel_boundary_work(
         6,
         graph.curve_fragments().len(),
         graph.curve_endpoints().len(),
         graph.curve_components().len(),
     )
+    .and_then(|work| work.checked_add(projection_work?))
     .ok_or(MixedBoundaryError::SourceTopology)?;
     scope
         .ledger_mut()
@@ -312,21 +326,31 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
     let mut source_partitions = Vec::new();
     let mut periodic_cut_owners = Vec::new();
     for operand in 0..2 {
-        let face = unique_periodic_face(graph, cylinders[operand], operand)?;
-        let arrangement =
-            arrange_mixed_periodic_face_from_certified_embedding(graph, face.clone(), operand)
-                .map_err(MixedBoundaryError::PeriodicArrangement)?;
+        let face = FaceId::new(
+            bodies[operand].part().clone(),
+            cylinders[operand].side_face(),
+        );
+        let certified = certify_periodic_face_fragment_subset(
+            store,
+            face.part(),
+            graph,
+            operand,
+            face.clone(),
+            &fragment_subsets[operand],
+            linear,
+        )
+        .map_err(|gap| {
+            MixedBoundaryError::PeriodicArrangement(
+                MixedPeriodicArrangementError::EmbeddingIndeterminate(gap),
+            )
+        })?;
+        let arrangement = arrange_mixed_periodic_face_from_embedding(graph, &certified)
+            .map_err(MixedBoundaryError::PeriodicArrangement)?;
         validate_coincident_periodic_fragments(&arrangement, relation, operand)?;
         let source = source_face_key(store, graph, &face, operand)
             .map_err(|_| MixedBoundaryError::SourceTopology)?;
-        let (anchor_source, anchor_point) = coincident_periodic_anchor(
-            store,
-            graph,
-            cylinders[operand],
-            relation,
-            operand,
-            &arrangement,
-        )?;
+        let (anchor_source, anchor_point) =
+            coincident_periodic_anchor(store, graph, relation, &certified, &arrangement)?;
         let classes = classify_periodic_face_from_source_point(
             part,
             &bodies[1 - operand],
@@ -337,11 +361,11 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             scope,
         )?;
         source_partitions.extend(prepare_cap_source_partitions(
-            graph,
             cylinders[operand],
             relation,
             operand,
             source,
+            &certified,
             &arrangement,
             &classes,
         )?);
@@ -361,6 +385,7 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             face,
             operand,
             arrangement,
+            embedding: Some(certified),
         });
     }
 
@@ -428,6 +453,10 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             .iter()
             .find(|face| face.operand == operand)
             .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
+        let certified = periodic_face
+            .embedding
+            .as_ref()
+            .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
         for (boundary, source) in cylinders[operand].boundaries().iter().enumerate() {
             let belongs_to_overlap = relation.overlap_ends().iter().any(|end| {
                 end.source(operand)
@@ -439,7 +468,7 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             if classify_anchor(part, &bodies[1 - operand], source.center(), linear, scope)? {
                 return Err(MixedBoundaryError::CylinderCapNotExterior);
             }
-            let ring = bind_cylinder_cap_ring(
+            let ring = bind_cylinder_cap_ring_from_embedding(
                 store,
                 graph,
                 cylinders[operand],
@@ -447,6 +476,7 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
                 boundary,
                 &periodic_face.face,
                 &periodic_face.arrangement,
+                certified,
             )
             .map_err(|_| MixedBoundaryError::SourceTopology)?;
             classified.push(ClassifiedBoundaryFragment::new(
@@ -660,23 +690,10 @@ fn select_cap_boundary_use(
 fn coincident_periodic_anchor(
     store: &ktopo::store::Store,
     graph: &BodySectionGraph,
-    cylinder: &CertifiedCylinderSource,
     relation: &CertifiedParallelCylinderCoincidentCapRelation,
-    operand: usize,
+    certified: &CertifiedSectionPeriodicFaceEmbedding,
     arrangement: &MixedPeriodicFaceArrangement,
 ) -> Result<(PeriodicSourceLoopKey, kgeom::vec::Point3), MixedBoundaryError> {
-    let certified = graph
-        .periodic_face_embeddings()
-        .iter()
-        .find_map(|evidence| match evidence {
-            SectionPeriodicFaceEmbeddingEvidence::Certified(value)
-                if value.operand() == operand && value.face().raw() == cylinder.side_face() =>
-            {
-                Some(value)
-            }
-            _ => None,
-        })
-        .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
     let source = arrangement
         .source_spans()
         .iter()
@@ -741,26 +758,14 @@ fn coincident_periodic_anchor(
 }
 
 fn prepare_cap_source_partitions(
-    graph: &BodySectionGraph,
     cylinder: &CertifiedCylinderSource,
     relation: &CertifiedParallelCylinderCoincidentCapRelation,
     operand: usize,
     source_face: MixedSourceFaceKey,
+    certified: &CertifiedSectionPeriodicFaceEmbedding,
     arrangement: &MixedPeriodicFaceArrangement,
     classes: &BTreeMap<PeriodicArrangementCellKey, bool>,
 ) -> Result<Vec<PreparedCoincidentSourcePartition>, MixedBoundaryError> {
-    let certified = graph
-        .periodic_face_embeddings()
-        .iter()
-        .find_map(|evidence| match evidence {
-            SectionPeriodicFaceEmbeddingEvidence::Certified(value)
-                if value.operand() == operand && value.face().raw() == cylinder.side_face() =>
-            {
-                Some(value)
-            }
-            _ => None,
-        })
-        .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
     let mut partitions = Vec::new();
     for (physical_end, source) in relation
         .overlap_ends()

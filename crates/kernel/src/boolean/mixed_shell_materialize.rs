@@ -551,30 +551,9 @@ pub(super) fn retain_materialization_evidence(
     let section_trims = section_edges
         .iter()
         .map(|edge| {
-            let certified = graph
-                .periodic_face_embeddings()
-                .iter()
-                .find_map(|evidence| {
-                    let SectionPeriodicFaceEmbeddingEvidence::Certified(face) = evidence else {
-                        return None;
-                    };
-                    face.components()
-                        .iter()
-                        .flat_map(|component| component.fragments())
-                        .chain(
-                            face.boundary_traces()
-                                .iter()
-                                .flat_map(|trace| trace.fragments()),
-                        )
-                        .find(|fragment| fragment.fragment() == edge.fragment_index())
-                        .map(|fragment| {
-                            fragment
-                                .trim_scalars()
-                                .each_ref()
-                                .map(|trim| (trim.carrier_parameter(), trim.point()))
-                        })
-                })
-                .or_else(|| retained_ruling_trim_scalars(edge.fragment()));
+            let certified =
+                retained_periodic_trim_scalars(arrangements, graph, edge.fragment_index())
+                    .or_else(|| retained_ruling_trim_scalars(edge.fragment()));
             RetainedSectionTrim {
                 fragment: edge.fragment_index(),
                 endpoints: edge.endpoints(),
@@ -586,6 +565,73 @@ pub(super) fn retain_materialization_evidence(
         source_spans,
         section_trims,
     }
+}
+
+fn retained_periodic_trim_scalars(
+    arrangements: &BTreeMap<MixedSourceFaceKey, MixedArrangementBinding<'_>>,
+    graph: &BodySectionGraph,
+    fragment_index: usize,
+) -> Option<[(f64, Point3); 2]> {
+    let global = graph
+        .periodic_face_embeddings()
+        .iter()
+        .filter_map(|evidence| {
+            let SectionPeriodicFaceEmbeddingEvidence::Certified(embedding) = evidence else {
+                return None;
+            };
+            Some(embedding)
+        });
+    let local = arrangements.values().filter_map(|binding| {
+        let MixedArrangementBinding::Periodic {
+            face,
+            operand,
+            embedding: Some(embedding),
+            ..
+        } = binding
+        else {
+            return None;
+        };
+        (embedding.operand() == *operand && embedding.face() == *face).then_some(*embedding)
+    });
+
+    let mut retained = None;
+    for embedding in global.chain(local) {
+        let mut matches = embedding
+            .components()
+            .iter()
+            .flat_map(|component| component.fragments())
+            .chain(
+                embedding
+                    .boundary_traces()
+                    .iter()
+                    .flat_map(|trace| trace.fragments()),
+            )
+            .filter(|fragment| fragment.fragment() == fragment_index);
+        let Some(fragment) = matches.next() else {
+            continue;
+        };
+        if matches.next().is_some() {
+            return None;
+        }
+        let candidate = fragment
+            .trim_scalars()
+            .each_ref()
+            .map(|trim| (trim.carrier_parameter(), trim.point()));
+        if retained.is_some_and(|current| !same_trim_scalars(current, candidate)) {
+            return None;
+        }
+        retained = Some(candidate);
+    }
+    retained
+}
+
+fn same_trim_scalars(first: [(f64, Point3); 2], second: [(f64, Point3); 2]) -> bool {
+    first.into_iter().zip(second).all(|(first, second)| {
+        first.0.to_bits() == second.0.to_bits()
+            && first.1.x.to_bits() == second.1.x.to_bits()
+            && first.1.y.to_bits() == second.1.y.to_bits()
+            && first.1.z.to_bits() == second.1.z.to_bits()
+    })
 }
 
 fn retained_ruling_trim_scalars(

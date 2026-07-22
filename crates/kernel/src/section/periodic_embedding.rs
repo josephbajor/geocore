@@ -19,7 +19,7 @@ use super::{
     SectionUvCurve, SectionUvLine, curve_publish::carrier_point,
 };
 use crate::error::{Error, Result as KernelResult};
-use crate::{FaceId, LoopId, PartId, Point3};
+use crate::{BodySectionGraph, FaceId, LoopId, PartId, Point3};
 
 const PERIOD: f64 = core::f64::consts::TAU;
 
@@ -712,6 +712,98 @@ fn unordered_pairs(count: u64) -> Option<u64> {
         (count, predecessor / 2)
     };
     left.checked_mul(right)
+}
+
+/// Exact operation-local work ceiling for recertifying one face-local
+/// fragment subset. Two units own the topology-backed source rings, one unit
+/// owns each selected fragment, and every unordered fragment pair is examined
+/// once by the simplicity/separation proofs.
+pub(crate) fn periodic_face_fragment_subset_work(fragment_count: usize) -> Option<u64> {
+    let fragments = u64::try_from(fragment_count).ok()?;
+    2_u64
+        .checked_add(fragments)?
+        .checked_add(unordered_pairs(fragments)?)
+}
+
+/// Re-run the ordinary periodic-face theorem over an operation-owned subset
+/// of already published fragments without changing the public Section graph.
+///
+/// The subset is sorted and required to be duplicate-free before proof, every selected branch
+/// must be carried by `face`, and the returned fragment identities are mapped
+/// back to the original graph indices. Selected fragments are deliberately
+/// treated as face-local paths: a caller may consume a proof-owned projection
+/// of an indeterminate global mixed-family graph, but cannot promote that
+/// projection into globally complete Section evidence.
+pub(crate) fn certify_periodic_face_fragment_subset(
+    store: &Store,
+    part: &PartId,
+    graph: &BodySectionGraph,
+    operand: usize,
+    face: FaceId,
+    selected_fragments: &[usize],
+    linear: f64,
+) -> Result<CertifiedSectionPeriodicFaceEmbedding, SectionPeriodicEmbeddingGap> {
+    if operand >= 2 || operand >= graph.bodies().len() {
+        return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
+    }
+    let mut local_to_global = selected_fragments.to_vec();
+    local_to_global.sort_unstable();
+    if let Some(pair) = local_to_global.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(SectionPeriodicEmbeddingGap::UnstitchedFragmentPath { fragment: pair[0] });
+    }
+
+    let mut local_fragments = Vec::with_capacity(local_to_global.len());
+    for &fragment_index in &local_to_global {
+        let fragment = graph.curve_fragments().get(fragment_index).ok_or(
+            SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
+                fragment: fragment_index,
+            },
+        )?;
+        let branch = graph.branches().get(fragment.branch()).ok_or(
+            SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
+                fragment: fragment_index,
+            },
+        )?;
+        if operand >= branch.faces().len() || branch.faces()[operand] != face {
+            return Err(SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
+                fragment: fragment_index,
+            });
+        }
+        local_fragments.push(fragment.clone());
+    }
+
+    let input = PeriodicCertificationInput {
+        store,
+        part,
+        branches: graph.branches(),
+        endpoints: graph.curve_endpoints(),
+        fragments: &local_fragments,
+        components: &[],
+        linear,
+    };
+    let mut certified = certify_face(input, operand, face)?;
+    for component in &mut certified.components {
+        for fragment in &mut component.fragments {
+            remap_subset_fragment(fragment, &local_to_global)?;
+        }
+    }
+    for trace in &mut certified.boundary_traces {
+        for fragment in &mut trace.fragments {
+            remap_subset_fragment(fragment, &local_to_global)?;
+        }
+    }
+    Ok(certified)
+}
+
+fn remap_subset_fragment(
+    fragment: &mut SectionPeriodicFragmentEmbedding,
+    local_to_global: &[usize],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    let local = fragment.fragment;
+    fragment.fragment = *local_to_global
+        .get(local)
+        .ok_or(SectionPeriodicEmbeddingGap::UnstitchedFragmentPath { fragment: local })?;
+    Ok(())
 }
 
 fn certify_face(
