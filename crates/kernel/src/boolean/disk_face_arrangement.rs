@@ -2,16 +2,20 @@
 //!
 //! Section supplies a complete intrinsic order of transverse roots on the
 //! cap's vertexless source ring.  This adapter splits that ring into ordinary
-//! two-vertex source arcs and inserts proof-keyed chord fragments.  Root and
+//! two-vertex source arcs and inserts proof-keyed cut fragments.  Root and
 //! fragment identities, never metric representatives, own the graph.
 //!
 //! A circular disk is convex, so two open chords cross exactly when their
 //! four endpoints alternate in the certified circular order.  That theorem
 //! lets this module prove an arbitrary number of chords disjoint without
-//! geometric sampling.  The shared bounded-face core then proves source-span
-//! conservation, opposed chord uses, cell closure, and connected dual
-//! adjacency.  Partial root coverage, tangency, branching, and crossings are
-//! typed refusals.
+//! geometric sampling.  One Section-certified simple circular arc is also an
+//! admitted separating cut: its exact topology-owned endpoint and trim proof
+//! supplies the embedding, without enumerating a lens layout.  Multiple or
+//! mixed circular-cut layouts remain outside the theorem.  The shared
+//! bounded-face core then proves source-span conservation, opposed cut uses,
+//! cell closure, and connected dual adjacency.  Partial root coverage,
+//! tangency, coincidence, parameter seams, branching, and crossings are typed
+//! refusals.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,9 +30,9 @@ use super::face_arrangement::{
     FaceArrangementError, FaceArrangementInput, arrange_bounded_face,
 };
 use crate::{
-    BodySectionGraph, FaceId, SectionBranchTopology, SectionCarrier, SectionCompletion,
-    SectionCurveEndpointTopology, SectionCurveFragmentSpan, SectionRulingFragmentEnd, SectionSite,
-    SectionUvCurve,
+    BodySectionGraph, FaceId, SectionBranch, SectionBranchTopology, SectionCarrier,
+    SectionCompletion, SectionCurveEndpointTopology, SectionCurveFragmentEnd,
+    SectionCurveFragmentSpan, SectionRulingFragmentEnd, SectionSite, SectionUvCurve,
 };
 
 /// Whether Section proved that every cap-ring/cutter root was published.
@@ -209,6 +213,70 @@ pub(crate) struct CertifiedDiskChord {
     endpoints: [usize; 2],
 }
 
+/// Claimed topology of a circular cut before fail-closed admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiskCircularCutTopology {
+    Simple,
+    CoincidentBoundary,
+}
+
+/// One oriented circular Section arc whose exact endpoints lie on the cap.
+///
+/// The Section adapter constructs `Simple` only after checking the closed
+/// circle carrier, circular cap pcurve, closed-component ownership, and both
+/// source-edge roots.  The topology tag remains explicit so malformed or
+/// fabricated coincident evidence cannot enter the generic arrangement core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CertifiedDiskCircularCut {
+    key: DiskChordKey,
+    endpoints: [usize; 2],
+    topology: DiskCircularCutTopology,
+    wraps_pcurve_seam: bool,
+}
+
+impl CertifiedDiskCircularCut {
+    const fn simple(fragment: usize, endpoints: [usize; 2], wraps_pcurve_seam: bool) -> Self {
+        Self {
+            key: DiskChordKey::new(fragment),
+            endpoints,
+            topology: DiskCircularCutTopology::Simple,
+            wraps_pcurve_seam,
+        }
+    }
+
+    #[cfg(test)]
+    const fn coincident(fragment: usize, endpoints: [usize; 2]) -> Self {
+        Self {
+            key: DiskChordKey::new(fragment),
+            endpoints,
+            topology: DiskCircularCutTopology::CoincidentBoundary,
+            wraps_pcurve_seam: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CertifiedDiskCut {
+    Chord(CertifiedDiskChord),
+    Circular(CertifiedDiskCircularCut),
+}
+
+impl CertifiedDiskCut {
+    const fn key(self) -> DiskChordKey {
+        match self {
+            Self::Chord(chord) => chord.key,
+            Self::Circular(arc) => arc.key,
+        }
+    }
+
+    const fn endpoints(self) -> [usize; 2] {
+        match self {
+            Self::Chord(chord) => chord.endpoints,
+            Self::Circular(arc) => arc.endpoints,
+        }
+    }
+}
+
 impl CertifiedDiskChord {
     pub(crate) const fn new(fragment: usize, endpoints: [usize; 2]) -> Self {
         Self {
@@ -296,7 +364,7 @@ pub(crate) type DiskFaceArrangement = FaceArrangement<DiskSourceArcKey, DiskChor
 pub(crate) struct DiskArrangementProof {
     roots_conserved: usize,
     source_arcs_conserved: usize,
-    opposed_chords: usize,
+    opposed_cuts: usize,
     cells: usize,
     dual_edges: usize,
     dual_connected: bool,
@@ -312,7 +380,11 @@ impl DiskArrangementProof {
     }
 
     pub(crate) const fn opposed_chords(self) -> usize {
-        self.opposed_chords
+        self.opposed_cuts
+    }
+
+    pub(crate) const fn opposed_cuts(self) -> usize {
+        self.opposed_cuts
     }
 
     pub(crate) const fn cells(self) -> usize {
@@ -380,6 +452,10 @@ pub(crate) enum DiskArrangementError {
         first: DiskChordKey,
         second: DiskChordKey,
     },
+    MultipleCircularCuts,
+    MixedCircularAndChordCuts,
+    CoincidentCircularCut(DiskChordKey),
+    CircularCutAtParameterSeam(DiskChordKey),
     ConservationMismatch,
     Arrangement(FaceArrangementError<DiskSourceArcKey, DiskChordKey, usize>),
 }
@@ -398,6 +474,7 @@ pub(crate) enum SectionDiskArrangementError {
     MissingCapChord,
     UnknownBranch { fragment: usize, branch: usize },
     UnsupportedCapFragment(usize),
+    NonSeparatingCircularCut(usize),
     FragmentComponentMismatch(usize),
     InconsistentGraphTolerance,
     MissingEndpoint { fragment: usize, endpoint: usize },
@@ -452,7 +529,7 @@ pub(crate) fn arrange_section_disk_face(
     }
 
     let topology = disk_cap_topology(store, cap.raw())?;
-    let (mut roots, chords, tolerance) = collect_section_cap_chords(graph, cap, operand, topology)?;
+    let (mut roots, cuts, tolerance) = collect_section_cap_cuts(graph, cap, operand, topology)?;
     if certify_whole_fin_incidence(store, cap.raw(), topology.loop_id, topology.fin, tolerance)
         != WholeFinIncidence::Certified
     {
@@ -487,7 +564,7 @@ pub(crate) fn arrange_section_disk_face(
             )
         })
         .collect();
-    arrange_disk_face(
+    arrange_disk_face_cuts(
         CertifiedDiskBoundary::new(
             topology.edge,
             topology.fin,
@@ -495,7 +572,7 @@ pub(crate) fn arrange_section_disk_face(
             DiskBoundaryCoverage::Complete,
             roots,
         ),
-        chords,
+        cuts,
     )
     .map_err(SectionDiskArrangementError::Arrangement)
 }
@@ -556,15 +633,14 @@ fn disk_cap_topology(
     })
 }
 
-fn collect_section_cap_chords(
+fn collect_section_cap_cuts(
     graph: &BodySectionGraph,
     cap: &FaceId,
     operand: usize,
     topology: DiskCapTopology,
-) -> Result<(Vec<UnorderedSectionRoot>, Vec<CertifiedDiskChord>, f64), SectionDiskArrangementError>
-{
+) -> Result<(Vec<UnorderedSectionRoot>, Vec<CertifiedDiskCut>, f64), SectionDiskArrangementError> {
     let mut roots = Vec::new();
-    let mut chords = Vec::new();
+    let mut cuts = Vec::new();
     let mut tolerance_bits = None;
     for (fragment_index, fragment) in graph.curve_fragments().iter().enumerate() {
         let branch = graph.branches().get(fragment.branch()).ok_or(
@@ -576,38 +652,7 @@ fn collect_section_cap_chords(
         if branch.faces()[operand] != *cap {
             continue;
         }
-        let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
-            return Err(SectionDiskArrangementError::UnsupportedCapFragment(
-                fragment_index,
-            ));
-        };
-        if branch.topology() != SectionBranchTopology::Open
-            || !matches!(branch.carrier(), SectionCarrier::Line { .. })
-            || !matches!(branch.pcurves()[operand], SectionUvCurve::Line(_))
-        {
-            return Err(SectionDiskArrangementError::UnsupportedCapFragment(
-                fragment_index,
-            ));
-        }
-        let mut component_uses = 0usize;
-        for component in graph.curve_components() {
-            let uses = component
-                .fragments()
-                .iter()
-                .filter(|&&candidate| candidate == fragment_index)
-                .count();
-            if uses != 0 && !component.closed() {
-                return Err(SectionDiskArrangementError::FragmentComponentMismatch(
-                    fragment_index,
-                ));
-            }
-            component_uses += uses;
-        }
-        if component_uses != 1 {
-            return Err(SectionDiskArrangementError::FragmentComponentMismatch(
-                fragment_index,
-            ));
-        }
+        require_one_closed_component(graph, fragment_index)?;
         let tolerance = branch.evidence().tolerance();
         if !tolerance.is_finite() || tolerance < 0.0 {
             return Err(SectionDiskArrangementError::InconsistentGraphTolerance);
@@ -617,33 +662,181 @@ fn collect_section_cap_chords(
             Some(bits) if bits == tolerance.to_bits() => {}
             Some(_) => return Err(SectionDiskArrangementError::InconsistentGraphTolerance),
         }
-        let bound = endpoints
-            .iter()
-            .map(|end| {
-                bind_section_cap_root(
-                    graph,
-                    end,
-                    fragment_index,
-                    cap,
-                    &branch.faces()[1 - operand],
-                    operand,
-                    topology,
+        let (bound, cut) = match fragment.span() {
+            SectionCurveFragmentSpan::LineSegment { endpoints }
+                if branch.topology() == SectionBranchTopology::Open
+                    && matches!(branch.carrier(), SectionCarrier::Line { .. })
+                    && matches!(branch.pcurves()[operand], SectionUvCurve::Line(_)) =>
+            {
+                let bound = endpoints
+                    .iter()
+                    .map(|end| {
+                        bind_section_cap_root(
+                            graph,
+                            end,
+                            fragment_index,
+                            cap,
+                            &branch.faces()[1 - operand],
+                            operand,
+                            topology,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let [start, end]: [UnorderedSectionRoot; 2] = bound.try_into().map_err(|_| {
+                    SectionDiskArrangementError::UnsupportedCapFragment(fragment_index)
+                })?;
+                (
+                    [start, end],
+                    CertifiedDiskCut::Chord(CertifiedDiskChord::new(
+                        fragment_index,
+                        [start.endpoint, end.endpoint],
+                    )),
                 )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let [start, end]: [UnorderedSectionRoot; 2] = bound
-            .try_into()
-            .map_err(|_| SectionDiskArrangementError::UnsupportedCapFragment(fragment_index))?;
+            }
+            SectionCurveFragmentSpan::Arc {
+                endpoints,
+                wraps_pcurve_seam,
+            } if supports_simple_circular_cut(
+                branch,
+                fragment.source_ordinal(),
+                operand,
+                endpoints,
+            ) =>
+            {
+                let bound = endpoints
+                    .iter()
+                    .map(|end| {
+                        bind_section_cap_arc_root(
+                            graph,
+                            end,
+                            fragment_index,
+                            cap,
+                            &branch.faces()[1 - operand],
+                            operand,
+                            topology,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let [start, end]: [UnorderedSectionRoot; 2] = bound.try_into().map_err(|_| {
+                    SectionDiskArrangementError::UnsupportedCapFragment(fragment_index)
+                })?;
+                (
+                    [start, end],
+                    CertifiedDiskCut::Circular(CertifiedDiskCircularCut::simple(
+                        fragment_index,
+                        [start.endpoint, end.endpoint],
+                        *wraps_pcurve_seam,
+                    )),
+                )
+            }
+            SectionCurveFragmentSpan::Whole
+                if branch.topology() == SectionBranchTopology::Closed
+                    && matches!(branch.carrier(), SectionCarrier::Circle { .. }) =>
+            {
+                return Err(SectionDiskArrangementError::NonSeparatingCircularCut(
+                    fragment_index,
+                ));
+            }
+            _ => {
+                return Err(SectionDiskArrangementError::UnsupportedCapFragment(
+                    fragment_index,
+                ));
+            }
+        };
+        let [start, end] = bound;
         roots.extend([start, end]);
-        chords.push(CertifiedDiskChord::new(
-            fragment_index,
-            [start.endpoint, end.endpoint],
-        ));
+        cuts.push(cut);
     }
     let tolerance = tolerance_bits
         .map(f64::from_bits)
         .ok_or(SectionDiskArrangementError::MissingCapChord)?;
-    Ok((roots, chords, tolerance))
+    Ok((roots, cuts, tolerance))
+}
+
+fn require_one_closed_component(
+    graph: &BodySectionGraph,
+    fragment: usize,
+) -> Result<(), SectionDiskArrangementError> {
+    let mut uses = 0usize;
+    for component in graph.curve_components() {
+        let component_uses = component
+            .fragments()
+            .iter()
+            .filter(|&&candidate| candidate == fragment)
+            .count();
+        if component_uses != 0 && !component.closed() {
+            return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+                fragment,
+            ));
+        }
+        uses += component_uses;
+    }
+    if uses != 1 {
+        return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+            fragment,
+        ));
+    }
+    Ok(())
+}
+
+fn supports_simple_circular_cut(
+    branch: &SectionBranch,
+    ordinal: usize,
+    operand: usize,
+    endpoints: &[SectionCurveFragmentEnd; 2],
+) -> bool {
+    let SectionCarrier::Circle {
+        center,
+        normal,
+        x_direction,
+        radius,
+    } = branch.carrier()
+    else {
+        return false;
+    };
+    let SectionUvCurve::Circle(pcurve) = branch.pcurves()[operand] else {
+        return false;
+    };
+    let range = branch.range();
+    let parameters = endpoints.each_ref().map(|end| end.carrier_parameter());
+    let points = endpoints.each_ref().into_iter().flat_map(|end| {
+        let point = end.point();
+        [point.x, point.y, point.z]
+    });
+    let values = [
+        center.x,
+        center.y,
+        center.z,
+        normal.x,
+        normal.y,
+        normal.z,
+        x_direction.x,
+        x_direction.y,
+        x_direction.z,
+        radius,
+        range.lo,
+        range.hi,
+        pcurve.center().x,
+        pcurve.center().y,
+        pcurve.x_direction().x,
+        pcurve.x_direction().y,
+        pcurve.radius(),
+        pcurve.parameter_scale(),
+        pcurve.parameter_offset(),
+    ];
+    branch.topology() == SectionBranchTopology::Closed
+        && ordinal == 0
+        && values.into_iter().all(f64::is_finite)
+        && radius > 0.0
+        && pcurve.radius() > 0.0
+        && range.width() == core::f64::consts::TAU
+        && pcurve.parameter_scale().abs() == 1.0
+        && parameters.into_iter().all(f64::is_finite)
+        && parameters[0] != parameters[1]
+        && parameters
+            .into_iter()
+            .all(|parameter| range.contains(parameter))
+        && points.into_iter().all(f64::is_finite)
 }
 
 fn bind_section_cap_root(
@@ -721,6 +914,82 @@ fn bind_section_cap_root(
     })
 }
 
+fn bind_section_cap_arc_root(
+    graph: &BodySectionGraph,
+    end: &SectionCurveFragmentEnd,
+    fragment: usize,
+    cap: &FaceId,
+    opposing_face: &FaceId,
+    operand: usize,
+    topology: DiskCapTopology,
+) -> Result<UnorderedSectionRoot, SectionDiskArrangementError> {
+    let endpoint_index = end.endpoint();
+    let endpoint = graph.curve_endpoints().get(endpoint_index).ok_or(
+        SectionDiskArrangementError::MissingEndpoint {
+            fragment,
+            endpoint: endpoint_index,
+        },
+    )?;
+    let SectionCurveEndpointTopology::Trim {
+        sites,
+        source_parameters,
+    } = endpoint.topology()
+    else {
+        return Err(root_mismatch(fragment, endpoint_index));
+    };
+    let Some(source) = source_parameters[operand].as_ref() else {
+        return Err(root_mismatch(fragment, endpoint_index));
+    };
+    let trim = end.trim();
+    let Some(common) = endpoint.edge_parameters()[operand] else {
+        return Err(root_mismatch(fragment, endpoint_index));
+    };
+    let other = 1 - operand;
+    let enclosure = source.root_parameter_enclosure();
+    let observed = trim.edge_parameter();
+    let half_angle = trim.pcurve_half_angle();
+    let same_materialization = source == trim.source_parameter()
+        && source.root_parameter().to_bits() == trim.source_parameter().root_parameter().to_bits()
+        && enclosure.lo().to_bits()
+            == trim
+                .source_parameter()
+                .root_parameter_enclosure()
+                .lo()
+                .to_bits()
+        && enclosure.hi().to_bits()
+            == trim
+                .source_parameter()
+                .root_parameter_enclosure()
+                .hi()
+                .to_bits();
+    if !matches!(&sites[operand], SectionSite::EdgeInterior(edge) if edge.raw() == topology.edge)
+        || !matches!(&sites[other], SectionSite::FaceInterior(face) if face == opposing_face)
+        || source_parameters[other].is_some()
+        || endpoint.edge_parameters()[other].is_some()
+        || source.edge().raw() != topology.edge
+        || trim.operand() != operand
+        || trim.face() != cap.clone()
+        || trim.loop_id().raw() != topology.loop_id
+        || trim.fin().raw() != topology.fin
+        || trim.source_parameter().edge().raw() != topology.edge
+        || !same_materialization
+        || !common.contains(source.root_parameter())
+        || observed.lo() > common.lo()
+        || common.hi() > observed.hi()
+        || !half_angle.lo().is_finite()
+        || !half_angle.hi().is_finite()
+        || half_angle.lo() > half_angle.hi()
+    {
+        return Err(root_mismatch(fragment, endpoint_index));
+    }
+    Ok(UnorderedSectionRoot {
+        endpoint: endpoint_index,
+        source_root_ordinal: source.root_ordinal(),
+        parameter: source.root_parameter(),
+        enclosure: [enclosure.lo(), enclosure.hi()],
+    })
+}
+
 const fn root_mismatch(fragment: usize, endpoint: usize) -> SectionDiskArrangementError {
     SectionDiskArrangementError::EndpointProvenanceMismatch { fragment, endpoint }
 }
@@ -729,6 +998,19 @@ const fn root_mismatch(fragment: usize, endpoint: usize) -> SectionDiskArrangeme
 pub(crate) fn arrange_disk_face(
     boundary: CertifiedDiskBoundary,
     chords: impl IntoIterator<Item = CertifiedDiskChord>,
+) -> Result<ArrangedDiskFace, DiskArrangementError> {
+    arrange_disk_face_cuts(boundary, chords.into_iter().map(CertifiedDiskCut::Chord))
+}
+
+/// Arrange certified disk cuts after their geometry-specific embedding proof.
+///
+/// Chord sets retain the arbitrary noncrossing theorem.  Circular geometry is
+/// deliberately narrower: exactly one Section-certified simple arc and no
+/// other cut.  The latter is a topology theorem, not a catalog of lens
+/// placements.
+fn arrange_disk_face_cuts(
+    boundary: CertifiedDiskBoundary,
+    cuts: impl IntoIterator<Item = CertifiedDiskCut>,
 ) -> Result<ArrangedDiskFace, DiskArrangementError> {
     if boundary.coverage != DiskBoundaryCoverage::Complete {
         return Err(DiskArrangementError::PartialBoundaryEvidence);
@@ -755,9 +1037,9 @@ pub(crate) fn arrange_disk_face(
         }
     }
 
-    let mut chords = chords.into_iter().collect::<Vec<_>>();
-    chords.sort_by_key(|chord| chord.key);
-    validate_chords(&roots, &chords)?;
+    let mut cuts = cuts.into_iter().collect::<Vec<_>>();
+    cuts.sort_by_key(|cut| cut.key());
+    validate_cuts(&roots, &cuts)?;
 
     let source_arcs = build_source_arcs(boundary.edge, boundary.fin, boundary.sense, &roots);
     let source_spans = source_arcs
@@ -767,11 +1049,14 @@ pub(crate) fn arrange_disk_face(
             DirectedSourceSpan::new(arc.key, endpoints[0], endpoints[1])
         })
         .collect::<Vec<_>>();
-    let cut_fragments = chords
+    let cut_fragments = cuts
         .iter()
-        .map(|chord| DirectedCutFragment::new(chord.key, chord.endpoints[0], chord.endpoints[1]))
+        .map(|cut| {
+            let endpoints = cut.endpoints();
+            DirectedCutFragment::new(cut.key(), endpoints[0], endpoints[1])
+        })
         .collect::<Vec<_>>();
-    let rotations = build_rotations(&source_arcs, &chords);
+    let rotations = build_rotations(&source_arcs, &cuts);
     let arrangement = arrange_bounded_face(FaceArrangementInput::new(
         source_spans,
         cut_fragments,
@@ -779,15 +1064,15 @@ pub(crate) fn arrange_disk_face(
     ))
     .map_err(DiskArrangementError::Arrangement)?;
 
-    let expected_cells = chords
+    let expected_cells = cuts
         .len()
         .checked_add(1)
         .ok_or(DiskArrangementError::ConservationMismatch)?;
     let core = arrangement.proof();
     if core.source_spans_conserved() != roots.len()
-        || core.opposed_cut_pairs() != chords.len()
+        || core.opposed_cut_pairs() != cuts.len()
         || arrangement.cells().len() != expected_cells
-        || arrangement.adjacency().len() != chords.len()
+        || arrangement.adjacency().len() != cuts.len()
         || !core.dual_connected()
     {
         return Err(DiskArrangementError::ConservationMismatch);
@@ -795,7 +1080,7 @@ pub(crate) fn arrange_disk_face(
     let proof = DiskArrangementProof {
         roots_conserved: roots.len(),
         source_arcs_conserved: core.source_spans_conserved(),
-        opposed_chords: core.opposed_cut_pairs(),
+        opposed_cuts: core.opposed_cut_pairs(),
         cells: arrangement.cells().len(),
         dual_edges: arrangement.adjacency().len(),
         dual_connected: core.dual_connected(),
@@ -844,27 +1129,29 @@ fn validate_roots(roots: &[DiskBoundaryRootEvidence]) -> Result<(), DiskArrangem
     Ok(())
 }
 
-fn validate_chords(
+fn validate_cuts(
     roots: &[DiskBoundaryRootEvidence],
-    chords: &[CertifiedDiskChord],
+    cuts: &[CertifiedDiskCut],
 ) -> Result<(), DiskArrangementError> {
     let order = roots
         .iter()
         .map(|root| (root.key.endpoint, root.key.circular_ordinal))
         .collect::<BTreeMap<_, _>>();
-    let mut chord_keys = BTreeSet::new();
+    let mut cut_keys = BTreeSet::new();
     let mut incidence = BTreeMap::<usize, usize>::new();
-    for chord in chords {
-        if !chord_keys.insert(chord.key) {
-            return Err(DiskArrangementError::DuplicateChord(chord.key));
+    for cut in cuts {
+        let key = cut.key();
+        let endpoints = cut.endpoints();
+        if !cut_keys.insert(key) {
+            return Err(DiskArrangementError::DuplicateChord(key));
         }
-        if chord.endpoints[0] == chord.endpoints[1] {
-            return Err(DiskArrangementError::DegenerateChord(chord.key));
+        if endpoints[0] == endpoints[1] {
+            return Err(DiskArrangementError::DegenerateChord(key));
         }
-        for endpoint in chord.endpoints {
+        for endpoint in endpoints {
             if !order.contains_key(&endpoint) {
                 return Err(DiskArrangementError::UnknownChordEndpoint {
-                    chord: chord.key,
+                    chord: key,
                     endpoint,
                 });
             }
@@ -881,6 +1168,35 @@ fn validate_chords(
     {
         return Err(DiskArrangementError::UnpairedRoot(root.key.endpoint));
     }
+    let circular = cuts
+        .iter()
+        .filter_map(|cut| match cut {
+            CertifiedDiskCut::Circular(arc) => Some(*arc),
+            CertifiedDiskCut::Chord(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if circular.len() > 1 {
+        return Err(DiskArrangementError::MultipleCircularCuts);
+    }
+    if let Some(arc) = circular.first().copied() {
+        if cuts.len() != 1 {
+            return Err(DiskArrangementError::MixedCircularAndChordCuts);
+        }
+        if arc.topology == DiskCircularCutTopology::CoincidentBoundary {
+            return Err(DiskArrangementError::CoincidentCircularCut(arc.key));
+        }
+        if arc.wraps_pcurve_seam {
+            return Err(DiskArrangementError::CircularCutAtParameterSeam(arc.key));
+        }
+        return Ok(());
+    }
+    let chords = cuts
+        .iter()
+        .filter_map(|cut| match cut {
+            CertifiedDiskCut::Chord(chord) => Some(*chord),
+            CertifiedDiskCut::Circular(_) => None,
+        })
+        .collect::<Vec<_>>();
     for (left_index, left) in chords.iter().enumerate() {
         for right in &chords[(left_index + 1)..] {
             if chords_cross(*left, *right, &order) {
@@ -944,19 +1260,20 @@ fn build_source_arcs(
 
 fn build_rotations(
     arcs: &[DiskSourceArcLineage],
-    chords: &[CertifiedDiskChord],
+    cuts: &[CertifiedDiskCut],
 ) -> Vec<CertifiedEndpointRotation<DiskSourceArcKey, DiskChordKey, usize>> {
-    let outgoing = chords
+    let outgoing = cuts
         .iter()
-        .flat_map(|chord| {
+        .flat_map(|cut| {
+            let endpoints = cut.endpoints();
             [
                 (
-                    chord.endpoints[0],
-                    ArrangementDartKey::cut(chord.key, ArrangementDirection::Forward),
+                    endpoints[0],
+                    ArrangementDartKey::cut(cut.key(), ArrangementDirection::Forward),
                 ),
                 (
-                    chord.endpoints[1],
-                    ArrangementDartKey::cut(chord.key, ArrangementDirection::Reverse),
+                    endpoints[1],
+                    ArrangementDartKey::cut(cut.key(), ArrangementDirection::Reverse),
                 ),
             ]
         })
@@ -1140,6 +1457,19 @@ mod tests {
         CertifiedDiskChord::new(fragment, [100 + start, 100 + end])
     }
 
+    fn circular_cut(
+        fragment: usize,
+        start: usize,
+        end: usize,
+        wraps_pcurve_seam: bool,
+    ) -> CertifiedDiskCut {
+        CertifiedDiskCut::Circular(CertifiedDiskCircularCut::simple(
+            fragment,
+            [100 + start, 100 + end],
+            wraps_pcurve_seam,
+        ))
+    }
+
     fn source_signature(
         session: &Session,
         part_id: &PartId,
@@ -1211,6 +1541,127 @@ mod tests {
         let second =
             arrange_disk_face(permuted_boundary, [chord(11, 1, 2), chord(12, 0, 3)]).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn one_simple_circular_cut_proves_two_dual_cells_under_order_reversal() {
+        let forward_input = circular_cut(17, 0, 1, false);
+        let forward =
+            arrange_disk_face_cuts(boundary(2, DiskBoundaryCoverage::Complete), [forward_input])
+                .expect("one certified simple circular cut must partition the disk");
+        let replay =
+            arrange_disk_face_cuts(boundary(2, DiskBoundaryCoverage::Complete), [forward_input])
+                .unwrap();
+        assert_eq!(forward, replay);
+
+        let reversed = arrange_disk_face_cuts(
+            boundary(2, DiskBoundaryCoverage::Complete),
+            [circular_cut(17, 1, 0, false)],
+        )
+        .expect("reversing the certified arc orientation must retain two cells");
+        assert_eq!(forward.source_arcs(), reversed.source_arcs());
+        assert_eq!(forward.proof(), reversed.proof());
+        assert_eq!(forward.proof().roots_conserved(), 2);
+        assert_eq!(forward.proof().source_arcs_conserved(), 2);
+        assert_eq!(forward.proof().opposed_cuts(), 1);
+        assert_eq!(forward.proof().opposed_chords(), 1);
+        assert_eq!(forward.proof().cells(), 2);
+        assert_eq!(forward.proof().dual_edges(), 1);
+        assert!(forward.proof().dual_connected());
+        assert_eq!(
+            forward.arrangement().cut_fragments()[0].endpoints(),
+            [&100, &101]
+        );
+        assert_eq!(
+            reversed.arrangement().cut_fragments()[0].endpoints(),
+            [&101, &100]
+        );
+
+        for disk in [&forward, &reversed] {
+            let anchor = disk.source_arcs()[0].key();
+            let classified =
+                classify_disk_face_from_anchor(disk, anchor, DiskCellClassification::Exterior)
+                    .expect("the one-edge dual must classify both circular-cut cells");
+            assert_eq!(classified.classes().len(), 2);
+            assert_eq!(classified.dual_edges_checked(), 1);
+            assert_eq!(
+                classified
+                    .classes()
+                    .values()
+                    .filter(|&&class| class == DiskCellClassification::Interior)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                classified
+                    .classes()
+                    .values()
+                    .filter(|&&class| class == DiskCellClassification::Exterior)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn circular_cut_tangent_coincident_seam_and_branching_fail_closed() {
+        let mut tangent = boundary(2, DiskBoundaryCoverage::Complete);
+        let tangent_key = tangent.roots[0].key();
+        tangent.roots[0] = DiskBoundaryRootEvidence::with_contact(
+            tangent_key,
+            0.0,
+            [-0.125, 0.125],
+            DiskRootContact::Tangent,
+        );
+        assert_eq!(
+            arrange_disk_face_cuts(tangent, [circular_cut(1, 0, 1, false)]),
+            Err(DiskArrangementError::TangentialRoot(tangent_key))
+        );
+
+        let coincident =
+            CertifiedDiskCut::Circular(CertifiedDiskCircularCut::coincident(2, [100, 101]));
+        assert_eq!(
+            arrange_disk_face_cuts(boundary(2, DiskBoundaryCoverage::Complete), [coincident]),
+            Err(DiskArrangementError::CoincidentCircularCut(
+                DiskChordKey::new(2)
+            ))
+        );
+        assert_eq!(
+            arrange_disk_face_cuts(
+                boundary(2, DiskBoundaryCoverage::Complete),
+                [circular_cut(3, 0, 1, true)]
+            ),
+            Err(DiskArrangementError::CircularCutAtParameterSeam(
+                DiskChordKey::new(3)
+            ))
+        );
+        assert_eq!(
+            arrange_disk_face_cuts(
+                boundary(4, DiskBoundaryCoverage::Complete),
+                [
+                    circular_cut(4, 0, 1, false),
+                    CertifiedDiskCut::Chord(chord(5, 0, 2)),
+                ]
+            ),
+            Err(DiskArrangementError::BranchedRoot(100))
+        );
+        assert_eq!(
+            arrange_disk_face_cuts(
+                boundary(4, DiskBoundaryCoverage::Complete),
+                [circular_cut(6, 0, 1, false), circular_cut(7, 2, 3, false),]
+            ),
+            Err(DiskArrangementError::MultipleCircularCuts)
+        );
+        assert_eq!(
+            arrange_disk_face_cuts(
+                boundary(4, DiskBoundaryCoverage::Complete),
+                [
+                    circular_cut(8, 0, 1, false),
+                    CertifiedDiskCut::Chord(chord(9, 2, 3)),
+                ]
+            ),
+            Err(DiskArrangementError::MixedCircularAndChordCuts)
+        );
     }
 
     #[test]
@@ -1346,6 +1797,139 @@ mod tests {
         assert_eq!(disk.source_arcs()[3].period_shifts(), [1, 0]);
         let intrinsic_wrap = disk.source_arcs()[3].period_shifts();
         assert_eq!([intrinsic_wrap[1], intrinsic_wrap[0]], [0, 1]);
+    }
+
+    #[test]
+    fn section_adapter_arranges_parallel_cylinder_cap_arcs_deterministically_in_both_orders() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (long, short) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let long = edit
+                .create_cylinder(CylinderRequest::new(
+                    Frame::world().with_origin(Point3::new(-0.5, 0.0, -2.0)),
+                    1.0,
+                    4.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let short = edit
+                .create_cylinder(CylinderRequest::new(
+                    Frame::world().with_origin(Point3::new(0.5, 0.0, -1.0)),
+                    1.0,
+                    2.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (long, short)
+        };
+        let sources = [long.clone(), short.clone()];
+        let before = source_signature(&session, &part_id, &sources);
+        let section = |left: BodyId, right: BodyId| {
+            session
+                .part(part_id.clone())
+                .unwrap()
+                .section_bodies(SectionBodiesRequest::new(left, right))
+                .unwrap()
+                .into_result()
+                .unwrap()
+        };
+        let forward = section(long.clone(), short.clone());
+        let replay = section(long.clone(), short.clone());
+        let reversed = section(short.clone(), long.clone());
+        assert_eq!(forward, replay);
+
+        let part = session.part(part_id.clone()).unwrap();
+        let store = &part.state.store;
+        let caps = store
+            .faces_of_body(short.raw())
+            .unwrap()
+            .into_iter()
+            .filter(|face| {
+                store.get(*face).ok().is_some_and(|face| {
+                    matches!(store.surface(face.surface()), Ok(SurfaceGeom::Plane(_)))
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(caps.len(), 2);
+
+        for raw_cap in caps {
+            let cap = FaceId::new(part_id.clone(), raw_cap);
+            let forward_disk = arrange_section_disk_face(store, &forward, &cap, 1)
+                .expect("forward Cylinder/Cylinder cap arc must arrange");
+            let replay_disk = arrange_section_disk_face(store, &replay, &cap, 1).unwrap();
+            let reversed_disk = arrange_section_disk_face(store, &reversed, &cap, 0)
+                .expect("operand-reversed Cylinder/Cylinder cap arc must arrange");
+            assert_eq!(forward_disk, replay_disk);
+
+            for disk in [&forward_disk, &reversed_disk] {
+                assert_eq!(disk.proof().roots_conserved(), 2);
+                assert_eq!(disk.proof().source_arcs_conserved(), 2);
+                assert_eq!(disk.proof().opposed_cuts(), 1);
+                assert_eq!(disk.proof().cells(), 2);
+                assert_eq!(disk.proof().dual_edges(), 1);
+                assert!(disk.proof().dual_connected());
+                let classified = classify_disk_face_from_anchor(
+                    disk,
+                    disk.source_arcs()[0].key(),
+                    DiskCellClassification::Exterior,
+                )
+                .expect("the cap arc dual must classify both cells");
+                assert_eq!(classified.classes().len(), 2);
+                assert_ne!(
+                    classified.classes()[&disk.arrangement().adjacency()[0].forward_cell()],
+                    classified.classes()[&disk.arrangement().adjacency()[0].reverse_cell()]
+                );
+            }
+
+            let arc_points = |graph: &BodySectionGraph, disk: &ArrangedDiskFace| {
+                let fragment = disk.arrangement().cut_fragments()[0].key().fragment();
+                let SectionCurveFragmentSpan::Arc {
+                    endpoints,
+                    wraps_pcurve_seam,
+                } = graph.curve_fragments()[fragment].span()
+                else {
+                    panic!("disk circular cut lost its Section arc lineage")
+                };
+                assert!(!wraps_pcurve_seam);
+                [endpoints[0].point(), endpoints[1].point()]
+            };
+            let forward_points = arc_points(&forward, &forward_disk);
+            let reversed_points = arc_points(&reversed, &reversed_disk);
+            assert!(forward_points[0].dist(reversed_points[1]) <= 1.0e-12);
+            assert!(forward_points[1].dist(reversed_points[0]) <= 1.0e-12);
+
+            let topology = disk_cap_topology(store, raw_cap).unwrap();
+            for (graph, disk, operand) in [
+                (&forward, &forward_disk, 1usize),
+                (&reversed, &reversed_disk, 0usize),
+            ] {
+                for arc in disk.source_arcs() {
+                    assert_eq!(arc.edge(), topology.edge);
+                    assert_eq!(arc.fin(), topology.fin);
+                    assert_eq!(arc.key().sense(), topology.sense);
+                    for root in arc.roots() {
+                        let SectionCurveEndpointTopology::Trim {
+                            source_parameters, ..
+                        } = graph.curve_endpoints()[root.key().endpoint()].topology()
+                        else {
+                            panic!("cap arc root lost physical trim topology")
+                        };
+                        let source = source_parameters[operand].as_ref().unwrap();
+                        assert_eq!(root.key().source_root_ordinal(), source.root_ordinal());
+                        assert_eq!(
+                            root.root_parameter().to_bits(),
+                            source.root_parameter().to_bits()
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(source_signature(&session, &part_id, &sources), before);
     }
 
     #[test]
