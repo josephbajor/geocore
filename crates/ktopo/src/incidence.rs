@@ -107,6 +107,46 @@ fn edge_range(bounds: Option<(f64, f64)>) -> core::result::Result<ParamRange, Pc
     }
 }
 
+/// Recover one endpoint-free fin's authored logical seam without inventing
+/// physical edge bounds. A closed periodic carrier has no distinguished
+/// endpoint, so each fin may choose a translated full-period window; its
+/// invertible parameter map and declared pcurve range are the authority.
+fn endpoint_free_logical_range(
+    curve: &dyn Curve,
+    pcurve_use: FinPcurve,
+) -> core::result::Result<ParamRange, PcurveIssue> {
+    let natural = curve.param_range();
+    let period = curve.periodicity().ok_or(PcurveIssue::BadRange)?;
+    if !natural.is_finite()
+        || natural.lo >= natural.hi
+        || !period.is_finite()
+        || period <= 0.0
+        || natural.width() != period
+        || pcurve_use.closure_winding().is_none()
+    {
+        return Err(PcurveIssue::BadRange);
+    }
+    let pcurve_range = pcurve_use.range();
+    let map = pcurve_use.edge_to_pcurve();
+    let endpoints = [map.inverse(pcurve_range.lo), map.inverse(pcurve_range.hi)];
+    let range = ParamRange::new(
+        endpoints[0].min(endpoints[1]),
+        endpoints[0].max(endpoints[1]),
+    );
+    let mapped = [map.map(range.lo), map.map(range.hi)];
+    if !range.is_finite()
+        || range.lo >= range.hi
+        || range.width() != period
+        || !mapped[0].is_finite()
+        || !mapped[1].is_finite()
+        || !parameter_close(mapped[0].min(mapped[1]), pcurve_range.lo)
+        || !parameter_close(mapped[0].max(mapped[1]), pcurve_range.hi)
+    {
+        return Err(PcurveIssue::BadRange);
+    }
+    Ok(range)
+}
+
 fn parameter_slack(a: f64, b: f64) -> f64 {
     256.0 * f64::EPSILON * (1.0 + a.abs().max(b.abs()))
 }
@@ -325,15 +365,11 @@ fn check_pcurve_metadata_resolved(
         Some(_) => return Err(PcurveIssue::BadRange),
         None => {
             let curve_id = edge.curve.ok_or(PcurveIssue::BadRange)?;
-            let range = store
+            let curve = store
                 .get(curve_id)
                 .map_err(|_| PcurveIssue::StaleReference)?
-                .as_curve()
-                .param_range();
-            if !range.is_finite() || range.lo >= range.hi {
-                return Err(PcurveIssue::BadRange);
-            }
-            range
+                .as_curve();
+            endpoint_free_logical_range(curve, pcurve_use)?
         }
     };
     let endpoints = [
@@ -455,27 +491,10 @@ pub(crate) fn check_pcurve_incidence(
             check_pcurve_parameterization(store, bounds, pcurve_use)?;
             edge_range(bounds)?
         }
-        None => {
-            let range = curve.param_range();
-            if !range.is_finite() || range.lo >= range.hi {
-                return Err(PcurveIssue::BadRange);
-            }
-            range
-        }
+        None => endpoint_free_logical_range(curve, pcurve_use)?,
     };
 
     let pcurve_range = pcurve_use.range();
-    if bounds.is_none() {
-        let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
-        let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
-        if !q0.is_finite()
-            || !q1.is_finite()
-            || !parameter_close(q0.min(q1), pcurve_range.lo)
-            || !parameter_close(q0.max(q1), pcurve_range.hi)
-        {
-            return Err(PcurveIssue::BadRange);
-        }
-    }
 
     let pcurve_geometry = store
         .get(pcurve_use.curve())
@@ -534,27 +553,10 @@ pub(crate) fn check_pcurve_incidence_contextual(
             check_pcurve_parameterization(store, bounds, pcurve_use)?;
             edge_range(bounds)?
         }
-        None => {
-            let range = curve.param_range();
-            if !range.is_finite() || range.lo >= range.hi {
-                return Err(PcurveIssue::BadRange.into());
-            }
-            range
-        }
+        None => endpoint_free_logical_range(curve, pcurve_use)?,
     };
 
     let pcurve_range = pcurve_use.range();
-    if bounds.is_none() {
-        let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
-        let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
-        if !q0.is_finite()
-            || !q1.is_finite()
-            || !parameter_close(q0.min(q1), pcurve_range.lo)
-            || !parameter_close(q0.max(q1), pcurve_range.hi)
-        {
-            return Err(PcurveIssue::BadRange.into());
-        }
-    }
 
     let pcurve_geometry = store
         .get(pcurve_use.curve())

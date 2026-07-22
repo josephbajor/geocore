@@ -254,6 +254,8 @@ pub(crate) enum MixedShellMaterializationError {
     UnsupportedSourceSurface,
     UnsupportedPcurve,
     InvalidAnalyticGeometry,
+    InvalidEndpointFreePeriodicUse,
+    NoCommonPeriodicWindow,
     PeriodShiftOverflow,
     MissingSourceDomain,
     ComponentFaceUnavailable(usize),
@@ -686,6 +688,97 @@ fn add_physical_use(
     }
 }
 
+fn periodic_face_window_work(
+    use_count: usize,
+    bounded_count: usize,
+    endpoint_free_count: usize,
+) -> Option<u64> {
+    let uses = u64::try_from(use_count).ok()?;
+    let bounded = u64::try_from(bounded_count).ok()?;
+    let endpoint_free = u64::try_from(endpoint_free_count).ok()?;
+    // Per-use pcurve/bounds construction outside identity lookup is bounded
+    // by 8U. Two endpoint sorts and all candidate-by-interval containment tests
+    // are bounded by 12B²; endpoint canonicalization and candidate creation by
+    // 16B; ring validation by 4R. The constant covers window selection.
+    bounded
+        .checked_mul(bounded)?
+        .checked_mul(12)?
+        .checked_add(bounded.checked_mul(16)?)?
+        .checked_add(uses.checked_mul(8)?)?
+        .checked_add(endpoint_free.checked_mul(4)?)?
+        .checked_add(1)
+}
+
+fn periodic_window_application_work(edge_count: usize, endpoint_free_edges: usize) -> Option<u64> {
+    let edges = u64::try_from(edge_count).ok()?;
+    let rings = u64::try_from(endpoint_free_edges).ok()?;
+    // Applying selected windows scans all E edge slots. Each of the R shifted
+    // rings then searches at most R closed declarations by stable key.
+    edges.checked_add(rings.checked_mul(rings)?)
+}
+
+fn periodic_window_work(
+    plan: &MixedShellProofPlan,
+    physical_edges: &[PhysicalEdge],
+) -> Option<u64> {
+    let edge_count = physical_edges.len();
+    let endpoint_free_edges = physical_edges
+        .iter()
+        .filter(|edge| edge.endpoints.is_none())
+        .count();
+    let mut work = periodic_window_application_work(edge_count, endpoint_free_edges)?;
+    let mut total_uses = 0_usize;
+    let mut planar_uses = 0_usize;
+    let mut section_uses = 0_usize;
+    let mut endpoint_free_uses = 0_usize;
+    for face in plan.faces() {
+        let mut uses = 0_usize;
+        let mut bounded = 0_usize;
+        let mut endpoint_free = 0_usize;
+        for use_ in face.loops().iter().flat_map(|loop_| loop_.uses()) {
+            uses = uses.checked_add(1)?;
+            match use_.edge() {
+                MixedShellEdgeKey::PlanarSource { .. } => {
+                    planar_uses = planar_uses.checked_add(1)?;
+                    bounded = bounded.checked_add(1)?;
+                }
+                MixedShellEdgeKey::SectionFragment(_) => {
+                    section_uses = section_uses.checked_add(1)?;
+                    bounded = bounded.checked_add(1)?;
+                }
+                MixedShellEdgeKey::PeriodicSource { .. } => {
+                    endpoint_free_uses = endpoint_free_uses.checked_add(1)?;
+                    endpoint_free = endpoint_free.checked_add(1)?;
+                }
+            }
+        }
+        total_uses = total_uses.checked_add(uses)?;
+        // Every face pays for the initial endpoint-free detection scan. Plane
+        // caps stop after this scan; periodic faces continue under the ceiling.
+        work = work.checked_add(u64::try_from(uses).ok()?)?;
+        if endpoint_free != 0 {
+            work = work.checked_add(periodic_face_window_work(uses, bounded, endpoint_free)?)?;
+        }
+    }
+    let uses = u64::try_from(total_uses).ok()?;
+    let edges = u64::try_from(edge_count).ok()?;
+    let planar = u64::try_from(planar_uses).ok()?;
+    let retained_spans = u64::try_from(plan.materialization.source_spans.len()).ok()?;
+    let section = u64::try_from(section_uses).ok()?;
+    let section_edges = u64::try_from(plan.section_edges.len()).ok()?;
+    let endpoint_free = u64::try_from(endpoint_free_uses).ok()?;
+    let cap_rings = u64::try_from(plan.cap_rings().len()).ok()?;
+    // Every use resolves its physical edge by scanning E edges and their two
+    // uses. Lineage resolution then scans the relevant retained source spans,
+    // section edges, or endpoint-free cap-ring bindings.
+    work = work
+        .checked_add(uses.checked_mul(edges)?.checked_mul(2)?)?
+        .checked_add(planar.checked_mul(retained_spans)?)?
+        .checked_add(section.checked_mul(section_edges)?)?
+        .checked_add(endpoint_free.checked_mul(cap_rings)?)?;
+    Some(work)
+}
+
 fn endpoint_free_ring(
     plan: &MixedShellProofPlan,
     source: MixedSourceFaceKey,
@@ -916,11 +1009,16 @@ pub(crate) fn prepare_mixed_shell_materialization(
             return Err(MixedShellMaterializationError::SelfAdjacentEdge(index));
         }
     }
-    let work = u64::try_from(plan.faces.len())
+    let base_work = u64::try_from(plan.faces.len())
         .ok()
         .and_then(|value| value.checked_add(u64::try_from(edges.len()).ok()?))
         .and_then(|value| value.checked_add(u64::try_from(planar_use_count).ok()?))
         .and_then(|value| value.checked_add(u64::try_from(plan.section_edges.len()).ok()?))
+        .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
+    let periodic_window_work = periodic_window_work(plan, &edges)
+        .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
+    let work = base_work
+        .checked_add(periodic_window_work)
         .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
     Ok(MixedShellMaterializationBlueprint {
         edges,
@@ -1201,9 +1299,151 @@ fn pcurve_bounds(
     Ok((min, max))
 }
 
+fn periodic_interval_shift(
+    period: f64,
+    window: ParamRange,
+    interval: (f64, f64),
+) -> Result<i32, MixedShellMaterializationError> {
+    let (min, max) = interval;
+    if !period.is_finite()
+        || period <= 0.0
+        || !window.is_finite()
+        || window.lo >= window.hi
+        || window.width() != period
+        || !min.is_finite()
+        || !max.is_finite()
+        || min > max
+    {
+        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
+    }
+    let epsilon = 256.0
+        * f64::EPSILON
+        * window
+            .lo
+            .abs()
+            .max(window.hi.abs())
+            .max(min.abs())
+            .max(max.abs())
+            .max(period)
+            .max(1.0);
+    if max - min > period + epsilon {
+        return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
+    }
+    let delta_value = ((window.lo - min - epsilon) / period).ceil();
+    if !delta_value.is_finite()
+        || delta_value < f64::from(i32::MIN)
+        || delta_value > f64::from(i32::MAX)
+    {
+        return Err(MixedShellMaterializationError::PeriodShiftOverflow);
+    }
+    let delta = delta_value as i32;
+    let shifted_min = min + f64::from(delta) * period;
+    let shifted_max = max + f64::from(delta) * period;
+    if !shifted_min.is_finite()
+        || !shifted_max.is_finite()
+        || shifted_min < window.lo - epsilon
+        || shifted_max > window.hi + epsilon
+    {
+        return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
+    }
+    Ok(delta)
+}
+
+fn exact_period_window(lo: f64, period: f64) -> Option<ParamRange> {
+    let hi = lo + period;
+    (lo.is_finite() && hi.is_finite() && hi > lo && hi - lo == period)
+        .then_some(ParamRange::new(lo, hi))
+}
+
+fn centered_exact_period_window(seam: f64, period: f64) -> Option<ParamRange> {
+    let turns = (-seam / period).round();
+    if !turns.is_finite() {
+        return None;
+    }
+    exact_period_window(seam + turns * period, period)
+}
+
+fn canonical_periodic_seam(value: f64, origin: f64, period: f64) -> Option<f64> {
+    let turns = ((value - origin) / period).floor();
+    if !turns.is_finite() {
+        return None;
+    }
+    let mut seam = value - turns * period;
+    let upper = origin + period;
+    if seam < origin {
+        seam += period;
+    } else if seam >= upper {
+        seam -= period;
+    }
+    seam.is_finite().then_some(seam)
+}
+
+fn select_common_periodic_window(
+    period: f64,
+    authored: ParamRange,
+    intervals: &[(f64, f64)],
+) -> Result<ParamRange, MixedShellMaterializationError> {
+    if !period.is_finite()
+        || period <= 0.0
+        || !authored.is_finite()
+        || authored.lo >= authored.hi
+        || authored.width() != period
+    {
+        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
+    }
+    if intervals
+        .iter()
+        .all(|interval| periodic_interval_shift(period, authored, *interval).is_ok())
+    {
+        return Ok(authored);
+    }
+
+    let mut seams = intervals
+        .iter()
+        .flat_map(|&(lo, hi)| [lo, hi])
+        .map(|value| {
+            canonical_periodic_seam(value, authored.lo, period)
+                .ok_or(MixedShellMaterializationError::InvalidAnalyticGeometry)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    seams.sort_by(f64::total_cmp);
+    seams.dedup_by(|left, right| left.to_bits() == right.to_bits());
+    let mut interior_candidates = Vec::new();
+    if seams.len() == 1 {
+        interior_candidates.push(seams[0] + period / 2.0);
+    } else if seams.len() > 1 {
+        interior_candidates.extend(
+            seams
+                .windows(2)
+                .map(|pair| pair[0] + (pair[1] - pair[0]) / 2.0),
+        );
+        let wrap_hi = seams[0] + period;
+        interior_candidates.push(seams[seams.len() - 1] + (wrap_hi - seams[seams.len() - 1]) / 2.0);
+    }
+    interior_candidates.sort_by(f64::total_cmp);
+    interior_candidates.dedup_by(|left, right| left.to_bits() == right.to_bits());
+    // Prefer a seam in a certified open complement gap. Endpoint seams remain
+    // a deterministic fallback because closed interval containment proves no
+    // bounded pcurve crosses that face-chart boundary.
+    for candidates in [&interior_candidates, &seams] {
+        for &candidate in candidates {
+            let Some(window) = centered_exact_period_window(candidate, period) else {
+                continue;
+            };
+            if intervals
+                .iter()
+                .all(|interval| periodic_interval_shift(period, window, *interval).is_ok())
+            {
+                return Ok(window);
+            }
+        }
+    }
+    Err(MixedShellMaterializationError::NoCommonPeriodicWindow)
+}
+
 fn normalize_periodic_pcurve_chart(
     surface: AnalyticShellSurface,
-    domain: ktopo::entity::FaceDomain,
+    window: ParamRange,
     pcurve: AnalyticPcurveUse,
     edge_range: ParamRange,
 ) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
@@ -1213,38 +1453,8 @@ fn normalize_periodic_pcurve_chart(
     let Some(period) = surface_periodicity(surface)[0] else {
         return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
     };
-    if !period.is_finite()
-        || period <= 0.0
-        || !domain.u.is_finite()
-        || domain.u.width() > period + 128.0 * f64::EPSILON * period.max(1.0)
-    {
-        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
-    }
     let (min, max) = pcurve_bounds(surface, pcurve, edge_range)?;
-    let epsilon = 256.0
-        * f64::EPSILON
-        * domain
-            .u
-            .lo
-            .abs()
-            .max(domain.u.hi.abs())
-            .max(min.x.abs())
-            .max(max.x.abs())
-            .max(period)
-            .max(1.0);
-    let delta_value = ((domain.u.lo - min.x - epsilon) / period).ceil();
-    if !delta_value.is_finite()
-        || delta_value < f64::from(i32::MIN)
-        || delta_value > f64::from(i32::MAX)
-    {
-        return Err(MixedShellMaterializationError::PeriodShiftOverflow);
-    }
-    let delta = delta_value as i32;
-    let shifted_min = min.x + f64::from(delta) * period;
-    let shifted_max = max.x + f64::from(delta) * period;
-    if shifted_min < domain.u.lo - epsilon || shifted_max > domain.u.hi + epsilon {
-        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
-    }
+    let delta = periodic_interval_shift(period, window, (min.x, max.x))?;
     let [u, v] = pcurve.chart().period_shifts();
     let u = u
         .checked_add(delta)
@@ -1283,6 +1493,155 @@ fn physical_edge_for_use(
                 .map(|use_| (edge_index, edge, use_))
         })
         .ok_or(MixedShellMaterializationError::PlanVertexMismatch)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialized_pcurve_for_use(
+    plan: &MixedShellProofPlan,
+    store: &Store,
+    face_index: usize,
+    loop_index: usize,
+    use_index: usize,
+    use_: &super::MixedShellEdgeUse,
+    physical: &PhysicalEdge,
+) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
+    match use_.edge() {
+        MixedShellEdgeKey::PlanarSource { source, span } => {
+            let retained = retained_span(plan, *source, span)
+                .ok_or(MixedShellMaterializationError::MissingPlanarLineage)?;
+            source_pcurve(store, retained)
+        }
+        MixedShellEdgeKey::SectionFragment(fragment) => {
+            section_pcurve(section_edge(plan, *fragment)?, use_.pcurve())
+        }
+        MixedShellEdgeKey::PeriodicSource { source, loop_key } => {
+            let (raw_edge, raw_fin) = validate_periodic_source_use(
+                plan, store, face_index, loop_index, use_index, *source, *loop_key,
+            )?;
+            if physical.carrier != PhysicalCarrier::Source(raw_edge) || physical.endpoints.is_some()
+            {
+                return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+            }
+            let fin = store
+                .get(raw_fin)
+                .map_err(|_| MixedShellMaterializationError::StoreRead)?;
+            source_pcurve_for_fin(store, fin, true)
+        }
+    }
+}
+
+fn validate_endpoint_free_periodic_use(
+    surface: AnalyticShellSurface,
+    pcurve: AnalyticPcurveUse,
+    edge_range: ParamRange,
+) -> Result<(), MixedShellMaterializationError> {
+    let AnalyticShellSurface::Cylinder(cylinder) = surface else {
+        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
+    };
+    let Some(period) = cylinder.periodicity()[0] else {
+        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
+    };
+    let AnalyticShellPcurve::Line(line) = pcurve.curve() else {
+        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
+    };
+    let Some([winding @ (-1 | 1), 0]) = pcurve.closure_winding() else {
+        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
+    };
+    let map = pcurve.edge_to_pcurve();
+    let delta = line.dir() * (map.scale() * edge_range.width());
+    if !edge_range.is_finite()
+        || edge_range.lo >= edge_range.hi
+        || edge_range.width() != period
+        || !map.scale().is_finite()
+        || !map.offset().is_finite()
+        || line.dir().y != 0.0
+        || delta.y != 0.0
+        || delta.x != f64::from(winding) * period
+    {
+        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
+    }
+    let normalized = normalize_periodic_pcurve_chart(surface, edge_range, pcurve, edge_range)?;
+    let (min, max) = pcurve_bounds(surface, normalized, edge_range)?;
+    if periodic_interval_shift(period, edge_range, (min.x, max.x))? != 0 {
+        return Err(MixedShellMaterializationError::InvalidEndpointFreePeriodicUse);
+    }
+    Ok(())
+}
+
+fn prepare_periodic_face_windows(
+    plan: &MixedShellProofPlan,
+    blueprint: &MixedShellMaterializationBlueprint,
+    store: &Store,
+    closed_edges: &mut [AnalyticShellClosedEdge],
+    edge_ranges: &mut [ParamRange],
+) -> Result<Vec<Option<ParamRange>>, MixedShellMaterializationError> {
+    let mut face_windows = vec![None; plan.faces.len()];
+    let mut edge_windows = vec![None; blueprint.edges.len()];
+    for (face_index, face) in plan.faces.iter().enumerate() {
+        let (surface, _, source_domain) = source_face_geometry(face, store)?;
+        let AnalyticShellSurface::Cylinder(cylinder) = surface else {
+            continue;
+        };
+        let Some(period) = cylinder.periodicity()[0] else {
+            return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
+        };
+        let mut bounded_intervals = Vec::new();
+        let mut endpoint_free_uses = Vec::new();
+        for (loop_index, loop_) in face.loops().iter().enumerate() {
+            for (use_index, use_) in loop_.uses().iter().enumerate() {
+                let location = PhysicalUse {
+                    face: face_index,
+                    loop_index,
+                    use_index,
+                    forward: false,
+                };
+                let (edge_index, physical, _) = physical_edge_for_use(blueprint, location)?;
+                let pcurve = materialized_pcurve_for_use(
+                    plan, store, face_index, loop_index, use_index, use_, physical,
+                )?;
+                if physical.endpoints.is_none() {
+                    endpoint_free_uses.push((edge_index, pcurve));
+                } else {
+                    let (min, max) = pcurve_bounds(surface, pcurve, edge_ranges[edge_index])?;
+                    bounded_intervals.push((min.x, max.x));
+                }
+            }
+        }
+        if endpoint_free_uses.is_empty() {
+            continue;
+        }
+        let window = select_common_periodic_window(period, source_domain.u, &bounded_intervals)?;
+        for (edge_index, pcurve) in endpoint_free_uses {
+            validate_endpoint_free_periodic_use(surface, pcurve, window)?;
+            if let Some(existing) = edge_windows[edge_index]
+                && existing != window
+            {
+                return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
+            }
+            edge_windows[edge_index] = Some(window);
+        }
+        face_windows[face_index] = Some(window);
+    }
+
+    for (edge_index, window) in edge_windows.into_iter().enumerate() {
+        let Some(window) = window else {
+            continue;
+        };
+        let key = u64::try_from(edge_index)
+            .map(AnalyticEdgeKey::new)
+            .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)?;
+        let declaration = closed_edges
+            .iter_mut()
+            .find(|edge| edge.key() == key)
+            .ok_or(MixedShellMaterializationError::EndpointFreeSourceRingMismatch)?;
+        let mut shifted = AnalyticShellClosedEdge::new(key, declaration.carrier(), window);
+        if let Some(source) = declaration.source() {
+            shifted = shifted.with_source(source);
+        }
+        *declaration = shifted;
+        edge_ranges[edge_index] = window;
+    }
+    Ok(face_windows)
 }
 
 /// Complete exact scalar evidence into a fully preflighted analytic-shell
@@ -1391,6 +1750,14 @@ fn build_mixed_shell_input_from_blueprint(
         ));
     }
 
+    let periodic_face_windows = prepare_periodic_face_windows(
+        plan,
+        blueprint,
+        store,
+        &mut analytic_closed_edges,
+        &mut analytic_edge_ranges,
+    )?;
+
     let analytic_vertices = retained_vertices
         .iter()
         .enumerate()
@@ -1409,6 +1776,7 @@ fn build_mixed_shell_input_from_blueprint(
             .iter()
             .flat_map(|loop_| loop_.uses())
             .any(|use_| matches!(use_.edge(), MixedShellEdgeKey::PeriodicSource { .. }));
+        let periodic_window = periodic_face_windows[face_index].unwrap_or(source_domain.u);
         let mut derived_bounds = None;
         let mut loops = Vec::with_capacity(face.loops().len());
         for (loop_index, loop_) in face.loops().iter().enumerate() {
@@ -1425,36 +1793,13 @@ fn build_mixed_shell_input_from_blueprint(
                 let edge_key = u64::try_from(edge_index)
                     .map(AnalyticEdgeKey::new)
                     .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)?;
-                let pcurve = match use_.edge() {
-                    MixedShellEdgeKey::PlanarSource { source, span } => {
-                        let retained = retained_span(plan, *source, span)
-                            .ok_or(MixedShellMaterializationError::MissingPlanarLineage)?;
-                        source_pcurve(store, retained)?
-                    }
-                    MixedShellEdgeKey::SectionFragment(fragment) => {
-                        section_pcurve(section_edge(plan, *fragment)?, use_.pcurve())?
-                    }
-                    MixedShellEdgeKey::PeriodicSource { source, loop_key } => {
-                        let (raw_edge, raw_fin) = validate_periodic_source_use(
-                            plan, store, face_index, loop_index, use_index, *source, *loop_key,
-                        )?;
-                        if physical.carrier != PhysicalCarrier::Source(raw_edge)
-                            || physical.endpoints.is_some()
-                        {
-                            return Err(
-                                MixedShellMaterializationError::EndpointFreeSourceRingMismatch,
-                            );
-                        }
-                        let fin = store
-                            .get(raw_fin)
-                            .map_err(|_| MixedShellMaterializationError::StoreRead)?;
-                        source_pcurve_for_fin(store, fin, true)?
-                    }
-                };
+                let pcurve = materialized_pcurve_for_use(
+                    plan, store, face_index, loop_index, use_index, use_, physical,
+                )?;
                 let pcurve = if contains_endpoint_free_ring {
                     normalize_periodic_pcurve_chart(
                         surface,
-                        source_domain,
+                        periodic_window,
                         pcurve,
                         analytic_edge_ranges[edge_index],
                     )?

@@ -288,8 +288,8 @@ impl AnalyticShellEdge {
 /// One endpoint-free analytic circle shared by exactly two face uses.
 ///
 /// `logical_range` is certification-only. Assembly emits no edge bounds and
-/// no physical vertices; the range must equal the carrier's canonical full
-/// period exactly.
+/// no physical vertices; the range may rotate the carrier's parameter seam,
+/// but must retain exactly one canonical full period.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AnalyticShellClosedEdge {
     key: AnalyticEdgeKey,
@@ -299,7 +299,7 @@ pub struct AnalyticShellClosedEdge {
 }
 
 impl AnalyticShellClosedEdge {
-    /// Describe an endpoint-free candidate over one canonical logical period.
+    /// Describe an endpoint-free candidate over one full logical period.
     pub const fn new(
         key: AnalyticEdgeKey,
         carrier: AnalyticShellCurve,
@@ -329,7 +329,7 @@ impl AnalyticShellClosedEdge {
         self.carrier
     }
 
-    /// Canonical full-period range used only by analytic certificates.
+    /// Full-period range used only by analytic certificates.
     pub const fn logical_range(self) -> ParamRange {
         self.logical_range
     }
@@ -1023,7 +1023,10 @@ fn prepare_closed_edges(
             return Err(AnalyticShellPlanError::ClosedEdgeRequiresCircle(edge.key));
         };
         let canonical = circle.param_range();
-        if edge.logical_range != canonical {
+        if !edge.logical_range.is_finite()
+            || edge.logical_range.lo >= edge.logical_range.hi
+            || edge.logical_range.width() != canonical.width()
+        {
             return Err(AnalyticShellPlanError::ClosedEdgeRequiresCanonicalPeriod(
                 edge.key,
             ));
@@ -1911,6 +1914,26 @@ pub(crate) mod tests {
         AnalyticShellInput::new(Vec::new(), Vec::new(), faces).with_closed_edges(closed_edges)
     }
 
+    pub(crate) fn shifted_full_cylinder_input() -> AnalyticShellInput {
+        let mut input = full_cylinder_input();
+        let shifted = ParamRange::new(
+            core::f64::consts::PI / 3.0,
+            7.0 * core::f64::consts::PI / 3.0,
+        );
+        assert_eq!(shifted.width(), core::f64::consts::TAU);
+        for edge in &mut input.closed_edges {
+            edge.logical_range = shifted;
+        }
+        input.faces[0].domain = FaceDomain::from_bounds(
+            shifted.lo,
+            shifted.hi,
+            input.faces[0].domain.v.lo,
+            input.faces[0].domain.v.hi,
+        )
+        .unwrap();
+        input
+    }
+
     #[test]
     fn endpoint_free_full_cylinder_preflights_without_synthetic_vertices() {
         let input = full_cylinder_input();
@@ -1923,6 +1946,20 @@ pub(crate) mod tests {
                 .closed_edges()
                 .iter()
                 .all(|edge| matches!(edge.proof(), AnalyticEdgeProof::PlaneCylinderCircle(_)))
+        );
+    }
+
+    #[test]
+    fn endpoint_free_full_cylinder_accepts_an_exact_shifted_period() {
+        let input = shifted_full_cylinder_input();
+        let shifted = input.closed_edges[0].logical_range;
+
+        let prepared = prepare_analytic_shell(&input, &Store::new(), 1.0e-12).unwrap();
+        assert!(
+            prepared
+                .closed_edges()
+                .iter()
+                .all(|edge| edge.edge().logical_range() == shifted)
         );
     }
 
@@ -1943,6 +1980,18 @@ pub(crate) mod tests {
         partial.closed_edges[0].logical_range = ParamRange::new(0.0, core::f64::consts::PI);
         assert_eq!(
             prepare_analytic_shell(&partial, &store, 1.0e-12),
+            Err(AnalyticShellPlanError::ClosedEdgeRequiresCanonicalPeriod(
+                E0
+            ))
+        );
+
+        let mut rounded_period = full_cylinder_input();
+        let lo = 5.0 * core::f64::consts::PI / 3.0;
+        let inexact = ParamRange::new(lo, lo + core::f64::consts::TAU);
+        assert_ne!(inexact.width(), core::f64::consts::TAU);
+        rounded_period.closed_edges[0].logical_range = inexact;
+        assert_eq!(
+            prepare_analytic_shell(&rounded_period, &store, 1.0e-12),
             Err(AnalyticShellPlanError::ClosedEdgeRequiresCanonicalPeriod(
                 E0
             ))

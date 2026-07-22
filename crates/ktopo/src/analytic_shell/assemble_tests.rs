@@ -1,13 +1,15 @@
 use super::AnalyticShellPlanError;
 use super::assemble::AnalyticShellAssemblyError;
-use super::tests::{full_cylinder_input, half_cylinder_input};
+use super::tests::{full_cylinder_input, half_cylinder_input, shifted_full_cylinder_input};
 use crate::check::{CheckLevel, CheckOutcome, check_body_report};
-use crate::entity::{Body, Edge, EntityRef, Face, Fin, Loop, Region, Shell, Vertex};
+use crate::entity::{Body, Edge, EntityRef, Face, Fin, FinPcurve, Loop, Region, Shell, Vertex};
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::incidence::{PcurveIssue, check_pcurve_incidence};
 use crate::make;
 use crate::store::Store;
 use crate::transaction::{FullCommitRequirement, Journal, LineageEvent};
 use kgeom::frame::Frame;
+use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 
 #[test]
@@ -122,6 +124,77 @@ fn endpoint_free_full_cylinder_assembles_without_vertices_or_bounds() {
     assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:#?}");
     assert!(report.faults.is_empty(), "{report:#?}");
     assert!(report.gaps.is_empty(), "{report:#?}");
+}
+
+#[test]
+fn shifted_endpoint_free_period_assembles_with_checked_fin_range_authority() {
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(&shifted_full_cylinder_input(), 1.0e-12)
+        .unwrap();
+
+    for &(_, edge_id) in output.edges() {
+        let edge = transaction.store().get(edge_id).unwrap();
+        assert_eq!(edge.vertices(), [None, None]);
+        assert!(edge.bounds().is_none());
+        let curve = edge.curve().unwrap();
+        for &fin_id in edge.fins() {
+            let fin = transaction.store().get(fin_id).unwrap();
+            let loop_ = transaction.store().get(fin.parent()).unwrap();
+            let face = transaction.store().get(loop_.face()).unwrap();
+            assert_eq!(
+                check_pcurve_incidence(
+                    transaction.store(),
+                    curve,
+                    None,
+                    face.surface(),
+                    fin.pcurve().unwrap(),
+                    1.0e-12,
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    let decision = transaction
+        .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+        .unwrap();
+    assert!(decision.is_committed());
+    assert_eq!(decision.checks()[0].report().outcome(), CheckOutcome::Valid);
+}
+
+#[test]
+fn shifted_endpoint_free_period_refuses_a_partial_fin_authority() {
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(&shifted_full_cylinder_input(), 1.0e-12)
+        .unwrap();
+    let edge_id = output.edges()[0].1;
+    let edge = transaction.store().get(edge_id).unwrap();
+    let curve = edge.curve().unwrap();
+    let fin = transaction.store().get(edge.fins()[0]).unwrap();
+    let use_ = fin.pcurve().unwrap();
+    let range = use_.range();
+    let partial = ParamRange::new(range.lo, range.lo + range.width() / 2.0);
+    let tampered = FinPcurve::new(use_.curve(), partial, use_.edge_to_pcurve())
+        .unwrap()
+        .with_chart(use_.chart())
+        .with_closure_winding(use_.closure_winding().unwrap());
+    let loop_ = transaction.store().get(fin.parent()).unwrap();
+    let face = transaction.store().get(loop_.face()).unwrap();
+    assert_eq!(
+        check_pcurve_incidence(
+            transaction.store(),
+            curve,
+            None,
+            face.surface(),
+            tampered,
+            1.0e-12,
+        ),
+        Err(PcurveIssue::BadRange)
+    );
 }
 
 #[test]
