@@ -17,7 +17,12 @@ The current facade supports:
   source-edge root identity plus deterministic closed mixed-family cycles for
   shared translated, permuted, and all-nonzero oblique exact frames, with
   semantic Plane incidence certification for rounded general frames and
-  proof-bearing lifted periodic cylinder-face embeddings;
+  proof-bearing lifted periodic cylinder-face embeddings. For same-signed
+  strict-secant nested-height parallel cylinders, public Section returns two
+  rulings plus two cap arcs in one topology-owned closed component across world
+  and oblique frames, replay, and operand swap; the operation-local graph proof
+  also admits exact antiparallel axes, while tangent, miss, coincident, and skew
+  pairs remain typed gaps;
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
   remainder bands, zero-cut truth-selected whole-source union/subtraction
@@ -45,7 +50,8 @@ The current facade supports:
 Broader modeling operations and additional semantic edits remain under active
 development. The facade is additive: lower crates remain available to kernel
 implementation and trusted adapter work, but their raw layouts are not part of
-the facade compatibility promise.
+the facade compatibility promise. Parallel-cylinder Boolean support is not yet
+claimed; the next slice is a Full-checked parallel-cylinder lens-prism Intersect.
 
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic

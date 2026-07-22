@@ -254,7 +254,7 @@ fn valid_trace(trace: SectionUvLine, range: ParamRange) -> bool {
         && range.lo < range.hi
 }
 
-/// Clip a certified affine Plane/Cylinder ruling pcurve to one exact face
+/// Clip one certified affine ruling pcurve to an exact plane or cylinder face
 /// trim. The face surface selects the admitted topology family.
 pub(crate) fn clip_ruling_to_face(
     store: &Store,

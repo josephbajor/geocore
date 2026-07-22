@@ -5,6 +5,8 @@
 //! by future procedural geometry without depending on topology or operations.
 
 mod class;
+#[path = "intersection/cylinder_cylinder_ruling.rs"]
+mod cylinder_cylinder_ruling;
 mod descriptor;
 mod error;
 mod eval;
@@ -14,6 +16,10 @@ mod intersection;
 mod plane_cylinder_ruling;
 
 pub use class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
+pub use cylinder_cylinder_ruling::{
+    PairedCylinderCylinderRulingResidualCertificate,
+    certify_paired_cylinder_cylinder_ruling_residuals,
+};
 pub use descriptor::{
     Curve2dDescriptor, CurveDescriptor, GeometryDependencies, OffsetSurfaceDescriptor,
     SurfaceDescriptor,

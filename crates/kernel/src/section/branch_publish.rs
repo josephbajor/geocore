@@ -1,18 +1,61 @@
-//! Publication adapters for proof-bearing Plane/Cylinder branches.
+//! Publication dispatch for proof-bearing curved analytic branches.
 //!
 //! Discovery stays source-order deterministic; unsupported descriptors and
 //! indeterminate orientation evidence continue to fail closed as section gaps.
 
 use super::*;
 
-/// Collect proof-bearing Plane/Cylinder circle and ruling-line carriers
-/// independently of the planar trim/stitch admission path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CertifiedCurvedPair {
+    PlaneCylinder,
+    CylinderCylinder,
+}
+
+/// Whether the proof-bearing curved dispatcher exclusively owns this pair.
+///
+/// The planar fallback must skip every owned pair, including failed or empty
+/// queries, so one authoritative graph-surface result produces at most one
+/// pair-local gap.
+pub(super) fn owns_pair(
+    a: broad_phase::FaceSurfaceClass,
+    b: broad_phase::FaceSurfaceClass,
+) -> bool {
+    matches!(
+        (a, b),
+        (
+            broad_phase::FaceSurfaceClass::Plane,
+            broad_phase::FaceSurfaceClass::Cylinder
+        ) | (
+            broad_phase::FaceSurfaceClass::Cylinder,
+            broad_phase::FaceSurfaceClass::Plane
+        ) | (
+            broad_phase::FaceSurfaceClass::Cylinder,
+            broad_phase::FaceSurfaceClass::Cylinder
+        )
+    )
+}
+
+fn pair_kind(surface_a: &SurfaceGeom, surface_b: &SurfaceGeom) -> Option<CertifiedCurvedPair> {
+    match (surface_a, surface_b) {
+        (SurfaceGeom::Plane(_), SurfaceGeom::Cylinder(_))
+        | (SurfaceGeom::Cylinder(_), SurfaceGeom::Plane(_)) => {
+            Some(CertifiedCurvedPair::PlaneCylinder)
+        }
+        (SurfaceGeom::Cylinder(_), SurfaceGeom::Cylinder(_)) => {
+            Some(CertifiedCurvedPair::CylinderCylinder)
+        }
+        _ => None,
+    }
+}
+
+/// Collect proof-bearing curved circle and ruling-line carriers independently
+/// of the planar trim/stitch admission path.
 ///
 /// Face domains are conservative source-owned surface windows used only for
 /// analytic branch discovery and paired trace proof. Exact membership is
 /// decided afterward from topology-owned loops, fins, edges, and pcurves.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn collect_plane_cylinder_branches(
+pub(super) fn collect_certified_curved_branches(
     store: &Store,
     part_id: &PartId,
     faces_a: &[RawFaceId],
@@ -31,13 +74,9 @@ pub(super) fn collect_plane_cylinder_branches(
         for (b_index, &raw_b) in faces_b.iter().enumerate() {
             let face_b = read(store.get(raw_b))?;
             let surface_b = read(store.surface(face_b.surface))?;
-            if !matches!(
-                (surface_a, surface_b),
-                (SurfaceGeom::Plane(_), SurfaceGeom::Cylinder(_))
-                    | (SurfaceGeom::Cylinder(_), SurfaceGeom::Plane(_))
-            ) {
+            let Some(pair_kind) = pair_kind(surface_a, surface_b) else {
                 continue;
-            }
+            };
             *examined += 1;
             scope
                 .ledger_mut()
@@ -59,10 +98,16 @@ pub(super) fn collect_plane_cylinder_branches(
                 });
                 continue;
             };
-            let discovery_domains = circle_discovery::plane_cylinder_discovery_domains(
-                [surface_a, surface_b],
-                [[domain_a.u, domain_a.v], [domain_b.u, domain_b.v]],
-            );
+            let source_domains = [[domain_a.u, domain_a.v], [domain_b.u, domain_b.v]];
+            let discovery_domains = match pair_kind {
+                CertifiedCurvedPair::PlaneCylinder => {
+                    circle_discovery::plane_cylinder_discovery_domains(
+                        [surface_a, surface_b],
+                        source_domains,
+                    )
+                }
+                CertifiedCurvedPair::CylinderCylinder => source_domains,
+            };
             let intersections = match intersect_bounded_graph_surfaces_in_scope(
                 store.geometry(),
                 face_a.surface,
@@ -76,16 +121,21 @@ pub(super) fn collect_plane_cylinder_branches(
                     if let Some(error) = lift_limit_error(error.clone()) {
                         return Err(error);
                     }
-                    if let Some(branches) = semantic_ruling::recover(
-                        store,
-                        [raw_a, raw_b],
-                        &facades,
-                        [surface_a, surface_b],
-                        [face_a.sense, face_b.sense],
-                        discovery_domains,
-                        &error,
-                        scope,
-                    )? {
+                    let recovered = if pair_kind == CertifiedCurvedPair::PlaneCylinder {
+                        semantic_ruling::recover(
+                            store,
+                            [raw_a, raw_b],
+                            &facades,
+                            [surface_a, surface_b],
+                            [face_a.sense, face_b.sense],
+                            discovery_domains,
+                            &error,
+                            scope,
+                        )?
+                    } else {
+                        None
+                    };
+                    if let Some(branches) = recovered {
                         for branch in branches {
                             ruling_publish::append_branch(
                                 store,
@@ -117,18 +167,34 @@ pub(super) fn collect_plane_cylinder_branches(
                 continue;
             }
             for edge in &intersections.branch_graph.edges {
-                append_plane_cylinder_branch(
-                    store,
-                    [raw_a, raw_b],
-                    &facades,
-                    edge,
-                    &intersections.branch_graph.vertices,
-                    [surface_a, surface_b],
-                    [face_a.sense, face_b.sense],
-                    root_identity,
-                    scope,
-                    acc,
-                )?;
+                match pair_kind {
+                    CertifiedCurvedPair::PlaneCylinder => append_plane_cylinder_branch(
+                        store,
+                        [raw_a, raw_b],
+                        &facades,
+                        edge,
+                        &intersections.branch_graph.vertices,
+                        [surface_a, surface_b],
+                        [face_a.sense, face_b.sense],
+                        root_identity,
+                        scope,
+                        acc,
+                    )?,
+                    CertifiedCurvedPair::CylinderCylinder => {
+                        cylinder_cylinder_publish::append_branch(
+                            store,
+                            [raw_a, raw_b],
+                            &facades,
+                            edge,
+                            &intersections.branch_graph.vertices,
+                            [surface_a, surface_b],
+                            [face_a.sense, face_b.sense],
+                            root_identity,
+                            scope,
+                            acc,
+                        )?;
+                    }
+                }
             }
         }
     }
@@ -421,12 +487,12 @@ fn adapt_plane_cylinder_ruling_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
-        ruling_recertification: Some(RulingRecertification::Graph(certificate)),
+        ruling_recertification: Some(RulingRecertification::PlaneCylinderGraph(certificate)),
         ruling_parameter_flipped: flipped,
     }))
 }
 
-fn adapt_branch_pcurves(
+pub(super) fn adapt_branch_pcurves(
     edge: &IntersectionBranchEdge,
     flipped: bool,
 ) -> Option<[SectionUvCurve; 2]> {

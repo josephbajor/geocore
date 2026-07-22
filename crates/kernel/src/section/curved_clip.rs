@@ -46,6 +46,10 @@ pub(crate) enum ClosedConicClipGap {
     TangentialContact,
     /// A whole-period carrier lies on a whole-period trim boundary.
     CoincidentBoundary,
+    /// The two circles do not have exactly two transverse boundary crossings.
+    NonSecantBoundary,
+    /// A crossing cannot be separated from a periodic parameter seam.
+    ParameterSeamContact,
     /// Distinct crossing enclosures cannot be put in a strict cyclic order.
     UnorderedCrossings,
 }
@@ -68,6 +72,12 @@ impl ClosedConicClipGap {
             }
             Self::CoincidentBoundary => {
                 "a closed conic is coincident with a whole-period trim boundary"
+            }
+            Self::NonSecantBoundary => {
+                "a closed circle does not have two transverse disk-boundary crossings"
+            }
+            Self::ParameterSeamContact => {
+                "a circle trim crossing cannot be separated from a periodic parameter seam"
             }
             Self::UnorderedCrossings => {
                 "closed-conic trim crossings could not be certifiably ordered"
@@ -306,6 +316,15 @@ fn clip_circle_to_plane_trim(
     carrier_range: ParamRange,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<ClosedConicClipOutcome> {
+    if let Some(outcome) = super::circle_disk_clip::try_clip_circle_to_disk_trim(
+        store,
+        face,
+        circle,
+        carrier_range,
+        scope,
+    )? {
+        return Ok(outcome);
+    }
     let source = match circle_source(circle, carrier_range) {
         Ok(source) => source,
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),

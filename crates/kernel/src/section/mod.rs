@@ -5,10 +5,11 @@
 //! edge graph whose vertices sit on the operands' own edges and vertices.
 //! This module computes that graph for the planar slice — every face on a
 //! plane, every edge a bounded straight line. It also exposes verified
-//! Plane/Cylinder circle and ruling-line carriers. Complete-period circles are
-//! clipped against topology-owned polygon/ring trims and retained as intact
-//! carriers or certified bounded arcs. Ruling lines are clipped to the same
-//! topology-owned trims and retained as bounded affine fragments. Operation-
+//! Plane/Cylinder circle and ruling-line carriers plus strict parallel
+//! Cylinder/Cylinder ruling carriers. Complete-period circles are clipped
+//! against topology-owned polygon/ring trims and retained as intact carriers
+//! or certified bounded arcs. Ruling lines are clipped to the same topology-
+//! owned trims and retained as bounded affine fragments. Operation-
 //! shared source-edge root identities own endpoint joins and publish one
 //! canonical scalar inside each certified isolating interval. Carrier points
 //! and carrier parameters remain diagnostic representatives only. Degree-two
@@ -39,10 +40,12 @@
 mod branch_publish;
 mod broad_phase;
 mod circle_discovery;
+mod circle_disk_clip;
 mod clip;
 mod closed_stitch;
 mod curve_publish;
 mod curved_clip;
+mod cylinder_cylinder_publish;
 mod disk_clip;
 mod disk_publish;
 mod mixed_stitch;
@@ -73,7 +76,10 @@ use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
-use kgraph::{AffineParamMap1d, CurveDescriptor, PairedPlaneCylinderRulingResidualCertificate};
+use kgraph::{
+    AffineParamMap1d, CurveDescriptor, PairedCylinderCylinderRulingResidualCertificate,
+    PairedPlaneCylinderRulingResidualCertificate,
+};
 use kops::intersect::{
     ContactKind, GraphSurfaceIntersectionError, IntersectionBranchEdge, IntersectionBranchTopology,
     IntersectionBranchVertexEvent, intersect_bounded_graph_surfaces_in_scope,
@@ -442,7 +448,7 @@ impl SectionFragmentSite {
     }
 }
 
-/// One certified Plane/Cylinder circle or ruling-line carrier.
+/// One certified curved analytic circle or ruling-line carrier.
 ///
 /// These branches are deliberately kept separate from [`SectionEdge`], whose
 /// endpoints and sites carry bounded trimmed-face topology. A matching
@@ -466,7 +472,8 @@ pub struct SectionBranch {
 
 #[derive(Debug, Clone, PartialEq)]
 enum RulingRecertification {
-    Graph(PairedPlaneCylinderRulingResidualCertificate),
+    PlaneCylinderGraph(PairedPlaneCylinderRulingResidualCertificate),
+    CylinderCylinderGraph(PairedCylinderCylinderRulingResidualCertificate),
     Semantic(semantic_ruling::SemanticRulingRecertification),
 }
 
@@ -976,8 +983,7 @@ impl BodySectionGraph {
     }
 }
 
-pub(crate) const GAP_PLANAR_ONLY: &str =
-    "body sectioning supports planar face pairs and certified Plane/Cylinder pairs in this slice";
+pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, and strict parallel Cylinder/Cylinder rulings in this slice";
 pub(crate) const GAP_LINE_EDGES_ONLY: &str =
     "body sectioning is certified only for faces bounded by straight line edges";
 pub(crate) const GAP_BOUNDED_EDGES_ONLY: &str =
@@ -1014,10 +1020,11 @@ impl Part<'_> {
     /// The graph is read-only interrogation evidence: no topology is
     /// created or modified. Wrong-part, stale, and identical operand
     /// identities are rejected before the scope starts. Faces outside the
-    /// certified planar and Plane/Cylinder pair slices, coincident or tangent
-    /// face pairs, and any ordering that conservative intervals cannot certify
-    /// yield [`SectionCompletion::Indeterminate`] with structured
-    /// [`SectionGap`] reasons instead of a guessed graph.
+    /// certified planar, Plane/Cylinder, and strict parallel
+    /// Cylinder/Cylinder slices, coincident or tangent face pairs, and any
+    /// ordering that conservative intervals cannot certify yield
+    /// [`SectionCompletion::Indeterminate`] with structured [`SectionGap`]
+    /// reasons instead of a guessed graph.
     pub fn section_bodies(
         &self,
         request: SectionBodiesRequest,
@@ -1093,7 +1100,7 @@ fn section_impl(
     let mut acc = SectionAccumulator::default();
     let mut root_identity = root_identity::RootIdentityAuthority::new();
     let mut examined: u64 = 0;
-    branch_publish::collect_plane_cylinder_branches(
+    branch_publish::collect_certified_curved_branches(
         store,
         part_id,
         &faces_a,
@@ -1113,7 +1120,7 @@ fn section_impl(
         for (b_index, slot_b) in admitted_b.iter().enumerate() {
             let envelope_a = envelopes_a[a_index];
             let envelope_b = envelopes_b[b_index];
-            if plane_cylinder_pair(envelope_a.class, envelope_b.class) {
+            if branch_publish::owns_pair(envelope_a.class, envelope_b.class) {
                 // The curved dispatcher above owns this pair exactly once.
                 continue;
             }
@@ -1222,19 +1229,6 @@ enum PlanarFaceAdmission {
         facade: FaceId,
         reason: &'static str,
     },
-}
-
-fn plane_cylinder_pair(a: broad_phase::FaceSurfaceClass, b: broad_phase::FaceSurfaceClass) -> bool {
-    matches!(
-        (a, b),
-        (
-            broad_phase::FaceSurfaceClass::Plane,
-            broad_phase::FaceSurfaceClass::Cylinder
-        ) | (
-            broad_phase::FaceSurfaceClass::Cylinder,
-            broad_phase::FaceSurfaceClass::Plane
-        )
-    )
 }
 
 fn record_admission_gaps(

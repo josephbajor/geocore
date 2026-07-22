@@ -56,6 +56,8 @@ const STABLE_GAP_REASONS: &[&str] = &[
     curved_clip::ClosedConicClipGap::ArithmeticGuard.reason(),
     curved_clip::ClosedConicClipGap::TangentialContact.reason(),
     curved_clip::ClosedConicClipGap::CoincidentBoundary.reason(),
+    curved_clip::ClosedConicClipGap::NonSecantBoundary.reason(),
+    curved_clip::ClosedConicClipGap::ParameterSeamContact.reason(),
     curved_clip::ClosedConicClipGap::UnorderedCrossings.reason(),
     ruling_clip::RulingClipGap::UnsupportedTrim.reason(),
     ruling_clip::RulingClipGap::MalformedTrim.reason(),

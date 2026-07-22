@@ -59,13 +59,14 @@ compares clean. The 2026-07-21 supplemental Boolean run at writer `fedf1ab`
 imported and compared 15/15 clean, including the curved Plane/Cylinder payloads.
 Evidence: `docs/oracle-results.tsv`.
 
-**Current certification state (2026-07-21): base stale, Boolean current.**
+**Current certification state (2026-07-21): base stale, Boolean stale.**
 Finite-cylinder Full proof changed the regenerated base manifest's checker
 evidence after writer `b596027`; its 15 payload hashes are unchanged, but the
 base bundle needs licensed-host re-certification. The complete fifteen-payload
 Boolean bundle at identity
 `61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7`
-is certified by the 2026-07-21 Onshape rows.
+is certified by the 2026-07-21 Onshape rows; the current sixteen-payload
+record remains stale until its queued cap-crossing payload is replayed.
 
 ## 1. Generate the bundle
 

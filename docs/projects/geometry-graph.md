@@ -13,7 +13,7 @@ every procedural class or become a second operation-policy project.
 Status: G1–G4a plus the G5a operations-adapter slices landed (topology
 geometry-ownership migration; offset descriptor/evaluator; X_T `OFFSET_SURF` slice;
 F2 evaluation-budget adapter; certified intersection-curve and transmitted-chart/
-M3c consumers across the planar and rational-quarter-cylinder families); broader
+M3c consumers across the planar and rational-quarter-cylinder families; operation-local exact-parallel/antiparallel strict-secant Cylinder/Cylinder rulings); broader
 corpus coverage and further procedural-intersection/descriptor families remain.
 
 ## Contract — layer and crate placement
@@ -252,8 +252,8 @@ class key, ordered source-surface and pcurve dependencies, a finite carrier
 interval, and a paired whole-interval residual certificate. Graph validation
 recomputes the certified field and rejects any mismatch before allocation; reverse
 dependencies protect every transitive basis (including offset chains) while the
-proof is live, and stale/altered sources roll the persistence batch back
-atomically.
+proof is live, and stale/altered sources roll the persistence batch back atomically.
+Exact-parallel/antiparallel strict-secant Cylinder/Cylinder rulings remain operation-local: their graph proof yields exactly two deterministic branches, tangent/miss/coincident/skew are typed gaps, and persistence refuses unsupported analytic cylinder families.
 
 ## Explicit non-goals
 
@@ -277,7 +277,7 @@ atomically.
   corpus_manifest, intersection_chart, offset_nurbs_intersection,
   equal_limit_intersection, terminated_intersection, periodic_nurbs,
   plane_sp_curve, zero_multiplicity_knot_padding, finite_open_*
-- `crates/kops/tests/graph_surface*.rs` (plane/sphere/NURBS, varying-offset arms)
+- `crates/kops/tests/graph_surface*.rs` (plane/sphere/NURBS, varying-offset arms); `crates/kops/tests/graph_cylinder_cylinder_rulings.rs` (parallel/antiparallel rulings and typed gaps)
 - `crates/ktopo/tests/`: assembly_boundary, transactions, body_copy
 
 ## Open items

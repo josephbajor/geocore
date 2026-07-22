@@ -26,6 +26,8 @@ mod cap_crossing_secant;
 mod curved_cavity;
 #[path = "lifecycle/curved_constructive_contact.rs"]
 mod curved_constructive_contact;
+#[path = "lifecycle/curved_cylinder_cylinder_rulings.rs"]
+mod curved_cylinder_cylinder_rulings;
 #[path = "lifecycle/curved_inverse_cavity.rs"]
 mod curved_inverse_cavity;
 #[path = "lifecycle/curved_one_port_budget.rs"]

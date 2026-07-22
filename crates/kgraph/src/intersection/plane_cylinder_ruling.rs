@@ -226,7 +226,7 @@ pub fn certify_paired_plane_cylinder_ruling_residuals(
         tolerance,
     })
 }
-type AffineCoefficients = [[Interval; 3]; 2];
+pub(super) type AffineCoefficients = [[Interval; 3]; 2];
 
 fn certify_strict_ruling_family(
     carrier: Line,
@@ -356,7 +356,7 @@ fn plane_ruling_coefficients(
     Ok(coefficients)
 }
 
-fn cylinder_ruling_coefficients(
+pub(super) fn cylinder_ruling_coefficients(
     trace: CylinderRulingTrace,
     trace_id: PairedTrace,
 ) -> Result<AffineCoefficients, IntersectionCertificateError> {
@@ -433,7 +433,7 @@ fn primitive_interval(value: f64) -> Option<Interval> {
         .then(|| Interval::new(value.next_down(), value.next_up()))
 }
 
-fn line_coefficients(carrier: Line) -> Option<AffineCoefficients> {
+pub(super) fn line_coefficients(carrier: Line) -> Option<AffineCoefficients> {
     if !finite_line(carrier) {
         return None;
     }
@@ -443,7 +443,7 @@ fn line_coefficients(carrier: Line) -> Option<AffineCoefficients> {
     ])
 }
 
-fn affine_residual_bound(
+pub(super) fn affine_residual_bound(
     carrier: AffineCoefficients,
     lifted: AffineCoefficients,
     range: ParamRange,
@@ -480,7 +480,7 @@ fn interval_dot_difference(
     }
     Some(dot)
 }
-fn finite_interval(value: Interval) -> Option<Interval> {
+pub(super) fn finite_interval(value: Interval) -> Option<Interval> {
     (value.lo().is_finite() && value.hi().is_finite()).then_some(value)
 }
 
@@ -499,7 +499,7 @@ fn finite_plane(surface: Plane) -> bool {
         && finite_vec3(surface.frame().z())
 }
 
-fn finite_cylinder(surface: Cylinder) -> bool {
+pub(super) fn finite_cylinder(surface: Cylinder) -> bool {
     surface.radius().is_finite()
         && surface.radius() > 0.0
         && finite_vec3(surface.frame().origin())
@@ -508,7 +508,7 @@ fn finite_cylinder(surface: Cylinder) -> bool {
         && finite_vec3(surface.frame().z())
 }
 
-fn finite_line(carrier: Line) -> bool {
+pub(super) fn finite_line(carrier: Line) -> bool {
     finite_vec3(carrier.origin()) && finite_vec3(carrier.dir())
 }
 

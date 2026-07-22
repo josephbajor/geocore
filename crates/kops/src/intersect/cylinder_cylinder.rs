@@ -114,7 +114,7 @@ pub fn intersect_bounded_cylinders(
     SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
-fn compare_cylinder_windows(
+pub(super) fn compare_cylinder_windows(
     a: &Cylinder,
     a_range: [ParamRange; 2],
     b: &Cylinder,

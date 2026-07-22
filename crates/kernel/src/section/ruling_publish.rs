@@ -5,7 +5,10 @@ use kcore::math;
 use kcore::operation::OperationScope;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec3};
-use kgraph::certify_paired_plane_cylinder_ruling_residuals;
+use kgraph::{
+    certify_paired_cylinder_cylinder_ruling_residuals,
+    certify_paired_plane_cylinder_ruling_residuals,
+};
 use ktopo::entity::FaceId as RawFaceId;
 use ktopo::geom::CurveGeom;
 use ktopo::store::Store;
@@ -334,8 +337,19 @@ fn recertify_expanded_branch(
         range
     };
     let residual_bounds = match source {
-        super::RulingRecertification::Graph(source) => {
+        super::RulingRecertification::PlaneCylinderGraph(source) => {
             let Ok(certificate) = certify_paired_plane_cylinder_ruling_residuals(
+                source.carrier(),
+                source_range,
+                source.traces(),
+                source.tolerance(),
+            ) else {
+                return Ok(None);
+            };
+            certificate.residual_bounds()
+        }
+        super::RulingRecertification::CylinderCylinderGraph(source) => {
+            let Ok(certificate) = certify_paired_cylinder_cylinder_ruling_residuals(
                 source.carrier(),
                 source_range,
                 source.traces(),

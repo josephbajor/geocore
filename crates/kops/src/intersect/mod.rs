@@ -29,6 +29,8 @@ mod ellipse_sphere;
 mod ellipse_torus;
 mod error;
 mod geometry_class;
+mod graph_branch_certificate;
+mod graph_cylinder_cylinder;
 mod graph_plane_cylinder;
 mod graph_surface;
 mod line_circle;

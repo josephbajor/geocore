@@ -93,7 +93,7 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    Full-validates exact Plane/Cylinder solid pairs and encloses whole-material
    distance with a retained feasible witness;
    `body_clash` derives Clear/Clashing/Indeterminate clearance verdicts in the
-   same scope without treating zero lower bounds as interference. Next: resume general curved Boolean surface-pair breadth.)*
+   same scope without treating zero lower bounds as interference. Exact-parallel/antiparallel strict-secant Cylinder/Cylinder graph ruling proof is landed; public Section closes the same-signed nested-height pair as two rulings plus two cap arcs in one topology-owned component across world/oblique frames, replay, and swap. Tangent/miss/coincident/skew remain typed gaps. Next: Full-check the parallel-cylinder lens-prism Intersect.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").
