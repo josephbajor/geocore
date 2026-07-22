@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::entity::FinId;
-use kgeom::curve2d::{Circle2d, Curve2d};
+use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::Vec2;
 
@@ -22,6 +22,10 @@ use super::mixed_profile_prism_proof::{
     certify_sweep_support, edge_has_vertices, mapped_vertex, oriented_dot_sign, peer_face,
     prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
 };
+
+#[path = "portal_cylinder_shell_proof/profile_radial_proof.rs"]
+mod profile_radial_proof;
+use profile_radial_proof::{profile_radial_bounds, profile_radial_side};
 
 /// Cumulative deterministic work for portal-cylinder shell proofs.
 pub(crate) const PORTAL_CYLINDER_SHELL_WORK: StageId =
@@ -51,7 +55,6 @@ struct Portal {
     fins: Vec<(FinId, EdgeId)>,
     arc_edges: [EdgeId; 2],
     ruling_edges: [EdgeId; 2],
-    u: ParamRange,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -101,11 +104,11 @@ pub(super) fn certify_portal_cylinder_shell(
     scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
     let shell = store.get(shell_id)?;
-    if shell.faces.len() < 7 || !shell.edges.is_empty() || shell.vertex.is_some() {
+    if shell.faces.len() < 6 || !shell.edges.is_empty() || shell.vertex.is_some() {
         return Ok(None);
     }
 
-    let mut host = None;
+    let mut hosts = Vec::new();
     let mut planar = Vec::new();
     for &face_id in &shell.faces {
         let face = store.get(face_id)?;
@@ -113,15 +116,12 @@ pub(super) fn certify_portal_cylinder_shell(
             return Ok(None);
         }
         match store.get(face.surface)? {
-            SurfaceGeom::Cylinder(cylinder) if host.is_none() => host = Some((face_id, *cylinder)),
+            SurfaceGeom::Cylinder(cylinder) => hosts.push((face_id, *cylinder)),
             SurfaceGeom::Plane(_) => planar.push(face_id),
             _ => return Ok(None),
         }
     }
-    let Some((host_face, cylinder)) = host else {
-        return Ok(None);
-    };
-    if certify_face_loop_layout(store, host_face)? != LoopContainment::Certified {
+    if hosts.is_empty() {
         return Ok(None);
     }
 
@@ -131,7 +131,7 @@ pub(super) fn certify_portal_cylinder_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, planar.len())? else {
+        let Some(work) = proof_work(store, shell_id, hosts.len(), planar.len())? else {
             return Ok(Some(indeterminate()));
         };
         scope
@@ -139,6 +139,26 @@ pub(super) fn certify_portal_cylinder_shell(
             .charge(PORTAL_CYLINDER_SHELL_WORK, work)?;
     }
 
+    for (host_face, cylinder) in hosts {
+        if let Some(certification) =
+            certify_host_candidate(store, shell_id, host_face, cylinder, &planar)?
+        {
+            return Ok(Some(certification));
+        }
+    }
+    Ok(None)
+}
+
+fn certify_host_candidate(
+    store: &Store,
+    shell_id: ShellId,
+    host_face: FaceId,
+    cylinder: Cylinder,
+    planar: &[FaceId],
+) -> Result<Option<ShellCertification>> {
+    if certify_face_loop_layout(store, host_face)? != LoopContainment::Certified {
+        return Ok(None);
+    }
     let host_entity = store.get(host_face)?;
     let mut ring_loops = Vec::new();
     let mut portal_loops = Vec::new();
@@ -205,17 +225,25 @@ pub(super) fn certify_portal_cylinder_shell(
     }
 
     let base_orientation = cylinder_band_orientation(store, host_face, low, high);
-    let target_faces = planar
-        .into_iter()
-        .filter(|face| *face != cap_a && *face != cap_b)
+    let target_faces = store
+        .get(shell_id)?
+        .faces
+        .iter()
+        .copied()
+        .filter(|face| *face != host_face && *face != cap_a && *face != cap_b)
         .collect::<Vec<_>>();
     if target_faces.is_empty() {
         return Ok(None);
     }
+    let cap_candidates = target_faces
+        .iter()
+        .copied()
+        .filter(|face| planar.contains(face))
+        .collect::<Vec<_>>();
 
     let mut candidates = Vec::new();
-    for (index, &first) in target_faces.iter().enumerate() {
-        for &second in &target_faces[index + 1..] {
+    for (index, &first) in cap_candidates.iter().enumerate() {
+        for &second in &cap_candidates[index + 1..] {
             if let Some(candidate) = prepare_attachment(
                 store,
                 host_face,
@@ -259,7 +287,12 @@ pub(super) fn certify_portal_cylinder_shell(
     }))
 }
 
-fn proof_work(store: &Store, shell_id: ShellId, plane_count: usize) -> Result<Option<u64>> {
+fn proof_work(
+    store: &Store,
+    shell_id: ShellId,
+    host_count: usize,
+    plane_count: usize,
+) -> Result<Option<u64>> {
     let shell = store.get(shell_id)?;
     let mut loops = 0_u64;
     let mut fins = 0_u64;
@@ -288,10 +321,11 @@ fn proof_work(store: &Store, shell_id: ShellId, plane_count: usize) -> Result<Op
             }
         }
     }
-    let (Some(faces), Some(edges), Some(vertices), Some(planes)) = (
+    let (Some(faces), Some(edges), Some(vertices), Some(hosts), Some(planes)) = (
         u64::try_from(shell.faces.len()).ok(),
         u64::try_from(edges.len()).ok(),
         u64::try_from(vertices.len()).ok(),
+        u64::try_from(host_count).ok(),
         u64::try_from(plane_count).ok(),
     ) else {
         return Ok(None);
@@ -306,8 +340,7 @@ fn proof_work(store: &Store, shell_id: ShellId, plane_count: usize) -> Result<Op
         return Ok(None);
     };
     let Some(pairs) = planes
-        .checked_sub(1)
-        .and_then(|less| planes.checked_mul(less))
+        .checked_mul(planes.saturating_sub(1))
         .map(|ordered| ordered / 2)
     else {
         return Ok(None);
@@ -315,7 +348,8 @@ fn proof_work(store: &Store, shell_id: ShellId, plane_count: usize) -> Result<Op
     Ok(size
         .checked_mul(size)
         .and_then(|quadratic| quadratic.checked_add(size.checked_mul(64)?))
-        .and_then(|per_pair| per_pair.checked_mul(pairs.checked_add(1)?)))
+        .and_then(|per_pair| per_pair.checked_mul(pairs.checked_add(1)?))
+        .and_then(|per_host| per_host.checked_mul(hosts)))
 }
 
 fn single_fin_peer_face(store: &Store, loop_id: LoopId) -> Result<Option<FaceId>> {
@@ -579,7 +613,6 @@ fn prepare_portal(
         fins,
         arc_edges: [low_arc.0, high_arc.0],
         ruling_edges: [*first_ruling, *second_ruling],
-        u,
     }))
 }
 
@@ -802,9 +835,7 @@ fn prepare_attachment(
             };
             *sign == expected
         });
-    let Some(radial_bounds) =
-        profile_radial_bounds(store, cylinder, &first, &used_portals, portals)?
-    else {
+    let Some(radial_bounds) = profile_radial_bounds(store, cylinder, &first)? else {
         return Ok(None);
     };
     let first_axial = coordinate_interval(
@@ -885,115 +916,6 @@ fn unique_component_cover(
     (covered_faces == target_faces.len() && covered_portals == portal_count).then_some(selected)
 }
 
-fn profile_radial_side(
-    store: &Store,
-    cylinder: Cylinder,
-    cap: &Cap,
-    host_face: FaceId,
-    portal_vertices: &[VertexId],
-) -> Result<Option<RadialSide>> {
-    let mut side = None;
-    for use_ in &cap.uses {
-        if peer_face(store, *use_)? == Some(host_face) {
-            continue;
-        }
-        let ProfileCarrier::Line(_) = use_.carrier else {
-            return Ok(None);
-        };
-        let Some(candidate) = line_radial_side(store, cylinder, *use_, portal_vertices)? else {
-            return Ok(None);
-        };
-        if side.is_some_and(|prior| prior != candidate) {
-            return Ok(None);
-        }
-        side = Some(candidate);
-    }
-    Ok(side)
-}
-
-fn line_radial_side(
-    store: &Store,
-    cylinder: Cylinder,
-    use_: CapUse,
-    portal_vertices: &[VertexId],
-) -> Result<Option<RadialSide>> {
-    let first = radial_coordinates(cylinder.frame(), store.vertex_position(use_.tail)?);
-    let second = radial_coordinates(cylinder.frame(), store.vertex_position(use_.head)?);
-    let radius_sq = Interval::point(cylinder.radius()).square();
-    let first_sq = first.x.square() + first.y.square();
-    let second_sq = second.x.square() + second.y.square();
-    let endpoint_inside = |value: Interval, vertex: VertexId| {
-        value.hi() < radius_sq.lo() || portal_vertices.contains(&vertex)
-    };
-    if endpoint_inside(first_sq, use_.tail) && endpoint_inside(second_sq, use_.head) {
-        return Ok(Some(RadialSide::Inside));
-    }
-
-    let direction = IntervalBounds2 {
-        x: second.x - first.x,
-        y: second.y - first.y,
-    };
-    let a = direction.x.square() + direction.y.square();
-    let b = first.x * direction.x + first.y * direction.y;
-    let end_derivative = a + b;
-    let outside = if b.lo() >= 0.0 {
-        first_sq.lo() > radius_sq.hi() || (portal_vertices.contains(&use_.tail) && b.lo() > 0.0)
-    } else if end_derivative.hi() <= 0.0 {
-        second_sq.lo() > radius_sq.hi()
-            || (portal_vertices.contains(&use_.head) && end_derivative.hi() < 0.0)
-    } else {
-        let Some(quotient) = b.square().checked_div(a) else {
-            return Ok(None);
-        };
-        let minimum = first_sq - quotient;
-        minimum.lo() > radius_sq.hi()
-    };
-    Ok(outside.then_some(RadialSide::Outside))
-}
-
-fn profile_radial_bounds(
-    store: &Store,
-    cylinder: Cylinder,
-    cap: &Cap,
-    used_portals: &[usize],
-    portals: &[Portal],
-) -> Result<Option<IntervalBounds2>> {
-    let mut bounds: Option<IntervalBounds2> = None;
-    for use_ in &cap.uses {
-        match use_.carrier {
-            ProfileCarrier::Line(_) => {
-                for point in [
-                    radial_coordinates(cylinder.frame(), store.vertex_position(use_.tail)?),
-                    radial_coordinates(cylinder.frame(), store.vertex_position(use_.head)?),
-                ] {
-                    bounds = Some(union_bounds(bounds, point));
-                }
-            }
-            ProfileCarrier::Circle(_) => {
-                let matching = used_portals
-                    .iter()
-                    .filter(|index| portals[**index].arc_edges.contains(&use_.edge))
-                    .collect::<Vec<_>>();
-                let [index] = matching.as_slice() else {
-                    return Ok(None);
-                };
-                let circle = Circle2d::new(
-                    Point2::new(0.0, 0.0),
-                    cylinder.radius(),
-                    Vec2::new(1.0, 0.0),
-                )?;
-                let box_ = circle.bounding_box(portals[**index].u);
-                let arc = IntervalBounds2 {
-                    x: Interval::new(box_.min.x.next_down(), box_.max.x.next_up()),
-                    y: Interval::new(box_.min.y.next_down(), box_.max.y.next_up()),
-                };
-                bounds = Some(union_bounds(bounds, arc));
-            }
-        }
-    }
-    Ok(bounds)
-}
-
 fn attachments_separated(first: &Attachment, second: &Attachment) -> bool {
     first.axial.hi() < second.axial.lo()
         || second.axial.hi() < first.axial.lo()
@@ -1001,13 +923,6 @@ fn attachments_separated(first: &Attachment, second: &Attachment) -> bool {
         || second.radial_bounds.x.hi() < first.radial_bounds.x.lo()
         || first.radial_bounds.y.hi() < second.radial_bounds.y.lo()
         || second.radial_bounds.y.hi() < first.radial_bounds.y.lo()
-}
-
-fn radial_coordinates(frame: &Frame, point: Point3) -> IntervalBounds2 {
-    IntervalBounds2 {
-        x: coordinate_interval(frame, frame.x(), point),
-        y: coordinate_interval(frame, frame.y(), point),
-    }
 }
 
 fn coordinate_interval(frame: &Frame, axis: Vec3, point: Point3) -> Interval {
@@ -1028,21 +943,9 @@ fn certified_point_on_plane(frame: &Frame, point: Point3) -> bool {
         && coordinate.hi() <= LINEAR_RESOLUTION
 }
 
-fn union_bounds(current: Option<IntervalBounds2>, next: IntervalBounds2) -> IntervalBounds2 {
-    let Some(current) = current else {
-        return next;
-    };
-    IntervalBounds2 {
-        x: Interval::new(
-            current.x.lo().min(next.x.lo()),
-            current.x.hi().max(next.x.hi()),
-        ),
-        y: Interval::new(
-            current.y.lo().min(next.y.lo()),
-            current.y.hi().max(next.y.hi()),
-        ),
-    }
-}
+#[cfg(test)]
+#[path = "portal_cylinder_shell_proof/analytic_boss_tests.rs"]
+mod analytic_boss_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1517,7 +1420,7 @@ mod tests {
         let output = transaction
             .assemble_analytic_shell(&portal_shell_input(), 1.0e-12)
             .unwrap();
-        let required = proof_work(transaction.store(), output.shell(), 6)
+        let required = proof_work(transaction.store(), output.shell(), 1, 6)
             .unwrap()
             .unwrap();
 

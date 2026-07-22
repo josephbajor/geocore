@@ -177,14 +177,14 @@ fn certify_shell_impl(
     )? {
         return Ok(certification);
     }
-    if let Some(certification) = portal_cylinder_shell_proof::certify_portal_cylinder_shell(
+    if let Some(certification) = mixed_profile_prism_proof::certify_mixed_profile_prism(
         store,
         shell_id,
         scope.as_deref_mut(),
     )? {
         return Ok(certification);
     }
-    if let Some(certification) = mixed_profile_prism_proof::certify_mixed_profile_prism(
+    if let Some(certification) = portal_cylinder_shell_proof::certify_portal_cylinder_shell(
         store,
         shell_id,
         scope.as_deref_mut(),
