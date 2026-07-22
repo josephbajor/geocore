@@ -25,6 +25,13 @@ use crate::{
     SectionSite, SectionSourceParameterKey, SectionUvCurve,
 };
 
+#[path = "parallel_cylinder_relation/coincident_caps.rs"]
+mod coincident_caps;
+pub(super) use coincident_caps::{
+    CertifiedParallelCylinderCoincidentCapRelation, ParallelCylinderCoincidentCapEndWitness,
+    ParallelCylinderSourceRootWitness,
+};
+
 /// Fixed proof work charged before the first semantic exit.
 ///
 /// Accepted inputs have exactly four branches, fragments, and endpoints and
@@ -44,10 +51,6 @@ pub(super) enum ParallelCylinderRelationGap {
     RadialSecancyNotStrict,
     /// A source's authored cap interval is not strictly positive on its own axis.
     SourceAxialOrder,
-    /// Both source cap intervals describe the same two axial planes.
-    AxialIntervalsEqual,
-    /// A physical overlap end is shared by both source cap intervals.
-    AxialOverlapEndNotUnique,
     /// The source cap intervals are disjoint or touch without positive overlap.
     AxialOverlapNotStrictlyPositive,
     /// The supplied section is not globally complete and gap-free.
@@ -184,6 +187,9 @@ impl CertifiedParallelCylinderLensRelation {
 pub(super) enum ParallelCylinderRelationOutcome {
     /// Every analytic, topology, and provenance obligation was discharged.
     Certified(Box<CertifiedParallelCylinderLensRelation>),
+    /// The operation-local incomplete-Section theorem for one or two shared
+    /// physical cap planes was discharged.
+    CertifiedCoincidentCaps(Box<CertifiedParallelCylinderCoincidentCapRelation>),
     /// The first stable relation obligation that could not be discharged.
     Indeterminate(ParallelCylinderRelationGap),
 }
@@ -204,11 +210,25 @@ pub(super) fn certify_parallel_cylinder_relation(
         Ok(relation) => relation,
         Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
     };
-    match certify_section_relation(graph, cylinders, overlap_ends) {
-        Ok(certificate) => Ok(ParallelCylinderRelationOutcome::Certified(Box::new(
-            certificate,
-        ))),
-        Err(gap) => Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+    let overlap_ends =
+        match coincident_caps::reconcile_shared_overlap_ends(graph, cylinders, overlap_ends) {
+            Ok(relation) => relation,
+            Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+        };
+    if overlap_ends.iter().any(|end| end.contributor_count() == 2) {
+        match coincident_caps::certify_coincident_cap_relation(graph, cylinders, overlap_ends) {
+            Ok(certificate) => Ok(ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(
+                Box::new(certificate),
+            )),
+            Err(gap) => Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+        }
+    } else {
+        match certify_section_relation(graph, cylinders, overlap_ends) {
+            Ok(certificate) => Ok(ParallelCylinderRelationOutcome::Certified(Box::new(
+                certificate,
+            ))),
+            Err(gap) => Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+        }
     }
 }
 
@@ -275,34 +295,39 @@ fn certify_source_relation(
         cylinders[1].boundaries()[intervals[1].high].center(),
         cylinders[0].boundaries()[intervals[0].high].center(),
     )?;
-    if low == Orientation::Zero && high == Orientation::Zero {
-        return Err(ParallelCylinderRelationGap::AxialIntervalsEqual);
-    }
     let low_end = match low {
         Orientation::Positive => SourceOverlapEnd {
             operand: 1,
             boundary: intervals[1].low,
+            peer_boundary: None,
         },
         Orientation::Negative => SourceOverlapEnd {
             operand: 0,
             boundary: intervals[0].low,
+            peer_boundary: None,
         },
-        Orientation::Zero => {
-            return Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique);
-        }
+        Orientation::Zero => SourceOverlapEnd {
+            operand: 0,
+            boundary: intervals[0].low,
+            peer_boundary: Some(intervals[1].low),
+        },
     };
     let high_end = match high {
         Orientation::Positive => SourceOverlapEnd {
             operand: 0,
             boundary: intervals[0].high,
+            peer_boundary: None,
         },
         Orientation::Negative => SourceOverlapEnd {
             operand: 1,
             boundary: intervals[1].high,
+            peer_boundary: None,
         },
-        Orientation::Zero => {
-            return Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique);
-        }
+        Orientation::Zero => SourceOverlapEnd {
+            operand: 0,
+            boundary: intervals[0].high,
+            peer_boundary: Some(intervals[1].high),
+        },
     };
     if axial_compare(
         common_axis,
@@ -378,8 +403,27 @@ fn axial_compare(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SourceOverlapEnd {
+    /// Canonical first contributor. Shared ends use operand zero here and
+    /// retain operand one's authored boundary in `peer_boundary`.
     operand: usize,
     boundary: usize,
+    peer_boundary: Option<usize>,
+}
+
+impl SourceOverlapEnd {
+    const fn boundary_for(self, operand: usize) -> Option<usize> {
+        if operand == self.operand {
+            Some(self.boundary)
+        } else if operand == 1 - self.operand {
+            self.peer_boundary
+        } else {
+            None
+        }
+    }
+
+    const fn contributor_count(self) -> usize {
+        if self.peer_boundary.is_some() { 2 } else { 1 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -747,7 +791,8 @@ fn certify_cap_arc(
         || !finite_vec3(x_direction)
         || !radius.is_finite()
         || radius <= 0.0
-        || !vectors_are_exactly_parallel(normal, cylinders[0].cylinder().frame().z())
+        || (!vectors_are_exactly_parallel(normal, cylinders[0].cylinder().frame().z())
+            && !has_certified_plane_cylinder_circle_traces(branch, cap_operand, side_operand))
         || !valid_branch_evidence(branch)
     {
         return Err(ParallelCylinderRelationGap::SectionBranchEvidence);
@@ -869,6 +914,49 @@ fn valid_branch_evidence(branch: &SectionBranch) -> bool {
             .residual_bounds()
             .into_iter()
             .all(|bound| bound.is_finite() && bound >= 0.0 && bound <= evidence.tolerance())
+}
+
+/// Recognize the semantic chart family carried by a graph-certified
+/// Plane/Cylinder circle. This is the representation theorem used when a
+/// translated oblique carrier's reconstructed model-space normal is not
+/// bitwise parallel to the authored cylinder axis: the exact face binding,
+/// closed carrier topology, and paired whole-range residual evidence remain
+/// the incidence authority, while these coefficients prove a plane circle
+/// paired with a constant-height, whole-period cylinder trace.
+fn has_certified_plane_cylinder_circle_traces(
+    branch: &SectionBranch,
+    plane_operand: usize,
+    cylinder_operand: usize,
+) -> bool {
+    let (SectionUvCurve::Circle(circle), SectionUvCurve::Line(line)) = (
+        branch.pcurves()[plane_operand],
+        branch.pcurves()[cylinder_operand],
+    ) else {
+        return false;
+    };
+    let center = circle.center();
+    let x_direction = circle.x_direction();
+    let origin = line.origin();
+    let direction = line.direction();
+    [
+        center.x,
+        center.y,
+        circle.radius(),
+        x_direction.x,
+        x_direction.y,
+        circle.parameter_scale(),
+        circle.parameter_offset(),
+        origin.x,
+        origin.y,
+        direction.x,
+        direction.y,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        && circle.radius() > 0.0
+        && circle.parameter_scale() != 0.0
+        && direction.x != 0.0
+        && direction.y == 0.0
 }
 
 fn record_endpoint(

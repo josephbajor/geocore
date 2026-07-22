@@ -187,6 +187,125 @@ fn certified_relation(
     certified(certify(fixture, graph, sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap())
 }
 
+fn certified_coincident_caps(
+    outcome: ParallelCylinderRelationOutcome,
+) -> CertifiedParallelCylinderCoincidentCapRelation {
+    match outcome {
+        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(certificate) => *certificate,
+        other => panic!("expected certified coincident-cap relation, got {other:?}"),
+    }
+}
+
+fn assert_coincident_cap_relation(
+    fixture: &Fixture,
+    swapped: bool,
+    expected_shared_ends: usize,
+    context: &str,
+) {
+    let graph = section(fixture, swapped);
+    let replay = section(fixture, swapped);
+    let sources = sources(fixture, swapped);
+    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
+    let relation_outcome =
+        certify(fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap();
+    if !matches!(
+        relation_outcome,
+        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(_)
+    ) {
+        panic!(
+            "{context}: unexpected coincident-cap outcome {relation_outcome:?}; completion={:?}; gaps={:#?}",
+            graph.completion(),
+            graph.gaps()
+        );
+    }
+    let relation = certified_coincident_caps(relation_outcome);
+    let replay_relation = certified_coincident_caps(
+        certify(fixture, &replay, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+    );
+    assert_eq!(relation, replay_relation);
+    assert_eq!(
+        relation
+            .overlap_ends()
+            .iter()
+            .filter(|end| end.is_shared())
+            .count(),
+        expected_shared_ends
+    );
+    assert_eq!(relation.unique_end_count(), 2 - expected_shared_ends);
+    for (physical_end, end) in relation.overlap_ends().iter().enumerate() {
+        assert_eq!(
+            end.sources().iter().flatten().count() + usize::from(end.cap_arc().is_some()),
+            2
+        );
+        for source in end.sources().iter().flatten() {
+            assert!(source.operand() < 2);
+            assert!(source.boundary() < 2);
+            assert_eq!(
+                source.cap_face(),
+                sources[source.operand()].boundaries()[source.boundary()].cap_face()
+            );
+            assert_eq!(
+                source.edge(),
+                sources[source.operand()].boundaries()[source.boundary()].edge()
+            );
+            assert_eq!(source.roots().map(|root| root.root_ordinal()), [0, 1]);
+            for root in source.roots() {
+                assert!(root.endpoint() < graph.curve_endpoints().len());
+                assert!(root.enclosure()[0] <= root.parameter());
+                assert!(root.parameter() <= root.enclosure()[1]);
+            }
+        }
+        if let Some(arc) = end.cap_arc() {
+            assert!(arc.branch() < graph.branches().len());
+            assert!(arc.fragment() < graph.curve_fragments().len());
+            assert!(arc.endpoints().into_iter().all(|endpoint| endpoint < 4));
+        }
+        for ruling in relation.rulings() {
+            assert!(ruling.endpoints()[physical_end] < graph.curve_endpoints().len());
+        }
+    }
+    for ruling in relation.rulings() {
+        assert!(ruling.branch() < graph.branches().len());
+        assert!(ruling.fragment() < graph.curve_fragments().len());
+        assert_ne!(ruling.endpoints()[0], ruling.endpoints()[1]);
+    }
+}
+
+#[test]
+fn coincident_cap_relations_certify_equal_and_shared_end_graphs_generically() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for reverse_second_axis in [false, true] {
+            let equal = fixture_with_axial_intervals_and_parity(
+                placement,
+                (-1.0, 2.0),
+                (-1.0, 2.0),
+                reverse_second_axis,
+            );
+            assert_coincident_cap_relation(&equal, false, 2, "equal forward");
+            assert_coincident_cap_relation(&equal, true, 2, "equal swapped");
+
+            let shared = fixture_with_axial_intervals_and_parity(
+                placement,
+                (-1.0, 3.0),
+                (-1.0, 2.0),
+                reverse_second_axis,
+            );
+            assert_coincident_cap_relation(&shared, false, 1, "shared-lower forward");
+            assert_coincident_cap_relation(&shared, true, 1, "shared-lower swapped");
+
+            let shared_upper = fixture_with_axial_intervals_and_parity(
+                placement,
+                (-2.0, 4.0),
+                (-1.0, 3.0),
+                reverse_second_axis,
+            );
+            let context = format!("shared-upper {placement:?} antiparallel={reverse_second_axis}");
+            assert_coincident_cap_relation(&shared_upper, false, 1, &context);
+            assert_coincident_cap_relation(&shared_upper, true, 1, &format!("{context} swapped"));
+        }
+    }
+}
+
 #[test]
 fn strict_world_and_oblique_relations_are_replay_and_swap_deterministic() {
     for placement in [Placement::World, Placement::Oblique] {
@@ -553,7 +672,18 @@ fn analytic_boundary_cases_have_distinct_typed_gaps() {
     );
     assert_eq!(
         certify_source_relation([&equal[0], &equal[1]]),
-        Err(ParallelCylinderRelationGap::AxialIntervalsEqual)
+        Ok([
+            SourceOverlapEnd {
+                operand: 0,
+                boundary: 0,
+                peer_boundary: Some(0),
+            },
+            SourceOverlapEnd {
+                operand: 0,
+                boundary: 1,
+                peer_boundary: Some(1),
+            },
+        ])
     );
 
     let partial = analytic_sources(
@@ -568,10 +698,12 @@ fn analytic_boundary_cases_have_distinct_typed_gaps() {
             SourceOverlapEnd {
                 operand: 1,
                 boundary: 0,
+                peer_boundary: None,
             },
             SourceOverlapEnd {
                 operand: 0,
                 boundary: 1,
+                peer_boundary: None,
             },
         ])
     );
@@ -597,7 +729,18 @@ fn analytic_boundary_cases_have_distinct_typed_gaps() {
     );
     assert_eq!(
         certify_source_relation([&shared_low[0], &shared_low[1]]),
-        Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique)
+        Ok([
+            SourceOverlapEnd {
+                operand: 0,
+                boundary: 0,
+                peer_boundary: Some(0),
+            },
+            SourceOverlapEnd {
+                operand: 1,
+                boundary: 1,
+                peer_boundary: None,
+            },
+        ])
     );
 
     let tangent = analytic_sources(
@@ -624,10 +767,12 @@ fn analytic_boundary_cases_have_distinct_typed_gaps() {
             SourceOverlapEnd {
                 operand: 1,
                 boundary: 1,
+                peer_boundary: None,
             },
             SourceOverlapEnd {
                 operand: 1,
                 boundary: 0,
+                peer_boundary: None,
             },
         ])
     );
@@ -640,7 +785,18 @@ fn analytic_boundary_cases_have_distinct_typed_gaps() {
     );
     assert_eq!(
         certify_source_relation([&antiparallel_equal[0], &antiparallel_equal[1]]),
-        Err(ParallelCylinderRelationGap::AxialIntervalsEqual)
+        Ok([
+            SourceOverlapEnd {
+                operand: 0,
+                boundary: 0,
+                peer_boundary: Some(1),
+            },
+            SourceOverlapEnd {
+                operand: 0,
+                boundary: 1,
+                peer_boundary: Some(0),
+            },
+        ])
     );
 
     let antiparallel_shared_low = analytic_sources(
@@ -651,7 +807,18 @@ fn analytic_boundary_cases_have_distinct_typed_gaps() {
     );
     assert_eq!(
         certify_source_relation([&antiparallel_shared_low[0], &antiparallel_shared_low[1],]),
-        Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique)
+        Ok([
+            SourceOverlapEnd {
+                operand: 0,
+                boundary: 0,
+                peer_boundary: Some(1),
+            },
+            SourceOverlapEnd {
+                operand: 1,
+                boundary: 0,
+                peer_boundary: None,
+            },
+        ])
     );
 
     let near_opposed_frame = Frame::new(

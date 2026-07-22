@@ -31,6 +31,7 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PeriodicCutFragmentKey {
     component: usize,
+    source_component: Option<usize>,
     ordinal: usize,
     fragment: usize,
     cylinder_period_shift: i64,
@@ -38,8 +39,17 @@ pub(crate) struct PeriodicCutFragmentKey {
 
 impl PartialEq for PeriodicCutFragmentKey {
     fn eq(&self, other: &Self) -> bool {
-        (self.component, self.ordinal, self.fragment)
-            == (other.component, other.ordinal, other.fragment)
+        (
+            self.component,
+            self.source_component,
+            self.ordinal,
+            self.fragment,
+        ) == (
+            other.component,
+            other.source_component,
+            other.ordinal,
+            other.fragment,
+        )
     }
 }
 
@@ -53,17 +63,29 @@ impl PartialOrd for PeriodicCutFragmentKey {
 
 impl Ord for PeriodicCutFragmentKey {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        (self.component, self.ordinal, self.fragment).cmp(&(
-            other.component,
-            other.ordinal,
-            other.fragment,
-        ))
+        (
+            self.component,
+            self.source_component,
+            self.ordinal,
+            self.fragment,
+        )
+            .cmp(&(
+                other.component,
+                other.source_component,
+                other.ordinal,
+                other.fragment,
+            ))
     }
 }
 
 impl PeriodicCutFragmentKey {
     pub(crate) const fn component(self) -> usize {
         self.component
+    }
+
+    /// Backing global component, or `None` for a face-local trace group.
+    pub(crate) const fn source_component(self) -> Option<usize> {
+        self.source_component
     }
 
     pub(crate) const fn ordinal(self) -> usize {
@@ -220,12 +242,18 @@ pub(crate) enum PeriodicArrangementCellKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PeriodicBoundaryTraceKey {
     component: usize,
+    source_component: Option<usize>,
     first_component_ordinal: usize,
 }
 
 impl PeriodicBoundaryTraceKey {
     pub(crate) const fn component(self) -> usize {
         self.component
+    }
+
+    /// Backing global component, or `None` for a face-local trace group.
+    pub(crate) const fn source_component(self) -> Option<usize> {
+        self.source_component
     }
 
     pub(crate) const fn first_component_ordinal(self) -> usize {
@@ -261,125 +289,12 @@ type PeriodicArrangementInputs = (PeriodicArrangementInput, PeriodicSurfaceEmbed
 type PeriodicArrangementCycle =
     ArrangementCycle<PeriodicSourceLoopKey, PeriodicCutFragmentKey, PeriodicArrangementVertexKey>;
 
-/// Postcondition whose violation would contradict the admitted theorem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MixedPeriodicArrangementContractGap {
-    CellCount,
-    RemainderTopology,
-    DiskTopology(usize),
-    CutAdjacency(PeriodicCutFragmentKey),
-    TraceCellTopology(PeriodicBoundaryTraceKey),
-    TraceCutAdjacency(PeriodicCutFragmentKey),
-    Conservation,
-}
-
-/// Typed refusal at the periodic-evidence/arrangement boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MixedPeriodicArrangementError {
-    InvalidOperand(usize),
-    IncompleteSectionGraph,
-    MissingEmbeddingEvidence {
-        operand: usize,
-        face: FaceId,
-    },
-    DuplicateEmbeddingEvidence {
-        operand: usize,
-        face: FaceId,
-    },
-    EmbeddingIndeterminate(SectionPeriodicEmbeddingGap),
-    SourceLoopPartMismatch(RawLoopId),
-    DuplicateSourceLoop(RawLoopId),
-    SourceLoopDirectionMismatch,
-    MixedClosedAndBoundaryEvidence,
-    BoundaryTraceEvidenceRequired(usize),
-    BoundaryRootCountMismatch {
-        source_loop: usize,
-        expected: usize,
-        actual: usize,
-    },
-    BoundaryRootOrderMismatch {
-        source_loop: usize,
-        expected: usize,
-        actual: usize,
-    },
-    BoundaryRootLoopMismatch {
-        endpoint: usize,
-        expected: usize,
-        actual: usize,
-    },
-    BoundaryRootCoverageMismatch(usize),
-    DuplicateBoundaryTrace(PeriodicBoundaryTraceKey),
-    BoundaryTraceEmpty(PeriodicBoundaryTraceKey),
-    BoundaryTraceOrdinalMismatch {
-        trace: PeriodicBoundaryTraceKey,
-        trace_ordinal: usize,
-        component_ordinal: usize,
-    },
-    BoundaryTraceFragmentMismatch {
-        trace: PeriodicBoundaryTraceKey,
-        component_ordinal: usize,
-        expected: usize,
-        actual: usize,
-    },
-    BoundaryTraceEndpointMismatch {
-        trace: PeriodicBoundaryTraceKey,
-        expected: usize,
-        actual: usize,
-    },
-    MixedBoundaryTraceFamiliesUnsupported {
-        returning: PeriodicBoundaryTraceKey,
-        transverse: PeriodicBoundaryTraceKey,
-    },
-    BoundaryTraceMatchingMismatch(PeriodicBoundaryTraceKey),
-    UnknownBranch {
-        fragment: usize,
-        branch: usize,
-    },
-    UnknownFragment {
-        component: usize,
-        fragment: usize,
-    },
-    ComponentLeavesFace(usize),
-    MissingComponentEvidence(usize),
-    UnexpectedComponentEvidence(usize),
-    DuplicateComponentEvidence(usize),
-    OpenComponent(usize),
-    EmptyComponent(usize),
-    NonContractibleComponent {
-        component: usize,
-        winding: i64,
-    },
-    NestedComponent {
-        component: usize,
-        parent: usize,
-    },
-    FragmentCountMismatch {
-        component: usize,
-        expected: usize,
-        actual: usize,
-    },
-    FragmentOrderMismatch {
-        component: usize,
-        ordinal: usize,
-        expected: usize,
-        actual: usize,
-    },
-    DuplicateFragment(usize),
-    WholeFragment(usize),
-    UnknownEndpoint {
-        fragment: usize,
-        endpoint: usize,
-    },
-    ComponentEndpointMismatch {
-        component: usize,
-        ordinal: usize,
-        expected: usize,
-        actual: usize,
-    },
-    TopologyArithmeticOverflow,
-    Arrangement(PeriodicSurfaceError),
-    Contract(MixedPeriodicArrangementContractGap),
-}
+mod error;
+pub(crate) use error::{MixedPeriodicArrangementContractGap, MixedPeriodicArrangementError};
+mod face_local;
+use face_local::collect_unstitched_fragment_paths;
+mod source_span;
+pub(crate) use source_span::canonical_source_span_open_interval;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PeriodicFragmentSpec {
@@ -407,8 +322,43 @@ struct PeriodicBoundaryTraceSpec {
     terminals: [PeriodicBoundaryRootSpec; 2],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PeriodicBoundaryTraceOwner {
+    trace_group: usize,
+    source_component: Option<usize>,
+}
+
+impl PeriodicBoundaryTraceOwner {
+    const fn global_component(component: usize) -> Self {
+        Self {
+            trace_group: component,
+            source_component: Some(component),
+        }
+    }
+
+    const fn face_local(trace_group: usize) -> Self {
+        Self {
+            trace_group,
+            source_component: None,
+        }
+    }
+}
+
 /// Adapt the sealed periodic embedding for one source cylinder face.
 pub(crate) fn arrange_mixed_periodic_face(
+    graph: &BodySectionGraph,
+    face: FaceId,
+    operand: usize,
+) -> Result<MixedPeriodicFaceArrangement, MixedPeriodicArrangementError> {
+    if graph.completion() != SectionCompletion::Complete {
+        return Err(MixedPeriodicArrangementError::IncompleteSectionGraph);
+    }
+    arrange_mixed_periodic_face_from_certified_embedding(graph, face, operand)
+}
+
+/// Adapt one sealed periodic embedding after an operation-local theorem has
+/// accounted for unrelated global Section gaps.
+pub(crate) fn arrange_mixed_periodic_face_from_certified_embedding(
     graph: &BodySectionGraph,
     face: FaceId,
     operand: usize,
@@ -416,10 +366,6 @@ pub(crate) fn arrange_mixed_periodic_face(
     if operand >= graph.bodies().len() {
         return Err(MixedPeriodicArrangementError::InvalidOperand(operand));
     }
-    if graph.completion() != SectionCompletion::Complete {
-        return Err(MixedPeriodicArrangementError::IncompleteSectionGraph);
-    }
-
     let evidence = match select_evidence(graph, &face, operand)? {
         SectionPeriodicFaceEmbeddingEvidence::Certified(evidence) => evidence,
         SectionPeriodicFaceEmbeddingEvidence::Indeterminate { gap, .. } => {
@@ -465,17 +411,10 @@ pub(crate) fn arrange_mixed_periodic_face(
         graph,
         evidence.source_loop_roots(),
         evidence.boundary_traces(),
-        &expected.partially_carried,
+        &expected.boundary_carried,
     )?;
     if !components.is_empty() && !traces.is_empty() {
         return Err(MixedPeriodicArrangementError::MixedClosedAndBoundaryEvidence);
-    }
-    if let Some((&component, _)) = expected.partially_carried.iter().find(|(component, _)| {
-        !traces
-            .iter()
-            .any(|trace| trace.key.component == **component)
-    }) {
-        return Err(MixedPeriodicArrangementError::BoundaryTraceEvidenceRequired(component));
     }
 
     let source_directions = evidence.source_loop_windings().map(|winding| {
@@ -519,7 +458,7 @@ fn select_evidence<'a>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CarriedOccurrences {
     fully_carried: BTreeSet<usize>,
-    partially_carried: BTreeMap<usize, BTreeSet<usize>>,
+    boundary_carried: BTreeMap<PeriodicBoundaryTraceOwner, BTreeMap<usize, usize>>,
 }
 
 fn carried_occurrences(
@@ -528,9 +467,9 @@ fn carried_occurrences(
     operand: usize,
 ) -> Result<CarriedOccurrences, MixedPeriodicArrangementError> {
     let mut fully_carried = BTreeSet::new();
-    let mut partially_carried = BTreeMap::new();
+    let mut boundary_carried = BTreeMap::new();
     for (component_index, component) in graph.curve_components().iter().enumerate() {
-        let mut carried = BTreeSet::new();
+        let mut carried = BTreeMap::new();
         for (ordinal, &fragment_index) in component.fragments().iter().enumerate() {
             let fragment = graph.curve_fragments().get(fragment_index).ok_or(
                 MixedPeriodicArrangementError::UnknownFragment {
@@ -545,7 +484,7 @@ fn carried_occurrences(
                 },
             )?;
             if branch.faces()[operand] == *face {
-                carried.insert(ordinal);
+                carried.insert(ordinal, fragment_index);
             }
         }
         if carried.is_empty() {
@@ -554,12 +493,53 @@ fn carried_occurrences(
         if carried.len() == component.fragments().len() {
             fully_carried.insert(component_index);
         } else {
-            partially_carried.insert(component_index, carried);
+            boundary_carried.insert(
+                PeriodicBoundaryTraceOwner::global_component(component_index),
+                carried,
+            );
+        }
+    }
+
+    let unstitched = collect_unstitched_fragment_paths(graph);
+    for (path_index, path) in unstitched.paths.iter().enumerate() {
+        let trace_group = graph
+            .curve_components()
+            .len()
+            .checked_add(path_index)
+            .ok_or(MixedPeriodicArrangementError::TopologyArithmeticOverflow)?;
+        let mut carried = BTreeMap::new();
+        for (ordinal, &fragment_index) in path.iter().enumerate() {
+            let fragment = &graph.curve_fragments()[fragment_index];
+            let branch = graph.branches().get(fragment.branch()).ok_or(
+                MixedPeriodicArrangementError::UnknownBranch {
+                    fragment: fragment_index,
+                    branch: fragment.branch(),
+                },
+            )?;
+            if branch.faces()[operand] == *face {
+                carried.insert(ordinal, fragment_index);
+            }
+        }
+        if !carried.is_empty() {
+            boundary_carried.insert(PeriodicBoundaryTraceOwner::face_local(trace_group), carried);
+        }
+    }
+    for (fragment_index, fragment) in graph.curve_fragments().iter().enumerate() {
+        let branch = graph.branches().get(fragment.branch()).ok_or(
+            MixedPeriodicArrangementError::UnknownBranch {
+                fragment: fragment_index,
+                branch: fragment.branch(),
+            },
+        )?;
+        if branch.faces()[operand] == *face && !unstitched.assigned[fragment_index] {
+            return Err(MixedPeriodicArrangementError::FaceLocalPathUnavailable(
+                fragment_index,
+            ));
         }
     }
     Ok(CarriedOccurrences {
         fully_carried,
-        partially_carried,
+        boundary_carried,
     })
 }
 
@@ -618,6 +598,7 @@ fn adapt_components(
             fragments.push(PeriodicFragmentSpec {
                 key: PeriodicCutFragmentKey {
                     component: component_index,
+                    source_component: Some(component_index),
                     ordinal,
                     fragment: actual,
                     cylinder_period_shift: embedded.period_shift(),
@@ -639,7 +620,7 @@ fn adapt_boundary_traces(
     graph: &BodySectionGraph,
     evidence_roots: &[Vec<crate::SectionPeriodicBoundaryRootEmbedding>; 2],
     evidence_traces: &[crate::SectionPeriodicBoundaryTraceEmbedding],
-    expected: &BTreeMap<usize, BTreeSet<usize>>,
+    expected: &BTreeMap<PeriodicBoundaryTraceOwner, BTreeMap<usize, usize>>,
 ) -> Result<
     (
         [Vec<PeriodicBoundaryRootSpec>; 2],
@@ -662,28 +643,36 @@ fn adapt_boundary_traces(
     }
     let roots = adapt_boundary_roots(graph, evidence_roots, expected_root_counts)?;
     let mut seen_traces = BTreeSet::new();
-    let mut covered = BTreeMap::<usize, BTreeSet<usize>>::new();
+    let mut covered = BTreeMap::<PeriodicBoundaryTraceOwner, BTreeMap<usize, usize>>::new();
     let mut seen_fragments = BTreeSet::new();
     let mut traces = Vec::with_capacity(evidence_traces.len());
     for evidence in evidence_traces {
+        let owner = PeriodicBoundaryTraceOwner {
+            trace_group: evidence.component(),
+            source_component: evidence.source_component(),
+        };
         let Some(&first_component_ordinal) = evidence.component_ordinals().first() else {
             return Err(MixedPeriodicArrangementError::BoundaryTraceEmpty(
                 PeriodicBoundaryTraceKey {
                     component: evidence.component(),
+                    source_component: evidence.source_component(),
                     first_component_ordinal: 0,
                 },
             ));
         };
         let key = PeriodicBoundaryTraceKey {
             component: evidence.component(),
+            source_component: evidence.source_component(),
             first_component_ordinal,
         };
         if !seen_traces.insert(key) {
             return Err(MixedPeriodicArrangementError::DuplicateBoundaryTrace(key));
         }
-        let component = graph.curve_components().get(key.component).ok_or(
-            MixedPeriodicArrangementError::UnexpectedComponentEvidence(key.component),
-        )?;
+        let Some(expected_ordinals) = expected.get(&owner) else {
+            return Err(MixedPeriodicArrangementError::UnexpectedComponentEvidence(
+                key.component,
+            ));
+        };
         if evidence.fragments().is_empty()
             || evidence.fragments().len() != evidence.component_ordinals().len()
         {
@@ -696,7 +685,7 @@ fn adapt_boundary_traces(
             .zip(evidence.fragments())
             .enumerate()
         {
-            let Some(&expected_fragment) = component.fragments().get(component_ordinal) else {
+            let Some(&expected_fragment) = expected_ordinals.get(&component_ordinal) else {
                 return Err(
                     MixedPeriodicArrangementError::BoundaryTraceOrdinalMismatch {
                         trace: key,
@@ -716,18 +705,11 @@ fn adapt_boundary_traces(
                     },
                 );
             }
-            if !expected
-                .get(&key.component)
-                .is_some_and(|ordinals| ordinals.contains(&component_ordinal))
-            {
-                return Err(MixedPeriodicArrangementError::UnexpectedComponentEvidence(
-                    key.component,
-                ));
-            }
             if !covered
-                .entry(key.component)
+                .entry(owner)
                 .or_default()
-                .insert(component_ordinal)
+                .insert(component_ordinal, actual_fragment)
+                .is_none()
                 || !seen_fragments.insert(actual_fragment)
             {
                 return Err(MixedPeriodicArrangementError::DuplicateFragment(
@@ -752,6 +734,7 @@ fn adapt_boundary_traces(
             fragments.push(PeriodicFragmentSpec {
                 key: PeriodicCutFragmentKey {
                     component: key.component,
+                    source_component: key.source_component,
                     ordinal: component_ordinal,
                     fragment: actual_fragment,
                     cylinder_period_shift: embedded.period_shift(),
@@ -803,9 +786,11 @@ fn adapt_boundary_traces(
             terminals,
         });
     }
-    for (&component, ordinals) in expected {
-        if covered.get(&component) != Some(ordinals) {
-            return Err(MixedPeriodicArrangementError::BoundaryTraceEvidenceRequired(component));
+    for (&owner, ordinals) in expected {
+        if covered.get(&owner) != Some(ordinals) {
+            return Err(
+                MixedPeriodicArrangementError::BoundaryTraceEvidenceRequired(owner.trace_group),
+            );
         }
     }
     validate_boundary_trace_matching(&roots, &traces)?;
@@ -2165,6 +2150,7 @@ mod tests {
                 .map(|ordinal| PeriodicFragmentSpec {
                     key: PeriodicCutFragmentKey {
                         component,
+                        source_component: Some(component),
                         ordinal,
                         fragment: fragment_base + ordinal,
                         cylinder_period_shift: 0,
@@ -2209,6 +2195,7 @@ mod tests {
                 let destination_order = (source_order + destination_offset) % trace_count;
                 let key = PeriodicBoundaryTraceKey {
                     component: 1000 + source_order,
+                    source_component: Some(1000 + source_order),
                     first_component_ordinal: source_order * 3,
                 };
                 let terminals = if source_order.is_multiple_of(2) {
@@ -2227,6 +2214,7 @@ mod tests {
                     fragments: vec![PeriodicFragmentSpec {
                         key: PeriodicCutFragmentKey {
                             component: key.component,
+                            source_component: key.source_component,
                             ordinal: key.first_component_ordinal,
                             fragment: 2000 + source_order,
                             cylinder_period_shift: i64::try_from(source_order).unwrap() - 2,
@@ -2288,12 +2276,14 @@ mod tests {
         ];
         let key = PeriodicBoundaryTraceKey {
             component: 77,
+            source_component: Some(77),
             first_component_ordinal: 4,
         };
         let fragments = (0..3)
             .map(|ordinal| PeriodicFragmentSpec {
                 key: PeriodicCutFragmentKey {
                     component: key.component,
+                    source_component: key.source_component,
                     ordinal: key.first_component_ordinal + ordinal,
                     fragment: 300 + ordinal,
                     cylinder_period_shift: ordinal as i64 - 1,
@@ -2882,12 +2872,10 @@ mod tests {
                             })
                     })
             }));
-            assert!(
-                arrangement
-                    .cut_fragments()
-                    .iter()
-                    .all(|fragment| { fragment.key().cylinder_period_shift().unsigned_abs() <= 1 })
-            );
+            assert!(arrangement.cut_fragments().iter().all(|fragment| {
+                fragment.key().source_component() == Some(fragment.key().component())
+                    && fragment.key().cylinder_period_shift().unsigned_abs() <= 1
+            }));
             assert!(arrangement.cells().iter().all(|cell| {
                 matches!(cell.key(), PeriodicArrangementCellKey::TraceCell(_))
                     && cell.boundaries().len() == 1
@@ -2978,3 +2966,7 @@ mod tests {
 #[cfg(test)]
 #[path = "mixed_periodic_arrangement_returning_tests.rs"]
 mod returning_tests;
+
+#[cfg(test)]
+#[path = "mixed_periodic_arrangement_face_local_tests.rs"]
+mod face_local_tests;

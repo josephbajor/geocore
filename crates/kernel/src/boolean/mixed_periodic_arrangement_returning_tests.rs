@@ -41,6 +41,7 @@ fn returning_specs(
             ];
             let key = PeriodicBoundaryTraceKey {
                 component: 30_000 + source_loop * 1_000 + trace_ordinal,
+                source_component: Some(30_000 + source_loop * 1_000 + trace_ordinal),
                 first_component_ordinal: trace_ordinal * 10,
             };
             let mut path = vec![terminals[0].key.endpoint];
@@ -55,6 +56,7 @@ fn returning_specs(
                     .map(|ordinal| PeriodicFragmentSpec {
                         key: PeriodicCutFragmentKey {
                             component: key.component,
+                            source_component: key.source_component,
                             ordinal: key.first_component_ordinal + ordinal,
                             fragment: 70_000 + source_loop * 10_000 + trace_ordinal * 100 + ordinal,
                             cylinder_period_shift: ordinal as i64 - 1,
@@ -218,6 +220,7 @@ fn complete_mixed_returning_and_transverse_family_is_explicitly_unsupported() {
             let terminals = terminals.map(|(source_loop, order)| roots[source_loop][order].clone());
             let key = PeriodicBoundaryTraceKey {
                 component: 91_000 + trace_ordinal,
+                source_component: Some(91_000 + trace_ordinal),
                 first_component_ordinal: trace_ordinal,
             };
             PeriodicBoundaryTraceSpec {
@@ -225,6 +228,7 @@ fn complete_mixed_returning_and_transverse_family_is_explicitly_unsupported() {
                 fragments: vec![PeriodicFragmentSpec {
                     key: PeriodicCutFragmentKey {
                         component: key.component,
+                        source_component: key.source_component,
                         ordinal: key.first_component_ordinal,
                         fragment: 92_000 + trace_ordinal,
                         cylinder_period_shift: 0,

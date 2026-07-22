@@ -2028,6 +2028,7 @@ fn build_verified_branch_graph(
                 *raw_line,
                 branch,
                 [cylinder_a, cylinder_b],
+                surface_ranges,
                 tolerance,
             )?,
             (
@@ -2041,6 +2042,7 @@ fn build_verified_branch_graph(
                 branch,
                 plane,
                 cylinder,
+                surface_ranges[1],
                 true,
                 tolerance,
             )?,
@@ -2055,6 +2057,7 @@ fn build_verified_branch_graph(
                 branch,
                 plane,
                 cylinder,
+                surface_ranges[0],
                 false,
                 tolerance,
             )?,
@@ -2871,6 +2874,28 @@ fn on_window_boundary(uv: Vec2, ranges: [ParamRange; 2], tolerance: f64) -> bool
         || (uv.x - ranges[0].hi).abs() <= tolerance
         || (uv.y - ranges[1].lo).abs() <= tolerance
         || (uv.y - ranges[1].hi).abs() <= tolerance
+}
+
+/// Select the exact source-window coefficient represented by a bounded
+/// solver parameter, or retain an unambiguous interior value.
+///
+/// This is semantic representation authority, not authored-coordinate
+/// equality: the returned coefficient remains guarded by the branch's paired
+/// whole-range residual certificate. A window narrower than both boundary
+/// corridors is ambiguous and therefore refused.
+pub(super) fn source_window_parameter_representative(
+    value: f64,
+    range: ParamRange,
+    tolerance: f64,
+) -> Option<f64> {
+    let low = (value - range.lo).abs() <= tolerance;
+    let high = (value - range.hi).abs() <= tolerance;
+    match (low, high) {
+        (true, false) => Some(range.lo),
+        (false, true) => Some(range.hi),
+        (false, false) => Some(value),
+        (true, true) => None,
+    }
 }
 
 #[cfg(test)]

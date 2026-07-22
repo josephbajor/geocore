@@ -28,6 +28,7 @@ use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use ktopo::store::Store;
 
+use super::ruling_publish::RulingEndpointCoincidenceProof;
 use super::{SECTION_WORK, SectionUvLine};
 use crate::error::{Error, Result};
 
@@ -807,21 +808,59 @@ fn merged_endpoint(site: RulingTrimSite, operand: usize) -> MergedRulingEndpoint
     }
 }
 
+fn coincident_endpoint(
+    left: RulingTrimSite,
+    right: RulingTrimSite,
+    proof: Option<&RulingEndpointCoincidenceProof>,
+) -> Option<MergedRulingEndpoint> {
+    proof.copied().filter(|proof| proof.proves(left, right))?;
+    Some(MergedRulingEndpoint {
+        sites: [Some(left), Some(right)],
+        carrier_parameter: Interval::new(
+            left.carrier_parameter
+                .lo()
+                .min(right.carrier_parameter.lo()),
+            left.carrier_parameter
+                .hi()
+                .max(right.carrier_parameter.hi()),
+        ),
+        edge_parameters: [Some(left.edge_parameter), Some(right.edge_parameter)],
+    })
+}
+
 /// Intersect two strictly ordered operand-local span lists, retaining common
 /// spans that could overlap the graph discovery range.
 ///
-/// Endpoint order must be certified by strict interval separation. An
-/// overlapping endpoint enclosure could denote either one shared point or
-/// two unresolved nearby roots; without the operation-global root authority
-/// this module refuses both interpretations. Single-point contacts likewise
-/// do not become zero-length output spans. A per-face span may contain the
-/// whole range: the other operand can still supply both physical endpoints.
-/// This stage never truncates a topology endpoint to the graph range;
-/// publication reissues the carrier proof over retained root enclosures.
+/// Endpoint order needs strict interval separation or an exact source-edge
+/// coincidence proof; the generic path refuses overlapping enclosures.
+/// Single-point contacts do not become zero-length spans. This stage never
+/// truncates topology endpoints to the discovery range; publication reissues
+/// the carrier proof over retained root enclosures.
 pub(crate) fn merge_ruling_spans(
     a: &[RulingClipSpan],
     b: &[RulingClipSpan],
     carrier_range: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<RulingMergeOutcome> {
+    merge_ruling_spans_impl(a, b, carrier_range, None, scope)
+}
+
+/// Merge with exact semantic-root authority for selected endpoint edge pairs.
+pub(crate) fn merge_ruling_spans_with_endpoint_proof(
+    a: &[RulingClipSpan],
+    b: &[RulingClipSpan],
+    carrier_range: ParamRange,
+    proof: &RulingEndpointCoincidenceProof,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<RulingMergeOutcome> {
+    merge_ruling_spans_impl(a, b, carrier_range, Some(proof), scope)
+}
+
+fn merge_ruling_spans_impl(
+    a: &[RulingClipSpan],
+    b: &[RulingClipSpan],
+    carrier_range: ParamRange,
+    endpoint_proof: Option<&RulingEndpointCoincidenceProof>,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<RulingMergeOutcome> {
     if !carrier_range.is_finite()
@@ -858,9 +897,14 @@ pub(crate) fn merge_ruling_spans(
             StrictOrder::Before => merged_endpoint(right.start, 1),
             StrictOrder::After => merged_endpoint(left.start, 0),
             StrictOrder::Overlap => {
-                return Ok(RulingMergeOutcome::Indeterminate(
-                    RulingClipGap::UnorderedCrossings,
-                ));
+                match coincident_endpoint(left.start, right.start, endpoint_proof) {
+                    Some(endpoint) => endpoint,
+                    None => {
+                        return Ok(RulingMergeOutcome::Indeterminate(
+                            RulingClipGap::UnorderedCrossings,
+                        ));
+                    }
+                }
             }
         };
         let (end, exhausted_a, exhausted_b) =
@@ -868,9 +912,14 @@ pub(crate) fn merge_ruling_spans(
                 StrictOrder::Before => (merged_endpoint(left.end, 0), true, false),
                 StrictOrder::After => (merged_endpoint(right.end, 1), false, true),
                 StrictOrder::Overlap => {
-                    return Ok(RulingMergeOutcome::Indeterminate(
-                        RulingClipGap::UnorderedCrossings,
-                    ));
+                    match coincident_endpoint(left.end, right.end, endpoint_proof) {
+                        Some(endpoint) => (endpoint, true, true),
+                        None => {
+                            return Ok(RulingMergeOutcome::Indeterminate(
+                                RulingClipGap::UnorderedCrossings,
+                            ));
+                        }
+                    }
                 }
             };
         if start.carrier_parameter.hi() >= end.carrier_parameter.lo() {

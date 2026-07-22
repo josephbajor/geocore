@@ -10,6 +10,9 @@
 //! denominator instead of silently replacing it by one. Carrier and normal
 //! magnitudes remain irrelevant: only a strict interval sign is published.
 
+use kcore::predicates::{Orientation, orient3d};
+use ktopo::geom::Curve2dGeom;
+
 use super::*;
 
 enum CylinderCylinderBranchAdaptation {
@@ -49,7 +52,138 @@ pub(super) fn append_branch(
             return Ok(());
         }
     };
-    ruling_publish::append_branch(store, raw_faces, facades, branch, root_identity, scope, acc)
+    let [
+        SectionUvCurve::Line(first_trace),
+        SectionUvCurve::Line(second_trace),
+    ] = branch.pcurves
+    else {
+        acc.gaps.push(SectionGap {
+            reason: GAP_PAIR_UNRESOLVED,
+            faces: facades.to_vec(),
+        });
+        return Ok(());
+    };
+    ruling_publish::append_branch_with_endpoint_proof(
+        store,
+        raw_faces,
+        facades,
+        branch,
+        |left, right, scope| {
+            certify_coincident_cap_ring_endpoints(
+                store,
+                raw_faces,
+                [first_trace, second_trace],
+                left,
+                right,
+                scope,
+            )
+        },
+        root_identity,
+        scope,
+        acc,
+    )
+}
+
+/// Prove cap-ring pairs with one exact root in the graph-certified semantic
+/// carrier parameterization.
+///
+/// Graph promotion has already bound both pcurves to one paired whole-range
+/// residual certificate. This stage adds topology-owned horizontal ring
+/// coefficients and uses an exact determinant; it never infers identity from
+/// overlapping carrier intervals or nearby model-space points.
+fn certify_coincident_cap_ring_endpoints(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    traces: [SectionUvLine; 2],
+    left: &[ruling_clip::RulingClipSpan],
+    right: &[ruling_clip::RulingClipSpan],
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<Option<ruling_publish::RulingEndpointCoincidenceProof>> {
+    let candidate_pairs = (left.len() as u64)
+        .saturating_mul(right.len() as u64)
+        .saturating_mul(4);
+    scope
+        .ledger_mut()
+        .charge(SECTION_WORK, candidate_pairs)
+        .map_err(Error::from)?;
+    let mut pairs = Vec::with_capacity(2);
+    for left_site in left.iter().flat_map(|span| [span.start, span.end]) {
+        for right_site in right.iter().flat_map(|span| [span.start, span.end]) {
+            if cap_ring_sites_are_coincident(store, raw_faces, traces, left_site, right_site)? {
+                let pair = [left_site.edge, right_site.edge];
+                if !pairs.contains(&pair) {
+                    pairs.push(pair);
+                }
+            }
+        }
+    }
+    Ok(ruling_publish::RulingEndpointCoincidenceProof::from_exact_cap_ring_pairs(&pairs))
+}
+
+fn cap_ring_sites_are_coincident(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    traces: [SectionUvLine; 2],
+    left: ruling_clip::RulingTrimSite,
+    right: ruling_clip::RulingTrimSite,
+) -> Result<bool> {
+    if [left.face, right.face] != raw_faces {
+        return Ok(false);
+    }
+    let (Some(left_height), Some(right_height)) =
+        (ring_height(store, left)?, ring_height(store, right)?)
+    else {
+        return Ok(false);
+    };
+    let [left_trace, right_trace] = traces;
+    let coefficients = [
+        left_trace.direction().y,
+        left_trace.origin().y,
+        left_height,
+        right_trace.direction().y,
+        right_trace.origin().y,
+        right_height,
+    ];
+    Ok(coefficients.into_iter().all(f64::is_finite)
+        && left_trace.direction().y != 0.0
+        && right_trace.direction().y != 0.0
+        // The roots `(h - origin) / direction` are equal exactly iff this
+        // determinant is zero; orient3d evaluates it without rounded
+        // intermediate subtractions.
+        && orient3d(
+            [left_trace.direction().y, left_trace.origin().y, left_height],
+            [
+                right_trace.direction().y,
+                right_trace.origin().y,
+                right_height,
+            ],
+            [0.0, 1.0, 1.0],
+            [0.0; 3],
+        ) == Orientation::Zero)
+}
+
+fn ring_height(store: &Store, site: ruling_clip::RulingTrimSite) -> Result<Option<f64>> {
+    let loop_ = store
+        .get(site.loop_id)
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let fin = store
+        .get(site.fin)
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    if loop_.face() != site.face || fin.parent() != site.loop_id || fin.edge() != site.edge {
+        return Ok(None);
+    }
+    let Some(use_) = fin.pcurve() else {
+        return Ok(None);
+    };
+    Ok(
+        match store
+            .pcurve(use_.curve())
+            .map_err(|source| Error::InconsistentTopology { source })?
+        {
+            Curve2dGeom::Line(boundary) if boundary.dir().y == 0.0 => Some(boundary.origin().y),
+            _ => None,
+        },
+    )
 }
 
 fn adapt_branch(
@@ -232,10 +366,348 @@ fn finite(value: Interval) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kcore::operation::{
+        AccountingMode, BudgetPlan, LimitSpec, OperationContext, OperationReport, OperationScope,
+        ResourceKind, SessionPolicy,
+    };
+    use kcore::tolerance::Tolerances;
     use kgeom::frame::Frame;
     use kgeom::surface::Cylinder;
 
     use super::*;
+    use crate::{
+        BodyId, CylinderRequest, Kernel, OperationOutcome, OperationSettings, PartId,
+        SectionBodiesRequest, SectionCompletion, Session,
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    enum Placement {
+        World,
+        Oblique,
+    }
+
+    struct PublicFixture {
+        session: Session,
+        part: PartId,
+        first: BodyId,
+        second: BodyId,
+    }
+
+    fn placement_frame(placement: Placement) -> Frame {
+        match placement {
+            Placement::World => Frame::world(),
+            Placement::Oblique => Frame::new(
+                Point3::new(2.5, -1.75, 0.625),
+                Vec3::new(0.48, 0.64, 0.6),
+                Vec3::new(0.8, -0.6, 0.0),
+            )
+            .unwrap(),
+        }
+    }
+
+    fn public_fixture(
+        placement: Placement,
+        first: (f64, f64),
+        second: (f64, f64),
+        reverse_second_axis: bool,
+    ) -> PublicFixture {
+        let frame = placement_frame(placement);
+        let first_frame = frame.with_origin(frame.point_at(-0.5, 0.0, first.0));
+        let second_frame = if reverse_second_axis {
+            Frame::new(
+                frame.point_at(0.5, 0.0, second.0 + second.1),
+                -frame.z(),
+                frame.x(),
+            )
+            .unwrap()
+        } else {
+            frame.with_origin(frame.point_at(0.5, 0.0, second.0))
+        };
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+        let (first, second) = {
+            let mut edit = session.edit_part(part.clone()).unwrap();
+            let first = edit
+                .create_cylinder(CylinderRequest::new(first_frame, 1.0, first.1))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let second = edit
+                .create_cylinder(CylinderRequest::new(second_frame, 1.0, second.1))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (first, second)
+        };
+        PublicFixture {
+            session,
+            part,
+            first,
+            second,
+        }
+    }
+
+    fn section(fixture: &PublicFixture, swapped: bool) -> (BodySectionGraph, OperationReport) {
+        let (first, second) = if swapped {
+            (fixture.second.clone(), fixture.first.clone())
+        } else {
+            (fixture.first.clone(), fixture.second.clone())
+        };
+        let outcome = fixture
+            .session
+            .part(fixture.part.clone())
+            .unwrap()
+            .section_bodies(SectionBodiesRequest::new(first, second))
+            .unwrap();
+        let (result, report) = outcome.into_parts();
+        (result.unwrap(), report)
+    }
+
+    fn section_with_work_limit(
+        fixture: &PublicFixture,
+        allowed: u64,
+    ) -> OperationOutcome<BodySectionGraph> {
+        let budget = BudgetPlan::new([LimitSpec::new(
+            SECTION_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            allowed,
+        )])
+        .unwrap();
+        fixture
+            .session
+            .part(fixture.part.clone())
+            .unwrap()
+            .section_bodies(
+                SectionBodiesRequest::new(fixture.first.clone(), fixture.second.clone())
+                    .with_settings(OperationSettings::new().with_budget_overrides(budget)),
+            )
+            .unwrap()
+    }
+
+    fn section_work(report: &OperationReport) -> u64 {
+        report
+            .usage()
+            .iter()
+            .find(|snapshot| {
+                snapshot.stage == SECTION_WORK && snapshot.resource == ResourceKind::Work
+            })
+            .expect("section query must retain its exact work usage")
+            .consumed
+    }
+
+    fn assert_all_cap_side_pairs_are_coincident(fixture: &PublicFixture, graph: &BodySectionGraph) {
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        let faces = |body: &BodyId| {
+            let mut side = None;
+            let mut caps = Vec::new();
+            for face in part.state.store.faces_of_body(body.raw()).unwrap() {
+                match part
+                    .state
+                    .store
+                    .surface(part.state.store.get(face).unwrap().surface)
+                    .unwrap()
+                {
+                    SurfaceGeom::Cylinder(_) => assert!(side.replace(face).is_none()),
+                    SurfaceGeom::Plane(_) => caps.push(face),
+                    _ => panic!("cylinder fixture retained an unexpected surface"),
+                }
+            }
+            (side.unwrap(), caps)
+        };
+        let (first_side, first_caps) = faces(&fixture.first);
+        let (second_side, second_caps) = faces(&fixture.second);
+        assert_eq!(first_caps.len(), 2);
+        assert_eq!(second_caps.len(), 2);
+        let expected = first_caps
+            .into_iter()
+            .map(|cap| [cap, second_side])
+            .chain(second_caps.into_iter().map(|cap| [first_side, cap]))
+            .collect::<Vec<_>>();
+        let mut actual = graph
+            .gaps()
+            .iter()
+            .filter(|gap| {
+                gap.reason() == curved_clip::ClosedConicClipGap::CoincidentBoundary.reason()
+            })
+            .map(|gap| gap.faces().iter().map(FaceId::raw).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        for pair in expected {
+            let index = actual
+                .iter()
+                .position(|candidate| {
+                    candidate.len() == 2
+                        && (candidate[0] == pair[0] && candidate[1] == pair[1]
+                            || candidate[0] == pair[1] && candidate[1] == pair[0])
+                })
+                .expect("every cap/other-side pair must retain one coincidence gap");
+            actual.remove(index);
+        }
+        assert!(actual.is_empty());
+    }
+
+    fn assert_dual_source_rulings(
+        graph: &BodySectionGraph,
+        expected_total_fragments: usize,
+        expected_dual_ends: usize,
+        expected_conic_gaps: usize,
+        expected_coincident_face_gaps: usize,
+    ) {
+        assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
+        assert_eq!(graph.curve_fragments().len(), expected_total_fragments);
+        assert_eq!(graph.curve_endpoints().len(), 4);
+        assert!(graph.curve_components().is_empty());
+        assert_eq!(graph.periodic_face_embeddings().len(), 2);
+        let certified = graph
+            .periodic_face_embeddings()
+            .iter()
+            .map(|embedding| {
+                let SectionPeriodicFaceEmbeddingEvidence::Certified(embedding) = embedding else {
+                    panic!("dual-source periodic embedding remained indeterminate: {embedding:#?}")
+                };
+                assert!(embedding.components().is_empty());
+                for roots in embedding.source_loop_roots() {
+                    for (cyclic_order, root) in roots.iter().enumerate() {
+                        assert_eq!(root.cyclic_order(), cyclic_order);
+                        let SectionCurveEndpointTopology::Trim {
+                            source_parameters, ..
+                        } = graph.curve_endpoints()[root.endpoint()].topology()
+                        else {
+                            panic!("periodic boundary root lost trim topology")
+                        };
+                        assert_eq!(
+                            source_parameters[embedding.operand()].as_ref(),
+                            Some(root.source_parameter())
+                        );
+                    }
+                }
+                for trace in embedding.boundary_traces() {
+                    assert_eq!(trace.source_component(), None);
+                    assert_eq!(trace.fragments().len(), trace.component_ordinals().len());
+                    for terminal in trace.terminals() {
+                        assert!(
+                            embedding.source_loop_roots()[terminal.source_loop_ordinal()]
+                                .iter()
+                                .any(|root| {
+                                    root.endpoint() == terminal.endpoint()
+                                        && root.source_parameter() == terminal.source_parameter()
+                                })
+                        );
+                    }
+                }
+                embedding
+            })
+            .collect::<Vec<_>>();
+        let mut shapes = certified
+            .iter()
+            .map(|embedding| {
+                let mut root_counts = embedding.source_loop_roots().each_ref().map(Vec::len);
+                root_counts.sort_unstable();
+                let mut trace_lengths = embedding
+                    .boundary_traces()
+                    .iter()
+                    .map(|trace| trace.fragments().len())
+                    .collect::<Vec<_>>();
+                trace_lengths.sort_unstable();
+                (root_counts, trace_lengths)
+            })
+            .collect::<Vec<_>>();
+        shapes.sort_unstable();
+        match expected_total_fragments {
+            2 => assert_eq!(shapes, vec![([2, 2], vec![1, 1]); 2]),
+            3 => assert_eq!(shapes, vec![([0, 2], vec![3]), ([2, 2], vec![1, 1])]),
+            _ => panic!("unexpected dual-source fixture fragment count"),
+        }
+        assert_gap_counts(graph, expected_conic_gaps, expected_coincident_face_gaps);
+        let mut ruling_count = 0;
+        let mut dual_ends = 0;
+        for fragment in graph.curve_fragments() {
+            let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
+                continue;
+            };
+            ruling_count += 1;
+            let branch = &graph.branches()[fragment.branch()];
+            for end in endpoints.iter() {
+                let present = end.trims().iter().filter(|trim| trim.is_some()).count();
+                dual_ends += usize::from(present == 2);
+                assert!(matches!(present, 1 | 2));
+                let public = &graph.curve_endpoints()[end.endpoint()];
+                let SectionCurveEndpointTopology::Trim {
+                    sites,
+                    source_parameters,
+                } = public.topology()
+                else {
+                    panic!("ruling endpoint must retain physical trim topology")
+                };
+                for operand in 0..2 {
+                    match &end.trims()[operand] {
+                        Some(trim) => {
+                            assert_eq!(trim.operand(), operand);
+                            assert_eq!(trim.face(), branch.faces()[operand]);
+                            assert_eq!(
+                                sites[operand],
+                                SectionSite::EdgeInterior(trim.source_parameter().edge())
+                            );
+                            assert_eq!(
+                                source_parameters[operand].as_ref(),
+                                Some(trim.source_parameter())
+                            );
+                            assert!(public.edge_parameters()[operand].is_some());
+                        }
+                        None => {
+                            assert_eq!(
+                                sites[operand],
+                                SectionSite::FaceInterior(branch.faces()[operand].clone())
+                            );
+                            assert!(source_parameters[operand].is_none());
+                            assert!(public.edge_parameters()[operand].is_none());
+                        }
+                    }
+                }
+                if present == 2 {
+                    let [Some(first), Some(second)] = source_parameters else {
+                        unreachable!()
+                    };
+                    assert_ne!(first.edge(), second.edge());
+                }
+            }
+        }
+        assert_eq!(ruling_count, 2);
+        assert_eq!(dual_ends, expected_dual_ends);
+    }
+
+    fn assert_gap_counts(
+        graph: &BodySectionGraph,
+        expected_conic_gaps: usize,
+        expected_coincident_face_gaps: usize,
+    ) {
+        let gap_count = |reason| {
+            graph
+                .gaps()
+                .iter()
+                .filter(|gap| gap.reason() == reason)
+                .count()
+        };
+        assert_eq!(
+            gap_count(curved_clip::ClosedConicClipGap::CoincidentBoundary.reason()),
+            expected_conic_gaps
+        );
+        assert_eq!(
+            gap_count(GAP_COINCIDENT_FACE_PAIR),
+            expected_coincident_face_gaps
+        );
+        assert_eq!(gap_count(GAP_MIXED_FRAGMENT_STITCH), 1);
+        assert_eq!(
+            graph.gaps().len(),
+            expected_conic_gaps + expected_coincident_face_gaps + 1
+        );
+        assert_eq!(
+            gap_count(ruling_clip::RulingClipGap::UnorderedCrossings.reason()),
+            0
+        );
+    }
 
     fn point_intervals(values: [f64; 3]) -> [Interval; 3] {
         values.map(Interval::point)
@@ -366,6 +838,149 @@ mod tests {
                 direction * 7.0,
             ),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn equal_interval_rulings_publish_dual_sources_for_world_exact_oblique_and_axis_parity() {
+        for placement in [Placement::World, Placement::Oblique] {
+            for reverse_second_axis in [false, true] {
+                for axial_origin in [-1.0, 0.0, 1.0] {
+                    let fixture = public_fixture(
+                        placement,
+                        (axial_origin, 2.0),
+                        (axial_origin, 2.0),
+                        reverse_second_axis,
+                    );
+                    let (forward, forward_report) = section(&fixture, false);
+                    let (replay, replay_report) = section(&fixture, false);
+                    let (swapped, swapped_report) = section(&fixture, true);
+                    assert_eq!(forward, replay);
+                    assert_eq!(forward_report, replay_report);
+                    assert_eq!(forward_report.usage(), swapped_report.usage());
+                    assert_dual_source_rulings(&forward, 2, 4, 4, 2);
+                    assert_dual_source_rulings(&swapped, 2, 4, 4, 2);
+                    assert_all_cap_side_pairs_are_coincident(&fixture, &forward);
+                    assert_all_cap_side_pairs_are_coincident(&fixture, &swapped);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn one_shared_end_rulings_retain_only_the_exact_dual_source_end() {
+        for placement in [Placement::World, Placement::Oblique] {
+            for reverse_second_axis in [false, true] {
+                for (first, second) in [((0.0, 3.0), (0.0, 2.0)), ((-2.0, 4.0), (-1.0, 3.0))] {
+                    let fixture = public_fixture(placement, first, second, reverse_second_axis);
+                    let (forward, forward_report) = section(&fixture, false);
+                    let (replay, replay_report) = section(&fixture, false);
+                    let (swapped, swapped_report) = section(&fixture, true);
+                    assert_eq!(forward, replay);
+                    assert_eq!(forward_report, replay_report);
+                    assert_eq!(forward_report.usage(), swapped_report.usage());
+                    assert_dual_source_rulings(&forward, 3, 2, 2, 1);
+                    assert_dual_source_rulings(&swapped, 3, 2, 2, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_shared_endpoint_work_accepts_n_and_refuses_n_minus_one() {
+        for (fixture, expected_work) in [
+            (
+                public_fixture(Placement::World, (0.0, 2.0), (0.0, 2.0), false),
+                131_213,
+            ),
+            (
+                public_fixture(Placement::World, (0.0, 3.0), (0.0, 2.0), false),
+                98_437,
+            ),
+            (
+                public_fixture(Placement::Oblique, (-2.0, 4.0), (-1.0, 3.0), false),
+                98_439,
+            ),
+        ] {
+            let (expected, report) = section(&fixture, false);
+            let exact_work = section_work(&report);
+            assert_eq!(exact_work, expected_work);
+            let admitted = section_with_work_limit(&fixture, exact_work);
+            assert_eq!(admitted.result().unwrap(), &expected);
+
+            let refused = section_with_work_limit(&fixture, exact_work - 1);
+            let snapshot = refused
+                .result()
+                .unwrap_err()
+                .limit()
+                .expect("section refusal must retain exact limit evidence");
+            assert_eq!(snapshot.stage, SECTION_WORK);
+            assert_eq!(snapshot.resource, ResourceKind::Work);
+            assert_eq!(snapshot.consumed, exact_work);
+            assert_eq!(snapshot.allowed, exact_work - 1);
+        }
+    }
+
+    #[test]
+    fn nearby_overlapping_endpoint_enclosures_remain_unordered_without_exact_proof() {
+        let near = f64::from_bits(1);
+        let mut store = Store::new();
+        let first = ktopo::make::cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
+        let second_frame = Frame::world().with_origin(Point3::new(1.0, 0.0, near));
+        let second = ktopo::make::cylinder(&mut store, &second_frame, 1.0, 1.0).unwrap();
+        let side_face = |body| {
+            store
+                .faces_of_body(body)
+                .unwrap()
+                .into_iter()
+                .find(|face| {
+                    matches!(
+                        store.surface(store.get(*face).unwrap().surface).unwrap(),
+                        SurfaceGeom::Cylinder(_)
+                    )
+                })
+                .unwrap()
+        };
+        let faces = [side_face(first), side_face(second)];
+        let policy = SessionPolicy::v1();
+        let context = OperationContext::new(&policy, Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(BodySectionBudgetProfile::v1_defaults());
+        let mut scope = OperationScope::new(&context);
+        let trace = |height| SectionUvLine {
+            origin: Point2::new(1.0, height),
+            direction: Vec2::new(0.0, 1.0),
+        };
+        let range = ParamRange::new(-1.0, 3.0);
+        let ruling_clip::RulingClipOutcome::Spans(left) =
+            ruling_clip::clip_ruling_to_face(&store, faces[0], trace(0.0), range, &mut scope)
+                .unwrap()
+        else {
+            panic!("first cylinder must retain one exact band")
+        };
+        let ruling_clip::RulingClipOutcome::Spans(right) =
+            ruling_clip::clip_ruling_to_face(&store, faces[1], trace(-near), range, &mut scope)
+                .unwrap()
+        else {
+            panic!("second cylinder must retain one exact band")
+        };
+        assert!(
+            certify_coincident_cap_ring_endpoints(
+                &store,
+                faces,
+                [trace(0.0), trace(-near)],
+                &left,
+                &right,
+                &mut scope,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(
+            ruling_clip::merge_ruling_spans(&left, &right, range, &mut scope).unwrap(),
+            ruling_clip::RulingMergeOutcome::Indeterminate(
+                ruling_clip::RulingClipGap::UnorderedCrossings
+            )
         );
     }
 }

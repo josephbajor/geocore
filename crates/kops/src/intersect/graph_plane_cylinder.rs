@@ -22,7 +22,7 @@ use kgraph::{
 use super::error::IntersectionError;
 use super::graph_surface::{
     GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult, IntersectionBranchCertificate,
-    IntersectionBranchTopology, VerifiedBranchPayload,
+    IntersectionBranchTopology, VerifiedBranchPayload, source_window_parameter_representative,
 };
 use super::result::{ContactKind, SurfaceSurfaceCurve};
 
@@ -139,6 +139,7 @@ pub(super) fn build_verified_plane_cylinder_circle_branch(
     raw_branch: &SurfaceSurfaceCurve,
     plane: Plane,
     cylinder: Cylinder,
+    cylinder_range: [ParamRange; 2],
     plane_first: bool,
     tolerance: f64,
 ) -> GraphSurfaceIntersectionResult<VerifiedBranchPayload> {
@@ -183,16 +184,29 @@ pub(super) fn build_verified_plane_cylinder_circle_branch(
     let plane_map = AffineParamMap1d::new(plane_orientation, 0.0)
         .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
 
-    let cylinder_start = if plane_first {
-        raw_branch.uv_b_start[0]
+    // Retain the bounded solver's fitted source-chart height. Recomputing it
+    // from the rounded carrier center erases exact cap-boundary provenance
+    // after a rigid translation. The paired whole-period residual proof below
+    // remains the stored-surface guard for this semantic chart coefficient.
+    let cylinder_parameters = if plane_first {
+        raw_branch.uv_b_start
     } else {
-        raw_branch.uv_a_start[0]
+        raw_branch.uv_a_start
     };
-    let cylinder_pcurve = Line2d::new(Vec2::new(0.0, height), Vec2::new(1.0, 0.0))
+    let cylinder_height = source_window_parameter_representative(
+        cylinder_parameters[1],
+        cylinder_range[1],
+        tolerance,
+    )
+    .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+        kgraph::IntersectionCertificateError::InvalidTraceFamily,
+    ))?;
+    let cylinder_pcurve = Line2d::new(Vec2::new(0.0, cylinder_height), Vec2::new(1.0, 0.0))
         .map_err(IntersectionError::from)
         .map_err(GraphSurfaceIntersectionError::Intersection)?;
-    let cylinder_map = AffineParamMap1d::new(1.0, cylinder_start - raw_branch.curve_range.lo)
-        .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
+    let cylinder_map =
+        AffineParamMap1d::new(1.0, cylinder_parameters[0] - raw_branch.curve_range.lo)
+            .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
 
     let plane_trace =
         PlaneCylinderCircleTrace::Plane(PlaneCircleTrace::new(plane, plane_pcurve, plane_map));

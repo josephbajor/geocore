@@ -794,7 +794,9 @@ fn certified_point_on_axis(frame: &Frame, point: Point3) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analytic_shell::cylinder_cylinder_tests::unsplit_parallel_cylinder_lens_input;
+    use crate::analytic_shell::cylinder_cylinder_tests::{
+        source_ring_parallel_cylinder_lens_input, unsplit_parallel_cylinder_lens_input,
+    };
     use crate::analytic_shell::tests::half_cylinder_input;
     use crate::analytic_shell::{
         AnalyticEdgeKey, AnalyticFaceKey, AnalyticPcurveUse, AnalyticShellCurve, AnalyticShellEdge,
@@ -811,6 +813,13 @@ mod tests {
 
     fn parameter_map(scale: f64) -> AffineParamMap1d {
         AffineParamMap1d::new(scale, 0.0).unwrap()
+    }
+
+    fn oblique_frame() -> Frame {
+        let origin = Point3::new(2.5, -1.75, 0.625);
+        let axis = Vec3::new(0.48, 0.64, 0.6);
+        let x = Vec3::new(0.8, -0.6, 0.0);
+        Frame::new(origin, axis, x).unwrap()
     }
 
     fn plane_line_use(
@@ -1297,24 +1306,57 @@ mod tests {
     }
 
     #[test]
-    fn strict_parallel_cylinder_profile_uses_the_general_sweep_theorem() {
-        let mut store = Store::new();
-        let mut transaction = store.transaction().unwrap();
-        let output = transaction
-            .assemble_analytic_shell(&unsplit_parallel_cylinder_lens_input(), 1.0e-12)
-            .unwrap();
-        assert_eq!(
-            certify_mixed_profile_prism(transaction.store(), output.shell(), None).unwrap(),
-            Some(ShellCertification {
-                embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Positive,
-            })
-        );
-        let decision = transaction
-            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
-            .unwrap();
-        assert!(decision.is_committed());
-        assert_eq!(decision.checks()[0].report().outcome(), CheckOutcome::Valid);
+    fn strict_parallel_cylinder_profile_uses_the_general_sweep_theorem_across_authored_frames() {
+        for frame in [Frame::world(), oblique_frame()] {
+            for second_axis_reversed in [false, true] {
+                for permuted in [false, true] {
+                    let mut store = Store::new();
+                    let mut transaction = store.transaction().unwrap();
+                    let output = transaction
+                        .assemble_analytic_shell(
+                            &source_ring_parallel_cylinder_lens_input(
+                                frame,
+                                second_axis_reversed,
+                                permuted,
+                            ),
+                            1.0e-12,
+                        )
+                        .unwrap();
+                    assert_eq!(output.faces().len(), 4);
+                    assert_eq!(output.edges().len(), 6);
+                    assert_eq!(output.vertices().len(), 4);
+                    let axes = [0, 1].map(|key| {
+                        let face = output
+                            .faces()
+                            .iter()
+                            .find_map(|(candidate, face)| {
+                                (candidate.value() == key).then_some(*face)
+                            })
+                            .unwrap();
+                        let face = transaction.store().get(face).unwrap();
+                        let SurfaceGeom::Cylinder(cylinder) =
+                            transaction.store().get(face.surface).unwrap()
+                        else {
+                            panic!("source-ring side must retain its cylinder support")
+                        };
+                        cylinder.frame().z()
+                    });
+                    assert_eq!(axes[0].dot(axes[1]) < 0.0, second_axis_reversed);
+                    assert_eq!(
+                        certify_mixed_profile_prism(transaction.store(), output.shell(), None,)
+                            .unwrap(),
+                        Some(ShellCertification {
+                            embedding: ShellEmbedding::Certified,
+                            orientation: ShellOrientation::Positive,
+                        })
+                    );
+                    let decision = transaction
+                        .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+                        .unwrap();
+                    assert_eq!(decision.checks()[0].report().outcome(), CheckOutcome::Valid);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1322,7 +1364,10 @@ mod tests {
         let mut store = Store::new();
         let mut transaction = store.transaction().unwrap();
         let output = transaction
-            .assemble_analytic_shell(&unsplit_parallel_cylinder_lens_input(), 1.0e-12)
+            .assemble_analytic_shell(
+                &source_ring_parallel_cylinder_lens_input(oblique_frame(), true, true),
+                1.0e-12,
+            )
             .unwrap();
         let baseline = transaction.store().clone();
         let edge = |key: u64| {
@@ -1403,6 +1448,16 @@ mod tests {
                 "{case} tamper must not retain the sweep theorem"
             );
         }
+
+        let mut wrong_orientation = baseline;
+        wrong_orientation.get_mut(face(0)).unwrap().sense = Sense::Reversed;
+        assert_eq!(
+            certify_mixed_profile_prism(&wrong_orientation, output.shell(), None).unwrap(),
+            Some(ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Invalid,
+            }),
+        );
     }
 
     #[test]
@@ -1415,6 +1470,7 @@ mod tests {
         let required = proof_work(transaction.store(), output.shell(), 2)
             .unwrap()
             .unwrap();
+        assert_eq!(required, 1_457);
         for allowed in [required, required - 1] {
             let session = session_with_work(allowed);
             let context = kcore::operation::OperationContext::new(

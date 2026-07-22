@@ -9,7 +9,7 @@ use kgraph::{
     certify_paired_cylinder_cylinder_ruling_residuals,
     certify_paired_plane_cylinder_ruling_residuals,
 };
-use ktopo::entity::FaceId as RawFaceId;
+use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId};
 use ktopo::geom::CurveGeom;
 use ktopo::store::Store;
 
@@ -17,7 +17,7 @@ use super::closed_stitch::{
     CertifiedClosedEndpoint, CertifiedClosedEndpointKey, CertifiedSourceParameterKey,
 };
 use super::root_identity::{RootIdentityAuthority, RootResolution, SourceRootKey, SourceRootQuery};
-use super::ruling_clip::{MergedRulingEndpoint, MergedRulingSpan, RulingTrimSite};
+use super::ruling_clip::{MergedRulingEndpoint, MergedRulingSpan, RulingClipSpan, RulingTrimSite};
 use super::ruling_public::{
     SectionCarrierParameterInterval, SectionRulingFragmentEnd, SectionRulingTrimProvenance,
 };
@@ -29,6 +29,37 @@ use super::{
 use crate::error::{Error, Result};
 use crate::{FaceId, FinId, LoopId, PartId};
 
+/// Source-edge pairs proven to share an exact root in one graph-certified
+/// semantic ruling parameterization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RulingEndpointCoincidenceProof {
+    edge_pairs: [Option<[RawEdgeId; 2]>; 2],
+}
+
+impl RulingEndpointCoincidenceProof {
+    /// Bind at most two independently certified cap-ring pairs.
+    pub(super) fn from_exact_cap_ring_pairs(pairs: &[[RawEdgeId; 2]]) -> Option<Self> {
+        if pairs.is_empty() || pairs.len() > 2 {
+            return None;
+        }
+        let mut edge_pairs = [None; 2];
+        for (index, pair) in pairs.iter().copied().enumerate() {
+            if pairs[..index]
+                .iter()
+                .any(|prior| prior[0] == pair[0] || prior[1] == pair[1])
+            {
+                return None;
+            }
+            edge_pairs[index] = Some(pair);
+        }
+        Some(Self { edge_pairs })
+    }
+
+    pub(super) fn proves(self, left: RulingTrimSite, right: RulingTrimSite) -> bool {
+        self.edge_pairs.contains(&Some([left.edge, right.edge]))
+    }
+}
+
 /// Clip, merge, identity-certify, and accumulate one ruling branch.
 pub(super) fn append_branch(
     store: &Store,
@@ -39,6 +70,67 @@ pub(super) fn append_branch(
     scope: &mut OperationScope<'_, '_>,
     acc: &mut super::SectionAccumulator,
 ) -> Result<()> {
+    append_branch_impl(
+        store,
+        raw_faces,
+        facades,
+        branch,
+        |_, _, _| Ok(None),
+        root_identity,
+        scope,
+        acc,
+    )
+}
+
+/// Cylinder/Cylinder seam for proving selected dual-source ruling endpoints.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn append_branch_with_endpoint_proof<F>(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    branch: SectionBranch,
+    endpoint_proof: F,
+    root_identity: &mut RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+    acc: &mut super::SectionAccumulator,
+) -> Result<()>
+where
+    F: FnOnce(
+        &[RulingClipSpan],
+        &[RulingClipSpan],
+        &mut OperationScope<'_, '_>,
+    ) -> Result<Option<RulingEndpointCoincidenceProof>>,
+{
+    append_branch_impl(
+        store,
+        raw_faces,
+        facades,
+        branch,
+        endpoint_proof,
+        root_identity,
+        scope,
+        acc,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_branch_impl<F>(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    branch: SectionBranch,
+    endpoint_proof: F,
+    root_identity: &mut RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+    acc: &mut super::SectionAccumulator,
+) -> Result<()>
+where
+    F: FnOnce(
+        &[RulingClipSpan],
+        &[RulingClipSpan],
+        &mut OperationScope<'_, '_>,
+    ) -> Result<Option<RulingEndpointCoincidenceProof>>,
+{
     let [SectionUvCurve::Line(trace_a), SectionUvCurve::Line(trace_b)] = branch.pcurves else {
         acc.branches.push(branch);
         acc.gaps.push(SectionGap {
@@ -57,12 +149,21 @@ pub(super) fn append_branch(
         (
             super::ruling_clip::RulingClipOutcome::Spans(a),
             super::ruling_clip::RulingClipOutcome::Spans(b),
-        ) => match super::ruling_clip::merge_ruling_spans(
-            a,
-            b,
-            acc.branches[branch_index].range,
-            scope,
-        )? {
+        ) => match match endpoint_proof(a, b, scope)? {
+            Some(proof) => super::ruling_clip::merge_ruling_spans_with_endpoint_proof(
+                a,
+                b,
+                acc.branches[branch_index].range,
+                &proof,
+                scope,
+            ),
+            None => super::ruling_clip::merge_ruling_spans(
+                a,
+                b,
+                acc.branches[branch_index].range,
+                scope,
+            ),
+        }? {
             super::ruling_clip::RulingMergeOutcome::Spans(spans) => spans,
             super::ruling_clip::RulingMergeOutcome::Indeterminate(gap) => {
                 acc.gaps.push(SectionGap {

@@ -35,6 +35,13 @@ use crate::{
     BodyId, BodySectionGraph, FaceId, Part, SectionCompletion, SectionPeriodicFaceEmbeddingEvidence,
 };
 
+#[path = "parallel_cylinder_boundary/coincident_caps.rs"]
+mod coincident_caps;
+pub(super) use coincident_caps::{
+    CoincidentCapBoundaryPiece, ParallelCoincidentBoundaryKey, ParallelCoincidentBoundaryPayload,
+    PreparedCoincidentCapCell, prepare_parallel_cylinder_coincident_boundary,
+};
+
 struct PreparedPeriodicFace {
     face: FaceId,
     operand: usize,

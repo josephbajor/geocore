@@ -7,6 +7,9 @@ use kernel::{
     Point3Enclosure, ScalarEnclosure,
 };
 
+#[path = "parallel_cylinder_boolean/coincident_caps.rs"]
+mod coincident_caps;
+
 const RADIUS: f64 = 1.0;
 const AXIS_OFFSET: f64 = 0.5;
 const OUTER_HALF_HEIGHT: f64 = 2.0;

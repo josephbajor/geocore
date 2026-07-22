@@ -992,6 +992,8 @@ pub(crate) const GAP_NO_LOOPS: &str = "body sectioning requires at least one bou
 pub(crate) const GAP_SHORT_LOOP: &str = "a face boundary loop has fewer than three vertices";
 pub(crate) const GAP_COINCIDENT_FACE_PAIR: &str =
     "a coincident face pair carries a two-dimensional contact this slice does not stitch";
+pub(crate) const GAP_CLOSED_CONIC_COINCIDENT_BOUNDARY: &str =
+    curved_clip::ClosedConicClipGap::CoincidentBoundary.reason();
 pub(crate) const GAP_TANGENT_CONTACT: &str =
     "a face pair meets in an isolated or tangent contact this slice does not stitch";
 pub(crate) const GAP_UNORDERED_CROSSINGS: &str =

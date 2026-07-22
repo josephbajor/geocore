@@ -41,7 +41,7 @@ use super::mixed_face_arrangement::{
 };
 use super::mixed_periodic_arrangement::{
     MixedPeriodicArrangementError, MixedPeriodicFaceArrangement, PeriodicArrangementCellKey,
-    PeriodicSourceLoopKey, arrange_mixed_periodic_face,
+    PeriodicSourceLoopKey, arrange_mixed_periodic_face, canonical_source_span_open_interval,
 };
 use super::mixed_shell_plan::{
     MixedArrangementBinding, MixedShellCellKey, MixedSourceFaceKey, source_face_key,
@@ -463,28 +463,60 @@ pub(super) fn classify_periodic_face(
         .source_loops()
         .get(source_span.key().topology_ordinal())
         .ok_or(MixedBoundaryError::SourceTopology)?;
-    let owner = arrangement
-        .cells()
-        .iter()
-        .find(|cell| {
-            cell.boundaries().iter().any(|boundary| {
-                boundary.uses().iter().any(|use_| {
-                    matches!(
-                        use_.edge(),
-                        ArrangementEdgeKey::Source(key) if key == source_span.key()
-                    ) && use_.direction() == ArrangementDirection::Forward
-                })
-            })
-        })
-        .map(|cell| *cell.key())
-        .ok_or(MixedBoundaryError::AnchorUnavailable)?;
     let point =
         periodic_source_span_point(&part.state.store, source_loop.raw(), *source_span.key())?;
+    classify_periodic_face_from_source_point(
+        part,
+        other,
+        arrangement,
+        *source_span.key(),
+        point,
+        linear,
+        scope,
+    )
+}
+
+/// Classify a periodic arrangement from one certified open source-span point.
+///
+/// Operation-local relations may need to move an angular source-span witness
+/// away from a coincident cap plane before point/body classification.  The
+/// arrangement edge still owns the anchor cell; the supplied model-space
+/// point only establishes that cell's open occupancy.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn classify_periodic_face_from_source_point(
+    part: &Part<'_>,
+    other: &BodyId,
+    arrangement: &MixedPeriodicFaceArrangement,
+    source: PeriodicSourceLoopKey,
+    point: Point3,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<BTreeMap<PeriodicArrangementCellKey, bool>, MixedBoundaryError> {
+    if !arrangement
+        .source_spans()
+        .iter()
+        .any(|span| *span.key() == source)
+    {
+        return Err(MixedBoundaryError::AnchorUnavailable);
+    }
+    let mut owners = arrangement.cells().iter().filter(|cell| {
+        cell.boundaries().iter().any(|boundary| {
+            boundary.uses().iter().any(|use_| {
+                matches!(use_.edge(), ArrangementEdgeKey::Source(key) if *key == source)
+                    && use_.direction() == ArrangementDirection::Forward
+            })
+        })
+    });
+    let owner = owners
+        .next()
+        .filter(|_| owners.next().is_none())
+        .map(|cell| *cell.key())
+        .ok_or(MixedBoundaryError::AnchorUnavailable)?;
     let anchor = classify_anchor(part, other, point, linear, scope)?;
     propagate_periodic(arrangement, owner, anchor)
 }
 
-fn periodic_source_span_point(
+pub(super) fn periodic_source_span_point(
     store: &Store,
     loop_id: ktopo::entity::LoopId,
     source: PeriodicSourceLoopKey,
@@ -508,24 +540,14 @@ fn periodic_source_span_point(
     else {
         return Err(MixedBoundaryError::SourceTopology);
     };
-    let Some(roots) = source.terminal_roots() else {
+    if source.terminal_roots().is_none() {
         return source
             .is_whole_loop()
             .then(|| circle.eval(circle.param_range().lo))
             .ok_or(MixedBoundaryError::SourceTopology);
-    };
-    let lifted = roots.map(|root| {
-        let shift = root.cylinder_chart_shift() as f64 * core::f64::consts::TAU;
-        let enclosure = root.root_enclosure();
-        [enclosure[0] + shift, enclosure[1] + shift]
-    });
-    let open = if lifted[0][1] < lifted[1][0] {
-        [lifted[0][1], lifted[1][0]]
-    } else if lifted[1][1] < lifted[0][0] {
-        [lifted[1][1], lifted[0][0]]
-    } else {
-        return Err(MixedBoundaryError::AnchorUnavailable);
-    };
+    }
+    let open =
+        canonical_source_span_open_interval(source).ok_or(MixedBoundaryError::AnchorUnavailable)?;
     let parameter = open[0] * 0.5 + open[1] * 0.5;
     if !parameter.is_finite() || parameter <= open[0] || parameter >= open[1] {
         return Err(MixedBoundaryError::AnchorUnavailable);

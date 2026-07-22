@@ -205,19 +205,36 @@ impl SectionPeriodicBoundaryRootEmbedding {
 /// fully carried components.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionPeriodicBoundaryTraceEmbedding {
-    component: usize,
+    trace_group: usize,
+    source_component: Option<usize>,
     component_ordinals: Vec<usize>,
     fragments: Vec<SectionPeriodicFragmentEmbedding>,
     terminals: [SectionPeriodicBoundaryRootEmbedding; 2],
 }
 
 impl SectionPeriodicBoundaryTraceEmbedding {
-    /// Index into `BodySectionGraph::curve_components`.
+    /// Stable owner key for this trace.
+    ///
+    /// For traces cut from a certified global component this is that
+    /// component's index. A graph whose mixed-family stitch is incomplete may
+    /// instead retain a uniquely directed face-local path; those paths occupy
+    /// the deterministic key range immediately after all global components.
+    /// Call [`Self::source_component`] before interpreting this key as an index
+    /// into `BodySectionGraph::curve_components`.
     pub const fn component(&self) -> usize {
-        self.component
+        self.trace_group
     }
 
-    /// Global component-fragment ordinals covered in directed trace order.
+    /// Backing global component, or `None` for a certified face-local path
+    /// whose global mixed-family stitch remains incomplete.
+    pub const fn source_component(&self) -> Option<usize> {
+        self.source_component
+    }
+
+    /// Owner-local fragment ordinals covered in directed trace order.
+    ///
+    /// These are global-component ordinals when [`Self::source_component`] is
+    /// `Some`, and face-local path ordinals otherwise.
     pub fn component_ordinals(&self) -> &[usize] {
         &self.component_ordinals
     }
@@ -311,7 +328,9 @@ impl CertifiedSectionPeriodicFaceEmbedding {
         &self.components
     }
 
-    /// Maximal simple traces whose parent global component leaves this face.
+    /// Maximal simple traces whose parent global component leaves this face,
+    /// plus uniquely directed face-local paths retained when the global
+    /// mixed-family stitch is incomplete.
     pub fn boundary_traces(&self) -> &[SectionPeriodicBoundaryTraceEmbedding] {
         &self.boundary_traces
     }
@@ -332,6 +351,12 @@ pub enum SectionPeriodicEmbeddingGap {
     OpenGlobalComponent {
         /// Graph component index.
         component: usize,
+    },
+    /// A bounded fragment outside the certified global components could not
+    /// be assigned to one uniquely directed face-local path.
+    UnstitchedFragmentPath {
+        /// Graph fragment index.
+        fragment: usize,
     },
     /// A maximal trace endpoint did not retain exact provenance on a source ring.
     BoundaryTerminalUnavailable {
@@ -548,11 +573,17 @@ struct PendingBoundaryRoot {
 
 #[derive(Clone)]
 struct PendingBoundaryTrace {
-    component: usize,
+    trace_group: usize,
+    source_component: Option<usize>,
     trace: usize,
     component_ordinals: Vec<usize>,
     fragments: Vec<SectionPeriodicFragmentEmbedding>,
     terminals: [PendingBoundaryRoot; 2],
+}
+
+struct UnstitchedFragmentPaths {
+    paths: Vec<Vec<usize>>,
+    assigned: Vec<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -597,7 +628,7 @@ pub(super) fn certify_periodic_faces(
             }
         }
     }
-    if !charge_pair_candidates(components, faces.len(), scope)? {
+    if !charge_pair_candidates(fragments.len(), components.len(), faces.len(), scope)? {
         return Ok(faces
             .into_iter()
             .map(
@@ -632,18 +663,22 @@ pub(super) fn certify_periodic_faces(
 }
 
 /// Precharge the geometry-independent ceiling for all pairwise simplicity
-/// and component-separation candidates. Every unordered fragment pair is
-/// owned exactly once: either by one component's simplicity proof or by one
-/// cross-component separation proof. Component bounds add one candidate per
-/// unordered component pair. Multiplication by the discovered periodic-face
-/// count covers each face-local embedding attempt without depending on an
-/// early geometric exit.
+/// and separation candidates. Every published fragment participates,
+/// including bounded fragments retained outside the globally certified
+/// components. Every unordered fragment pair is owned exactly once by a
+/// simplicity or separation proof. Closed-component bounds add one candidate
+/// per unordered component pair. Multiplication by the discovered
+/// periodic-face count covers each face-local embedding attempt without
+/// depending on an early geometric exit.
 fn charge_pair_candidates(
-    components: &[SectionCurveComponent],
+    fragment_count: usize,
+    component_count: usize,
     periodic_faces: usize,
     scope: &mut OperationScope<'_, '_>,
 ) -> KernelResult<bool> {
-    let Some(amount) = periodic_pair_candidate_work(components, periodic_faces) else {
+    let Some(amount) =
+        periodic_pair_candidate_work(fragment_count, component_count, periodic_faces)
+    else {
         return Ok(false);
     };
     scope
@@ -654,13 +689,12 @@ fn charge_pair_candidates(
 }
 
 fn periodic_pair_candidate_work(
-    components: &[SectionCurveComponent],
+    fragment_count: usize,
+    component_count: usize,
     periodic_faces: usize,
 ) -> Option<u64> {
-    let fragment_uses = components.iter().try_fold(0_u64, |total, component| {
-        total.checked_add(u64::try_from(component.fragments().len()).ok()?)
-    })?;
-    let component_count = u64::try_from(components.len()).ok()?;
+    let fragment_uses = u64::try_from(fragment_count).ok()?;
+    let component_count = u64::try_from(component_count).ok()?;
     let face_count = u64::try_from(periodic_faces).ok()?;
     unordered_pairs(fragment_uses)?
         .checked_add(unordered_pairs(component_count)?)?
@@ -695,8 +729,9 @@ fn certify_face(
         linear,
     } = input;
     let rings = certify_source_rings(store, part, &face, linear)?;
-    let (certified, pending_traces) =
-        certify_face_paths(branches, fragments, components, operand, &face, &rings)?;
+    let (certified, pending_traces) = certify_face_paths(
+        branches, endpoints, fragments, components, operand, &face, &rings,
+    )?;
     certify_component_separation(&certified)?;
     certify_trace_separation(&pending_traces)?;
     certify_trace_component_separation(&certified, &pending_traces)?;
@@ -815,6 +850,7 @@ fn certify_source_rings(
 
 fn certify_face_paths(
     branches: &[SectionBranch],
+    endpoints: &[SectionCurveEndpoint],
     fragments: &[SectionCurveFragment],
     components: &[SectionCurveComponent],
     operand: usize,
@@ -829,6 +865,7 @@ fn certify_face_paths(
 > {
     let mut certified = Vec::new();
     let mut pending_traces = Vec::new();
+    let unstitched = collect_unstitched_fragment_paths(fragments, components, endpoints.len());
     for (component_index, component) in components.iter().enumerate() {
         let carried = component
             .fragments()
@@ -892,7 +929,133 @@ fn certify_face_paths(
             )?);
         }
     }
+    let trace_group_base = components.len();
+    for (path_index, path) in unstitched.paths.iter().enumerate() {
+        let carried = path
+            .iter()
+            .map(|&fragment| {
+                fragments
+                    .get(fragment)
+                    .and_then(|fragment| branches.get(fragment.branch()))
+                    .is_some_and(|branch| branch.faces()[operand] == *face)
+            })
+            .collect::<Vec<_>>();
+        let runs = maximal_linear_runs(&carried);
+        let trace_group = trace_group_base
+            .checked_add(path_index)
+            .ok_or(SectionPeriodicEmbeddingGap::PairWorkOverflow)?;
+        for (trace, ordinals) in runs.into_iter().enumerate() {
+            let fragment_indices = ordinals
+                .iter()
+                .map(|&ordinal| path[ordinal])
+                .collect::<Vec<_>>();
+            pending_traces.push(certify_boundary_trace_fragments(
+                branches,
+                fragments,
+                trace_group,
+                None,
+                trace,
+                ordinals,
+                fragment_indices,
+                operand,
+                rings,
+            )?);
+        }
+    }
+    for (fragment_index, fragment) in fragments.iter().enumerate() {
+        let carried = branches
+            .get(fragment.branch())
+            .is_some_and(|branch| branch.faces()[operand] == *face);
+        if carried && !unstitched.assigned[fragment_index] {
+            return Err(SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
+                fragment: fragment_index,
+            });
+        }
+    }
     Ok((certified, pending_traces))
+}
+
+fn collect_unstitched_fragment_paths(
+    fragments: &[SectionCurveFragment],
+    components: &[SectionCurveComponent],
+    endpoint_count: usize,
+) -> UnstitchedFragmentPaths {
+    let mut assigned = vec![false; fragments.len()];
+    for component in components {
+        for &fragment in component.fragments() {
+            if let Some(slot) = assigned.get_mut(fragment) {
+                *slot = true;
+            }
+        }
+    }
+
+    let mut endpoint_pairs = vec![None; fragments.len()];
+    let mut incoming = vec![0_usize; endpoint_count];
+    let mut outgoing = vec![0_usize; endpoint_count];
+    let mut successor = vec![None; endpoint_count];
+    for (fragment_index, fragment) in fragments.iter().enumerate() {
+        if assigned[fragment_index] {
+            continue;
+        }
+        let Some([departure, arrival]) = fragment_endpoint_ids(fragment) else {
+            continue;
+        };
+        let (Some(incoming_slot), Some(outgoing_slot), Some(successor_slot)) = (
+            incoming.get_mut(arrival),
+            outgoing.get_mut(departure),
+            successor.get_mut(departure),
+        ) else {
+            continue;
+        };
+        *incoming_slot = incoming_slot.saturating_add(1);
+        *outgoing_slot = outgoing_slot.saturating_add(1);
+        *successor_slot = if *outgoing_slot == 1 {
+            Some(fragment_index)
+        } else {
+            None
+        };
+        endpoint_pairs[fragment_index] = Some([departure, arrival]);
+    }
+
+    let eligible = endpoint_pairs
+        .iter()
+        .map(|pair| {
+            pair.is_some_and(|[departure, arrival]| {
+                incoming[departure] <= 1
+                    && outgoing[departure] == 1
+                    && incoming[arrival] == 1
+                    && outgoing[arrival] <= 1
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    for first in 0..fragments.len() {
+        if assigned[first] || !eligible[first] {
+            continue;
+        }
+        let [departure, _] = endpoint_pairs[first].expect("eligible fragment has endpoints");
+        if incoming[departure] != 0 {
+            continue;
+        }
+        let mut path = Vec::new();
+        let mut at = first;
+        loop {
+            if assigned[at] || !eligible[at] {
+                break;
+            }
+            assigned[at] = true;
+            path.push(at);
+            let [_, arrival] = endpoint_pairs[at].expect("eligible fragment has endpoints");
+            let Some(next) = successor[arrival] else {
+                break;
+            };
+            at = next;
+        }
+        if !path.is_empty() {
+            paths.push(path);
+        }
+    }
+    UnstitchedFragmentPaths { paths, assigned }
 }
 
 fn certify_component(
@@ -964,6 +1127,23 @@ fn maximal_cyclic_runs(carried: &[bool]) -> Vec<Vec<usize>> {
     runs
 }
 
+fn maximal_linear_runs(carried: &[bool]) -> Vec<Vec<usize>> {
+    let mut runs = Vec::new();
+    let mut at = 0;
+    while at < carried.len() {
+        if !carried[at] {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < carried.len() && carried[at] {
+            at += 1;
+        }
+        runs.push((start..at).collect());
+    }
+    runs
+}
+
 fn certify_boundary_trace(
     branches: &[SectionBranch],
     fragments: &[SectionCurveFragment],
@@ -978,15 +1158,40 @@ fn certify_boundary_trace(
         .iter()
         .map(|&ordinal| component.fragments()[ordinal])
         .collect::<Vec<_>>();
+    certify_boundary_trace_fragments(
+        branches,
+        fragments,
+        component_index,
+        Some(component_index),
+        trace,
+        component_ordinals,
+        fragment_indices,
+        operand,
+        rings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_boundary_trace_fragments(
+    branches: &[SectionBranch],
+    fragments: &[SectionCurveFragment],
+    trace_group: usize,
+    source_component: Option<usize>,
+    trace: usize,
+    component_ordinals: Vec<usize>,
+    fragment_indices: Vec<usize>,
+    operand: usize,
+    rings: &[SourceRing],
+) -> Result<PendingBoundaryTrace, SectionPeriodicEmbeddingGap> {
     let mut lifted = lift_fragment_path(
         branches,
         fragments,
         fragment_indices.iter().copied(),
-        component_index,
+        trace_group,
         operand,
     )?;
-    align_fragment_path(component_index, &mut lifted)?;
-    certify_simple_path(component_index, &lifted)?;
+    align_fragment_path(trace_group, &mut lifted)?;
+    certify_simple_path(trace_group, &lifted)?;
     let public_fragments = publish_lifted_fragments(&lifted)?;
     let first_fragment = *fragment_indices
         .first()
@@ -1000,7 +1205,7 @@ fn certify_boundary_trace(
         let fragment = &fragments[fragment_index];
         let (endpoint, loop_id, source_parameter) = fragment_terminal(fragment, end, operand)
             .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
-                component: component_index,
+                component: trace_group,
                 fragment: fragment_index,
                 end: terminal_ordinal,
             })?;
@@ -1011,7 +1216,7 @@ fn certify_boundary_trace(
         };
         if scalar.endpoint != endpoint {
             return Err(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
-                component: component_index,
+                component: trace_group,
                 fragment: fragment_index,
                 end: terminal_ordinal,
             });
@@ -1020,7 +1225,7 @@ fn certify_boundary_trace(
             .iter()
             .position(|ring| ring.loop_id == loop_id && ring.edge == source_parameter.edge().raw())
             .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
-                component: component_index,
+                component: trace_group,
                 fragment: fragment_index,
                 end: terminal_ordinal,
             })?;
@@ -1038,7 +1243,8 @@ fn certify_boundary_trace(
         unreachable!("two directed trace terminals were constructed")
     };
     Ok(PendingBoundaryTrace {
-        component: component_index,
+        trace_group,
+        source_component,
         trace,
         component_ordinals,
         fragments: public_fragments,
@@ -1772,9 +1978,9 @@ fn certify_trace_separation(
             ) {
                 return Err(
                     SectionPeriodicEmbeddingGap::BoundaryTraceIntersectionProofRequired {
-                        first_component: traces[first].component,
+                        first_component: traces[first].trace_group,
                         first_trace: traces[first].trace,
-                        second_component: traces[second].component,
+                        second_component: traces[second].trace_group,
                         second_trace: traces[second].trace,
                     },
                 );
@@ -1794,7 +2000,7 @@ fn certify_trace_component_separation(
                 return Err(
                     SectionPeriodicEmbeddingGap::ComponentTraceIntersectionProofRequired {
                         component: component.component,
-                        trace_component: trace.component,
+                        trace_component: trace.trace_group,
                         trace: trace.trace,
                     },
                 );
@@ -1891,7 +2097,8 @@ fn finish_boundary_traces(
                 .clone()
         });
         boundary_traces.push(SectionPeriodicBoundaryTraceEmbedding {
-            component: trace.component,
+            trace_group: trace.trace_group,
+            source_component: trace.source_component,
             component_ordinals: trace.component_ordinals,
             fragments: trace.fragments,
             terminals,
@@ -2106,6 +2313,7 @@ mod tests {
     use kcore::tolerance::Tolerances;
     use kgeom::vec::{Point2, Vec3};
 
+    use super::super::SectionRulingFragmentEnd;
     use super::*;
 
     fn point(value: f64) -> SectionUvParameterInterval {
@@ -2356,8 +2564,15 @@ mod tests {
             },
         ];
         // C(8, 2) fragment-pair candidates plus C(2, 2) component bounds.
-        let exact = periodic_pair_candidate_work(&components, 1).unwrap();
+        let fragment_count = components
+            .iter()
+            .map(|component| component.fragments().len())
+            .sum();
+        let exact = periodic_pair_candidate_work(fragment_count, components.len(), 1).unwrap();
         assert_eq!(exact, 29);
+        // Three globally unstitched fragments still own all three unordered
+        // simplicity/separation candidates on each attempted periodic face.
+        assert_eq!(periodic_pair_candidate_work(3, 0, 2), Some(6));
         assert_eq!(unordered_pairs(u64::MAX), None);
 
         let policy = SessionPolicy::v1();
@@ -2375,7 +2590,7 @@ mod tests {
                 .with_family_budget_defaults(super::super::BodySectionBudgetProfile::v1_defaults())
                 .with_budget_overrides(overrides);
             let mut scope = OperationScope::new(&context);
-            charge_pair_candidates(&components, 1, &mut scope)
+            charge_pair_candidates(fragment_count, components.len(), 1, &mut scope)
         };
         assert!(run(exact).unwrap());
         let error = run(exact - 1).unwrap_err();
@@ -2490,6 +2705,55 @@ mod tests {
         assert_eq!(coverage, vec![0, 1, 3, 5, 6]);
         assert_eq!(maximal_cyclic_runs(&[true; 5]), vec![vec![0, 1, 2, 3, 4]]);
         assert!(maximal_cyclic_runs(&[false; 5]).is_empty());
+    }
+
+    #[test]
+    fn unstitched_paths_require_unique_directed_open_chains() {
+        let fragment = |departure, arrival| SectionCurveFragment {
+            branch: 0,
+            source_ordinal: 0,
+            span: SectionCurveFragmentSpan::LineSegment {
+                endpoints: Box::new([
+                    SectionRulingFragmentEnd {
+                        endpoint: departure,
+                        point: Point3::new(0.0, 0.0, 0.0),
+                        carrier_parameter: 0.0,
+                        trims: [None, None],
+                    },
+                    SectionRulingFragmentEnd {
+                        endpoint: arrival,
+                        point: Point3::new(1.0, 0.0, 0.0),
+                        carrier_parameter: 1.0,
+                        trims: [None, None],
+                    },
+                ]),
+            },
+        };
+
+        let open = [fragment(0, 1), fragment(1, 2), fragment(3, 4)];
+        let assembled = collect_unstitched_fragment_paths(&open, &[], 5);
+        assert_eq!(assembled.paths, vec![vec![0, 1], vec![2]]);
+        assert_eq!(assembled.assigned, vec![true; 3]);
+
+        let branched = [fragment(0, 1), fragment(0, 2)];
+        let assembled = collect_unstitched_fragment_paths(&branched, &[], 3);
+        assert!(assembled.paths.is_empty());
+        assert_eq!(assembled.assigned, vec![false; 2]);
+
+        let cycle = [fragment(0, 1), fragment(1, 0)];
+        let assembled = collect_unstitched_fragment_paths(&cycle, &[], 2);
+        assert!(assembled.paths.is_empty());
+        assert_eq!(assembled.assigned, vec![false; 2]);
+    }
+
+    #[test]
+    fn maximal_linear_runs_do_not_wrap_open_path_boundaries() {
+        assert_eq!(
+            maximal_linear_runs(&[true, true, false, true, false, true, true]),
+            vec![vec![0, 1], vec![3], vec![5, 6]]
+        );
+        assert_eq!(maximal_linear_runs(&[true; 3]), vec![vec![0, 1, 2]]);
+        assert!(maximal_linear_runs(&[false; 3]).is_empty());
     }
 
     #[test]

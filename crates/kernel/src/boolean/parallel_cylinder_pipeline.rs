@@ -3,21 +3,31 @@
 use kcore::operation::OperationScope;
 use ktopo::entity::Body as TopologyBody;
 
-use super::boundary_select::select_boundary_fragments;
+use super::boundary_select::{
+    select_boundary_fragments, select_boundary_fragments_with_coincident_pairs,
+};
 use super::curved_pipeline::{
     CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, PipelineFailure, StageResult,
     adapt_operation, extract_cylinder_operand, mixed_boundary_failure, mixed_plan_failure,
     realize_mixed_shell, refused,
 };
-use super::mixed_shell_plan::{MixedShellProofPlan, plan_mixed_shell};
-use super::parallel_cylinder_boundary::prepare_parallel_cylinder_boundary;
+use super::curved_source::CertifiedCylinderSource;
+use super::mixed_shell_plan::{
+    MixedBoundedSourceRoot, MixedShellProofPlan, plan_mixed_shell,
+    plan_parallel_cylinder_coincident_intersection,
+};
+use super::parallel_cylinder_boundary::{
+    prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
+};
 use super::parallel_cylinder_relation::{
-    ParallelCylinderRelationOutcome, certify_parallel_cylinder_relation,
+    CertifiedParallelCylinderCoincidentCapRelation, CertifiedParallelCylinderLensRelation,
+    ParallelCylinderRelationOutcome, ParallelCylinderSourceRootWitness,
+    certify_parallel_cylinder_relation,
 };
 use super::select::PlanarBooleanOperation;
-use crate::BodyId;
 use crate::section::section_bodies_in_scope;
 use crate::session::PartEdit;
+use crate::{BodyId, BodySectionGraph};
 
 /// Consume the strict positive-overlap parallel-cylinder theorem through the
 /// shared arrangement, truth-selection, planning, and Full-check path.
@@ -42,15 +52,54 @@ pub(super) fn execute_parallel_cylinder_boolean(
     let second = extract_cylinder_operand(edit, bodies[1].clone(), 1, scope)?;
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
     let relation = certify_parallel_cylinder_relation(&graph, [&first, &second], scope)?;
-    let ParallelCylinderRelationOutcome::Certified(relation) = relation else {
-        return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
-    };
+    match relation {
+        ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
+            edit,
+            operation,
+            &bodies,
+            [&first, &second],
+            &graph,
+            &relation,
+            linear,
+            scope,
+        ),
+        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(relation)
+            if operation == PlanarBooleanOperation::Intersect =>
+        {
+            execute_coincident_cap_intersection(
+                edit,
+                &bodies,
+                [&first, &second],
+                &graph,
+                &relation,
+                linear,
+                scope,
+            )
+        }
+        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(_)
+        | ParallelCylinderRelationOutcome::Indeterminate(_) => {
+            refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_complete_relation(
+    edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
+    bodies: &[BodyId; 2],
+    cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
+    relation: &CertifiedParallelCylinderLensRelation,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
     let prepared = prepare_parallel_cylinder_boundary(
         &edit.as_part(),
-        &graph,
-        &bodies,
-        [&first, &second],
-        &relation,
+        graph,
+        bodies,
+        cylinders,
+        relation,
         linear,
         scope,
     )
@@ -64,11 +113,59 @@ pub(super) fn execute_parallel_cylinder_boolean(
             "certified positive-volume parallel-cylinder Boolean selected no boundary",
         ));
     }
-    let plan = plan_mixed_shell(&edit.state.store, &graph, prepared.bindings(), selected)
+    let plan = plan_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
         .map_err(mixed_plan_failure)?;
-    if !plan_matches_relation(&plan, &relation) {
+    if !plan_matches_relation(&plan, relation) {
         return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
             "parallel-cylinder shell omitted certified section evidence",
+        ));
+    }
+    realize_mixed_shell(edit, &plan, linear, scope)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_coincident_cap_intersection(
+    edit: &mut PartEdit<'_>,
+    bodies: &[BodyId; 2],
+    cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
+    relation: &CertifiedParallelCylinderCoincidentCapRelation,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    let prepared = prepare_parallel_cylinder_coincident_boundary(
+        &edit.as_part(),
+        graph,
+        bodies,
+        cylinders,
+        relation,
+        linear,
+        scope,
+    )
+    .map_err(mixed_boundary_failure)?;
+    let selected = select_boundary_fragments_with_coincident_pairs(
+        adapt_operation(PlanarBooleanOperation::Intersect),
+        prepared.classified(),
+        prepared.coincident_pairs(),
+    )
+    .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
+    if selected.is_empty() {
+        return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
+            "certified coincident-cap intersection selected no boundary",
+        ));
+    }
+    let plan = plan_parallel_cylinder_coincident_intersection(
+        &edit.state.store,
+        graph,
+        prepared.bindings(),
+        selected,
+        relation,
+        linear,
+    )
+    .map_err(mixed_plan_failure)?;
+    if !coincident_cap_plan_matches_relation(&plan, relation) {
+        return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
+            "coincident-cap shell omitted certified boundary evidence",
         ));
     }
     realize_mixed_shell(edit, &plan, linear, scope)
@@ -97,7 +194,7 @@ fn canonical_commutative_order(
 
 fn plan_matches_relation(
     plan: &MixedShellProofPlan,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderLensRelation,
+    relation: &CertifiedParallelCylinderLensRelation,
 ) -> bool {
     if plan.section_edges().len() != 4 {
         return false;
@@ -130,4 +227,90 @@ fn plan_matches_relation(
         matches.next().is_none() && edge.fragment().branch() == witness.branch()
     });
     rulings_match && caps_match
+}
+
+fn coincident_cap_plan_matches_relation(
+    plan: &MixedShellProofPlan,
+    relation: &CertifiedParallelCylinderCoincidentCapRelation,
+) -> bool {
+    let expected_source_span_count = relation
+        .overlap_ends()
+        .iter()
+        .flat_map(|end| end.sources().iter().flatten())
+        .count();
+    if plan.faces().len() != 4
+        || !plan.cap_rings().is_empty()
+        || plan.section_edges().len() != 2 + relation.unique_end_count()
+        || plan.bounded_source_spans().len() != expected_source_span_count
+    {
+        return false;
+    }
+    let rulings_match = relation.rulings().iter().all(|witness| {
+        unique_section_edge(
+            plan,
+            witness.fragment(),
+            witness.branch(),
+            Some(witness.endpoints()),
+        )
+    });
+    let cap_arcs_match = relation
+        .overlap_ends()
+        .iter()
+        .filter_map(|end| end.cap_arc())
+        .all(|witness| {
+            unique_section_edge(
+                plan,
+                witness.fragment(),
+                witness.branch(),
+                Some(witness.endpoints()),
+            )
+        });
+    let source_arcs_match = relation
+        .overlap_ends()
+        .iter()
+        .flat_map(|end| end.sources().iter().flatten())
+        .all(|witness| {
+            let mut matches = plan.bounded_source_spans().iter().filter(|span| {
+                span.source().operand() == witness.operand()
+                    && span.edge() == witness.edge()
+                    && source_roots_match(span.roots(), &witness.roots())
+            });
+            matches.next().is_some() && matches.next().is_none()
+        });
+    rulings_match && cap_arcs_match && source_arcs_match
+}
+
+fn unique_section_edge(
+    plan: &MixedShellProofPlan,
+    fragment: usize,
+    branch: usize,
+    endpoints: Option<[usize; 2]>,
+) -> bool {
+    let mut matches = plan
+        .section_edges()
+        .iter()
+        .filter(|edge| edge.fragment_index() == fragment);
+    let Some(edge) = matches.next() else {
+        return false;
+    };
+    matches.next().is_none()
+        && edge.fragment().branch() == branch
+        && endpoints.is_none_or(|expected| {
+            edge.endpoints() == expected || edge.endpoints() == [expected[1], expected[0]]
+        })
+}
+
+fn source_roots_match(
+    actual: &[MixedBoundedSourceRoot; 2],
+    expected: &[ParallelCylinderSourceRootWitness; 2],
+) -> bool {
+    let root_matches = |actual: MixedBoundedSourceRoot,
+                        expected: ParallelCylinderSourceRootWitness| {
+        actual.endpoint() == expected.endpoint()
+            && actual.root_ordinal() == expected.root_ordinal()
+            && actual.parameter().to_bits() == expected.parameter().to_bits()
+            && actual.enclosure().map(f64::to_bits) == expected.enclosure().map(f64::to_bits)
+    };
+    root_matches(actual[0], expected[0]) && root_matches(actual[1], expected[1])
+        || root_matches(actual[0], expected[1]) && root_matches(actual[1], expected[0])
 }

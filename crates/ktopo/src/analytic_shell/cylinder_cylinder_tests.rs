@@ -208,6 +208,38 @@ fn cap_arc_radius(
     )
 }
 
+fn cap_source_circle_arc(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    plane: Plane,
+    circle: Circle,
+) -> AnalyticShellFin {
+    let center = plane.frame().to_local(circle.frame().origin());
+    let local_x = Vec2::new(
+        circle.frame().x().dot(plane.frame().x()),
+        circle.frame().x().dot(plane.frame().y()),
+    );
+    let local_y = Vec2::new(
+        circle.frame().y().dot(plane.frame().x()),
+        circle.frame().y().dot(plane.frame().y()),
+    );
+    let parameter_scale = if local_x.perp().dot(local_y) > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    AnalyticShellFin::new(
+        edge,
+        sense,
+        AnalyticPcurveUse::new(
+            AnalyticShellPcurve::Circle(
+                Circle2d::new(Point2::new(center.x, center.y), circle.radius(), local_x).unwrap(),
+            ),
+            map(parameter_scale, 0.0),
+        ),
+    )
+}
+
 fn cap_chord(
     edge: AnalyticEdgeKey,
     sense: Sense,
@@ -393,50 +425,183 @@ fn parallel_cylinder_lens_input() -> AnalyticShellInput {
 }
 
 pub(crate) fn unsplit_parallel_cylinder_lens_input() -> AnalyticShellInput {
-    let geometry = lens_geometry();
-    let mut edges = lens_edges(geometry);
-    edges.truncate(6);
-    let mut faces = lens_faces(geometry);
-    faces.truncate(2);
-    let bottom_frame = Frame::new(
-        Point3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, -1.0),
-        Vec3::new(1.0, 0.0, 0.0),
-    )
-    .unwrap();
-    let top_frame = Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0));
-    faces.extend([
+    source_ring_parallel_cylinder_lens_input(Frame::world(), false, false)
+}
+
+/// One strict-secant lens profile swept between two shared physical cap
+/// planes. Both cap loops are built directly from the two cylinders' source
+/// ring carriers; no section-intersection circle is synthesized.
+pub(crate) fn source_ring_parallel_cylinder_lens_input(
+    frame: Frame,
+    second_axis_reversed: bool,
+    permuted: bool,
+) -> AnalyticShellInput {
+    let geometry = axial_chain_geometry(frame, [1.0, 1.0], 1.0, second_axis_reversed);
+    let [lower_first, lower_second, upper_first, upper_second] = geometry.points;
+    let mut input = AnalyticShellInput::new(
+        vec![
+            AnalyticShellVertex::new(V0, lower_first),
+            AnalyticShellVertex::new(V1, lower_second),
+            AnalyticShellVertex::new(V2, upper_first),
+            AnalyticShellVertex::new(V3, upper_second),
+        ],
+        source_ring_lens_edges(geometry, second_axis_reversed),
+        source_ring_lens_faces(geometry, second_axis_reversed),
+    );
+    if permuted {
+        input.vertices.reverse();
+        input.edges.rotate_left(3);
+        input.faces.reverse();
+        for face in &mut input.faces {
+            for loop_ in &mut face.loops {
+                loop_.fins.rotate_left(1);
+            }
+        }
+    }
+    input
+}
+
+fn source_ring_lens_edges(
+    geometry: AxialChainGeometry,
+    second_axis_reversed: bool,
+) -> Vec<AnalyticShellEdge> {
+    let [first_angle, second_angle] = geometry.angles;
+    let tau = core::f64::consts::TAU;
+    let first_axis = geometry.cylinders[0].frame().z();
+    let [lower_first, lower_second, _, _] = geometry.points;
+    let second_lower_vertices = if second_axis_reversed {
+        [V0, V1]
+    } else {
+        [V1, V0]
+    };
+    let second_upper_vertices = if second_axis_reversed {
+        [V2, V3]
+    } else {
+        [V3, V2]
+    };
+    vec![
+        AnalyticShellEdge::new(
+            E0,
+            [V0, V1],
+            AnalyticShellCurve::Circle(geometry.circles[0]),
+            ParamRange::new(-first_angle, first_angle),
+        ),
+        AnalyticShellEdge::new(
+            E1,
+            [V2, V3],
+            AnalyticShellCurve::Circle(geometry.circles[1]),
+            ParamRange::new(-first_angle, first_angle),
+        ),
+        AnalyticShellEdge::new(
+            E2,
+            second_lower_vertices,
+            AnalyticShellCurve::Circle(geometry.circles[2]),
+            ParamRange::new(second_angle, tau - second_angle),
+        ),
+        AnalyticShellEdge::new(
+            E3,
+            second_upper_vertices,
+            AnalyticShellCurve::Circle(geometry.circles[3]),
+            ParamRange::new(second_angle, tau - second_angle),
+        ),
+        AnalyticShellEdge::new(
+            E4,
+            [V0, V2],
+            AnalyticShellCurve::Line(Line::new(lower_first, first_axis).unwrap()),
+            ParamRange::new(0.0, 1.0),
+        ),
+        AnalyticShellEdge::new(
+            E5,
+            [V1, V3],
+            AnalyticShellCurve::Line(Line::new(lower_second, first_axis).unwrap()),
+            ParamRange::new(0.0, 1.0),
+        ),
+    ]
+}
+
+fn source_ring_lens_faces(
+    geometry: AxialChainGeometry,
+    second_axis_reversed: bool,
+) -> Vec<AnalyticShellFace> {
+    let [first_angle, second_angle] = geometry.angles;
+    let tau = core::f64::consts::TAU;
+    let first_frame = *geometry.cylinders[0].frame();
+    let bottom_plane =
+        Plane::new(Frame::new(first_frame.origin(), -first_frame.z(), first_frame.x()).unwrap());
+    let top_plane = Plane::new(first_frame.with_origin(first_frame.point_at(0.0, 0.0, 1.0)));
+    let second_loop = if second_axis_reversed {
+        AnalyticShellLoop::new(vec![
+            cylinder_ruling_chart_scaled(E4, Sense::Forward, second_angle, 0, -1.0),
+            cylinder_arc(E3, Sense::Forward, -1.0),
+            cylinder_ruling_chart_scaled(E5, Sense::Reversed, tau - second_angle, 0, -1.0),
+            cylinder_arc(E2, Sense::Reversed, 0.0),
+        ])
+    } else {
+        AnalyticShellLoop::new(vec![
+            cylinder_arc(E2, Sense::Forward, 0.0),
+            cylinder_ruling(E4, Sense::Forward, tau - second_angle),
+            cylinder_arc(E3, Sense::Reversed, 1.0),
+            cylinder_ruling(E5, Sense::Reversed, second_angle),
+        ])
+    };
+    let second_bottom_sense = if second_axis_reversed {
+        Sense::Forward
+    } else {
+        Sense::Reversed
+    };
+    let second_top_sense = if second_axis_reversed {
+        Sense::Reversed
+    } else {
+        Sense::Forward
+    };
+    let planar_domain = || FaceDomain::from_bounds(-0.1, 1.1, -1.0, 1.0).unwrap();
+    vec![
+        AnalyticShellFace::new(
+            AnalyticFaceKey::new(0),
+            AnalyticShellSurface::Cylinder(geometry.cylinders[0]),
+            Sense::Forward,
+            FaceDomain::from_bounds(-first_angle, first_angle, 0.0, 1.0).unwrap(),
+            vec![AnalyticShellLoop::new(vec![
+                cylinder_arc(E0, Sense::Forward, 0.0),
+                cylinder_ruling(E5, Sense::Forward, first_angle),
+                cylinder_arc(E1, Sense::Reversed, 1.0),
+                cylinder_ruling(E4, Sense::Reversed, -first_angle),
+            ])],
+        ),
+        AnalyticShellFace::new(
+            AnalyticFaceKey::new(1),
+            AnalyticShellSurface::Cylinder(geometry.cylinders[1]),
+            Sense::Forward,
+            FaceDomain::from_bounds(
+                second_angle,
+                tau - second_angle,
+                if second_axis_reversed { -1.0 } else { 0.0 },
+                if second_axis_reversed { 0.0 } else { 1.0 },
+            )
+            .unwrap(),
+            vec![second_loop],
+        ),
         AnalyticShellFace::new(
             AnalyticFaceKey::new(2),
-            AnalyticShellSurface::Plane(Plane::new(bottom_frame)),
+            AnalyticShellSurface::Plane(bottom_plane),
             Sense::Forward,
-            FaceDomain::from_bounds(-0.1, 1.1, -1.0, 1.0).unwrap(),
+            planar_domain(),
             vec![AnalyticShellLoop::new(vec![
-                cap_arc(E2, Sense::Reversed, Point2::new(1.0, 0.0), -1.0),
-                cap_arc(E0, Sense::Reversed, Point2::new(0.0, 0.0), -1.0),
+                cap_source_circle_arc(E2, second_bottom_sense, bottom_plane, geometry.circles[2]),
+                cap_source_circle_arc(E0, Sense::Reversed, bottom_plane, geometry.circles[0]),
             ])],
         ),
         AnalyticShellFace::new(
             AnalyticFaceKey::new(3),
-            AnalyticShellSurface::Plane(Plane::new(top_frame)),
+            AnalyticShellSurface::Plane(top_plane),
             Sense::Forward,
-            FaceDomain::from_bounds(-0.1, 1.1, -1.0, 1.0).unwrap(),
+            planar_domain(),
             vec![AnalyticShellLoop::new(vec![
-                cap_arc(E1, Sense::Forward, Point2::new(0.0, 0.0), 1.0),
-                cap_arc(E3, Sense::Forward, Point2::new(1.0, 0.0), 1.0),
+                cap_source_circle_arc(E1, Sense::Forward, top_plane, geometry.circles[1]),
+                cap_source_circle_arc(E3, second_top_sense, top_plane, geometry.circles[3]),
             ])],
         ),
-    ]);
-    AnalyticShellInput::new(
-        vec![
-            AnalyticShellVertex::new(V0, geometry.points[0]),
-            AnalyticShellVertex::new(V1, geometry.points[1]),
-            AnalyticShellVertex::new(V2, geometry.points[2]),
-            AnalyticShellVertex::new(V3, geometry.points[3]),
-        ],
-        edges,
-        faces,
-    )
+    ]
 }
 
 /// Structural finite host band after one strict-secant circular product

@@ -1,4 +1,501 @@
+use super::super::{
+    MixedBoundedSourceRoot, MixedShellEdgeUse, MixedShellLoopPlan, ProjectedSourceCircleOnPlane,
+};
 use super::*;
+
+struct ProjectedPcurveFixture {
+    store: Store,
+    plan: MixedShellProofPlan,
+    physical: PhysicalEdge,
+}
+
+fn projected_pcurve_fixture(upper: bool) -> ProjectedPcurveFixture {
+    projected_pcurve_fixture_with_target_x(upper, kgeom::vec::Vec3::new(1.0, 0.0, 0.0))
+}
+
+fn projected_pcurve_fixture_with_target_x(
+    upper: bool,
+    target_x: kgeom::vec::Vec3,
+) -> ProjectedPcurveFixture {
+    let mut store = Store::new();
+    let source_body = ktopo::make::cylinder(
+        &mut store,
+        &Frame::world().with_origin(Point3::new(-0.5, 0.0, -1.0)),
+        1.0,
+        2.0,
+    )
+    .unwrap();
+    let target_body = ktopo::make::cylinder(
+        &mut store,
+        &Frame::new(
+            Point3::new(0.5, 0.0, -1.0),
+            kgeom::vec::Vec3::new(0.0, 0.0, 1.0),
+            target_x,
+        )
+        .unwrap(),
+        1.0,
+        2.0,
+    )
+    .unwrap();
+    let source_raw_face = store
+        .faces_of_body(source_body)
+        .unwrap()
+        .into_iter()
+        .find(|face| {
+            matches!(
+                store.surface(store.get(*face).unwrap().surface()).unwrap(),
+                SurfaceGeom::Cylinder(_)
+            )
+        })
+        .unwrap();
+    let target_raw_face = store
+        .faces_of_body(target_body)
+        .unwrap()
+        .into_iter()
+        .find(|face| {
+            let Ok(SurfaceGeom::Plane(plane)) = store.surface(store.get(*face).unwrap().surface())
+            else {
+                return false;
+            };
+            (plane.frame().z().z > 0.0) == upper
+        })
+        .unwrap();
+    let target_z = if upper { 1.0 } else { -1.0 };
+    let (source_loop, source_fin, source_edge) = store
+        .get(source_raw_face)
+        .unwrap()
+        .loops()
+        .iter()
+        .find_map(|loop_id| {
+            let loop_ = store.get(*loop_id).unwrap();
+            let [fin_id] = loop_.fins() else {
+                return None;
+            };
+            let edge_id = store.get(*fin_id).unwrap().edge();
+            let curve_id = store.get(edge_id).unwrap().curve()?;
+            let CurveGeom::Circle(circle) = store.curve(curve_id).unwrap() else {
+                return None;
+            };
+            (circle.frame().origin().z == target_z).then_some((*loop_id, *fin_id, edge_id))
+        })
+        .unwrap();
+
+    let mut session = crate::Kernel::new().create_session();
+    let part = session.create_part();
+    let source_face = crate::FaceId::new(part.clone(), source_raw_face);
+    let target_face = crate::FaceId::new(part, target_raw_face);
+    let source = MixedSourceFaceKey {
+        operand: 0,
+        topology_ordinal: 0,
+    };
+    let target = MixedSourceFaceKey {
+        operand: 1,
+        topology_ordinal: usize::from(upper),
+    };
+    let span = MixedSourceSpanKey {
+        fin_loop_ordinal: usize::from(upper),
+        traversal_ordinal: 0,
+    };
+    let root = |endpoint, parameter: f64| MixedBoundedSourceRoot {
+        endpoint,
+        root_ordinal: endpoint,
+        parameter_bits: parameter.to_bits(),
+        enclosure_bits: [parameter.to_bits(), parameter.to_bits()],
+        period_shift: 0,
+    };
+    let bounded = MixedBoundedSourceSpanPlan {
+        source,
+        span: span.clone(),
+        loop_id: source_loop,
+        fin: source_fin,
+        edge: source_edge,
+        roots: [root(0, 0.25), root(1, 2.25)],
+    };
+    let proof = ProjectedSourceCircleOnPlane::certify(
+        &store,
+        &source_face,
+        &bounded,
+        target,
+        &target_face,
+        kcore::tolerance::LINEAR_RESOLUTION,
+    )
+    .unwrap();
+    let edge = MixedShellEdgeKey::PlanarSource {
+        source,
+        span: span.clone(),
+    };
+    let vertices = vec![
+        MixedShellVertexKey::SectionEndpoint(0),
+        MixedShellVertexKey::SectionEndpoint(1),
+    ];
+    let source_loop_plan = MixedShellLoopPlan {
+        uses: vec![MixedShellEdgeUse {
+            edge: edge.clone(),
+            direction: ArrangementDirection::Forward,
+            pcurve: MixedPcurveLineage::SourceTopology,
+        }],
+        vertices: vertices.clone(),
+    };
+    let target_loop_plan = MixedShellLoopPlan {
+        uses: vec![MixedShellEdgeUse {
+            edge,
+            direction: ArrangementDirection::Reverse,
+            pcurve: MixedPcurveLineage::ProjectedSourceCircleOnPlane(proof),
+        }],
+        vertices,
+    };
+    let retained = RetainedPlanarSpan {
+        source,
+        span,
+        loop_id: source_loop,
+        fin: source_fin,
+        edge: source_edge,
+        range: [
+            RetainedSpanParameter::SectionRoot {
+                endpoint: 0,
+                enclosure_bits: [0.25_f64.to_bits(), 0.25_f64.to_bits()],
+                parameter_bits: 0.25_f64.to_bits(),
+                period_shift: 0,
+            },
+            RetainedSpanParameter::SectionRoot {
+                endpoint: 1,
+                enclosure_bits: [2.25_f64.to_bits(), 2.25_f64.to_bits()],
+                parameter_bits: 2.25_f64.to_bits(),
+                period_shift: 0,
+            },
+        ],
+    };
+    let plan = MixedShellProofPlan {
+        faces: vec![
+            MixedShellFacePlan {
+                source,
+                source_face,
+                selected_orientation: SelectedOrientation::Preserved,
+                loops: vec![source_loop_plan],
+            },
+            MixedShellFacePlan {
+                source: target,
+                source_face: target_face,
+                selected_orientation: SelectedOrientation::Preserved,
+                loops: vec![target_loop_plan],
+            },
+        ],
+        section_edges: Vec::new(),
+        bounded_source_spans: vec![bounded],
+        cap_rings: Vec::new(),
+        materialization: RetainedMaterializationEvidence {
+            source_spans: vec![retained],
+            section_trims: Vec::new(),
+        },
+        materialization_gaps: Vec::new(),
+    };
+    let physical = PhysicalEdge {
+        carrier: PhysicalCarrier::Source(source_edge),
+        endpoints: Some([PhysicalVertex::Section(0), PhysicalVertex::Section(1)]),
+        uses: vec![
+            PhysicalUse {
+                face: 0,
+                loop_index: 0,
+                use_index: 0,
+                forward: true,
+            },
+            PhysicalUse {
+                face: 1,
+                loop_index: 0,
+                use_index: 0,
+                forward: false,
+            },
+        ],
+    };
+    ProjectedPcurveFixture {
+        store,
+        plan,
+        physical,
+    }
+}
+
+fn emit_projected_pcurve(
+    fixture: &ProjectedPcurveFixture,
+) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
+    let use_ = &fixture.plan.faces[1].loops[0].uses[0];
+    materialized_pcurve_for_use(
+        &fixture.plan,
+        &fixture.store,
+        1,
+        0,
+        0,
+        use_,
+        &fixture.physical,
+    )
+}
+
+#[test]
+fn projected_source_circle_emits_exact_plane_coefficients_in_both_orientations() {
+    for (upper, expected_scale) in [(false, -1.0), (true, 1.0)] {
+        let fixture = projected_pcurve_fixture(upper);
+        let emitted = emit_projected_pcurve(&fixture).unwrap();
+        let AnalyticShellPcurve::Circle(pcurve_circle) = emitted.curve() else {
+            panic!("projected source ring must emit a Circle2d");
+        };
+        assert_eq!(pcurve_circle.center(), Point2::new(-1.0, 0.0));
+        assert_eq!(pcurve_circle.radius(), 1.0);
+        assert_eq!(pcurve_circle.x_dir(), Vec2::new(1.0, 0.0));
+        assert_eq!(emitted.edge_to_pcurve().scale(), expected_scale);
+        assert_eq!(
+            emitted.edge_to_pcurve().offset().to_bits(),
+            0.0_f64.to_bits()
+        );
+        assert_eq!(emitted.chart(), PcurveChart::identity());
+        assert_eq!(emitted.closure_winding(), None);
+        let MixedPcurveLineage::ProjectedSourceCircleOnPlane(proof) =
+            fixture.plan.faces[1].loops[0].uses[0].pcurve()
+        else {
+            panic!("fixture must retain projected-circle proof");
+        };
+        assert_eq!(proof.center(), Point2::new(-1.0, 0.0));
+        assert_eq!(proof.x_direction().unwrap(), Vec2::new(1.0, 0.0));
+        assert_eq!(proof.parameter_scale(), expected_scale);
+        assert_eq!(proof.parameter_offset().to_bits(), 0.0_f64.to_bits());
+
+        let target = fixture
+            .store
+            .get(fixture.plan.faces[1].source_face.raw())
+            .unwrap();
+        let SurfaceGeom::Plane(plane) = fixture.store.surface(target.surface()).unwrap() else {
+            panic!("fixture target must remain planar");
+        };
+        let PhysicalCarrier::Source(edge) = fixture.physical.carrier else {
+            panic!("fixture carrier must remain the source ring");
+        };
+        let curve = fixture.store.get(edge).unwrap().curve().unwrap();
+        let CurveGeom::Circle(source_circle) = fixture.store.curve(curve).unwrap() else {
+            panic!("fixture carrier must remain circular");
+        };
+        for parameter in [0.0, core::f64::consts::FRAC_PI_2, core::f64::consts::PI] {
+            let mapped = emitted.edge_to_pcurve().map(parameter);
+            let uv = pcurve_circle.eval(mapped);
+            let on_plane = plane.eval([uv.x, uv.y]);
+            assert!((on_plane - source_circle.eval(parameter)).norm() <= 2.0e-15);
+        }
+    }
+}
+
+#[test]
+fn projected_source_circle_uses_the_target_planes_authored_in_plane_chart() {
+    let fixture =
+        projected_pcurve_fixture_with_target_x(true, kgeom::vec::Vec3::new(0.0, 1.0, 0.0));
+    let emitted = emit_projected_pcurve(&fixture).unwrap();
+    let AnalyticShellPcurve::Circle(circle) = emitted.curve() else {
+        panic!("projected source ring must emit a Circle2d");
+    };
+    assert_eq!(circle.center(), Point2::new(0.0, 1.0));
+    assert_eq!(circle.x_dir(), Vec2::new(0.0, -1.0));
+    assert_eq!(emitted.edge_to_pcurve().scale(), 1.0);
+    assert_eq!(emitted.edge_to_pcurve().offset(), 0.0);
+}
+
+#[test]
+fn projected_source_circle_certifies_oblique_co_and_antiparallel_cap_supports() {
+    let common = Frame::new(
+        Point3::new(2.5, -1.75, 0.625),
+        kgeom::vec::Vec3::new(0.48, 0.64, 0.6),
+        kgeom::vec::Vec3::new(0.8, -0.6, 0.0),
+    )
+    .unwrap();
+    for reverse_target in [false, true] {
+        let mut store = Store::new();
+        let source_body = ktopo::make::cylinder(
+            &mut store,
+            &common.with_origin(common.point_at(-0.5, 0.0, -1.0)),
+            1.0,
+            2.0,
+        )
+        .unwrap();
+        let target_frame = if reverse_target {
+            Frame::new(common.point_at(0.5, 0.0, 1.0), -common.z(), common.x()).unwrap()
+        } else {
+            common.with_origin(common.point_at(0.5, 0.0, -1.0))
+        };
+        let target_body = ktopo::make::cylinder(&mut store, &target_frame, 1.0, 2.0).unwrap();
+        let source_raw_face = store
+            .faces_of_body(source_body)
+            .unwrap()
+            .into_iter()
+            .find(|face| {
+                matches!(
+                    store.surface(store.get(*face).unwrap().surface()).unwrap(),
+                    SurfaceGeom::Cylinder(_)
+                )
+            })
+            .unwrap();
+        for (height, expected_scale) in [(-1.0, -1.0), (1.0, 1.0)] {
+            let target_raw_face = store
+                .faces_of_body(target_body)
+                .unwrap()
+                .into_iter()
+                .find(|face| {
+                    let Ok(SurfaceGeom::Plane(plane)) =
+                        store.surface(store.get(*face).unwrap().surface())
+                    else {
+                        return false;
+                    };
+                    (common.to_local(plane.frame().origin()).z - height).abs() <= 1.0e-15
+                })
+                .unwrap();
+            let (source_loop, source_fin, source_edge) = store
+                .get(source_raw_face)
+                .unwrap()
+                .loops()
+                .iter()
+                .find_map(|loop_id| {
+                    let [fin_id] = store.get(*loop_id).unwrap().fins() else {
+                        return None;
+                    };
+                    let edge = store.get(*fin_id).unwrap().edge();
+                    let curve = store.get(edge).unwrap().curve()?;
+                    let CurveGeom::Circle(circle) = store.curve(curve).unwrap() else {
+                        return None;
+                    };
+                    ((common.to_local(circle.frame().origin()).z - height).abs() <= 1.0e-15)
+                        .then_some((*loop_id, *fin_id, edge))
+                })
+                .unwrap();
+            let mut session = crate::Kernel::new().create_session();
+            let part = session.create_part();
+            let source_face = crate::FaceId::new(part.clone(), source_raw_face);
+            let target_face = crate::FaceId::new(part, target_raw_face);
+            let bounded = MixedBoundedSourceSpanPlan {
+                source: source(),
+                span: MixedSourceSpanKey {
+                    fin_loop_ordinal: usize::from(height > 0.0),
+                    traversal_ordinal: 0,
+                },
+                loop_id: source_loop,
+                fin: source_fin,
+                edge: source_edge,
+                roots: [
+                    MixedBoundedSourceRoot {
+                        endpoint: 0,
+                        root_ordinal: 0,
+                        parameter_bits: 0.25_f64.to_bits(),
+                        enclosure_bits: [0.25_f64.to_bits(); 2],
+                        period_shift: 0,
+                    },
+                    MixedBoundedSourceRoot {
+                        endpoint: 1,
+                        root_ordinal: 1,
+                        parameter_bits: 2.25_f64.to_bits(),
+                        enclosure_bits: [2.25_f64.to_bits(); 2],
+                        period_shift: 0,
+                    },
+                ],
+            };
+            let proof = ProjectedSourceCircleOnPlane::certify(
+                &store,
+                &source_face,
+                &bounded,
+                MixedSourceFaceKey {
+                    operand: 1,
+                    topology_ordinal: usize::from(height > 0.0),
+                },
+                &target_face,
+                kcore::tolerance::LINEAR_RESOLUTION,
+            )
+            .unwrap();
+            assert_eq!(proof.parameter_scale(), expected_scale);
+            assert_eq!(proof.parameter_offset(), 0.0);
+            assert!((proof.center() - Point2::new(-1.0, 0.0)).norm() <= 2.0e-15);
+            assert_eq!(proof.tolerance(), kcore::tolerance::LINEAR_RESOLUTION);
+        }
+    }
+}
+
+#[test]
+fn projected_source_circle_recertification_rejects_every_rebound_identity() {
+    let assert_binding_refusal = |fixture: &ProjectedPcurveFixture| {
+        assert_eq!(
+            emit_projected_pcurve(fixture),
+            Err(
+                MixedShellMaterializationError::ProjectedSourceCircleOnPlane(
+                    ProjectedSourceCircleOnPlaneError::SourceTopologyMismatch,
+                )
+            )
+        );
+    };
+
+    let mut rebound_target = projected_pcurve_fixture(true);
+    rebound_target.plan.faces[1].source = source();
+    assert_binding_refusal(&rebound_target);
+
+    let mut rebound_peer = projected_pcurve_fixture(true);
+    rebound_peer.plan.faces[0].loops[0].uses[0].pcurve = MixedPcurveLineage::Section {
+        branch: 0,
+        operand: 0,
+        cylinder_period_shift: 0,
+    };
+    assert_binding_refusal(&rebound_peer);
+
+    let mut rebound_span = projected_pcurve_fixture(true);
+    let source_raw = rebound_span.plan.faces[0].source_face.raw();
+    let other_loop = rebound_span
+        .store
+        .get(source_raw)
+        .unwrap()
+        .loops()
+        .iter()
+        .copied()
+        .find(|loop_id| *loop_id != rebound_span.plan.materialization.source_spans[0].loop_id)
+        .unwrap();
+    rebound_span.plan.materialization.source_spans[0].loop_id = other_loop;
+    assert_binding_refusal(&rebound_span);
+}
+
+#[test]
+fn projected_source_circle_certification_rejects_foreign_parts_and_other_planes() {
+    let fixture = projected_pcurve_fixture(true);
+    let source_face = &fixture.plan.faces[0].source_face;
+    let target_face = &fixture.plan.faces[1].source_face;
+    let source_span = &fixture.plan.bounded_source_spans[0];
+    let target_key = fixture.plan.faces[1].source;
+
+    let mut session = crate::Kernel::new().create_session();
+    let foreign_part = session.create_part();
+    let foreign_target = crate::FaceId::new(foreign_part, target_face.raw());
+    assert_eq!(
+        ProjectedSourceCircleOnPlane::certify(
+            &fixture.store,
+            source_face,
+            source_span,
+            target_key,
+            &foreign_target,
+            kcore::tolerance::LINEAR_RESOLUTION,
+        ),
+        Err(ProjectedSourceCircleOnPlaneError::FacePartMismatch)
+    );
+
+    let other_plane = fixture
+        .store
+        .iter::<ktopo::entity::Face>()
+        .find_map(|(face_id, face)| {
+            let SurfaceGeom::Plane(plane) = fixture.store.surface(face.surface()).ok()? else {
+                return None;
+            };
+            (plane.frame().z().z < 0.0).then_some(face_id)
+        })
+        .unwrap();
+    let other_target = crate::FaceId::new(source_face.part().clone(), other_plane);
+    assert_eq!(
+        ProjectedSourceCircleOnPlane::certify(
+            &fixture.store,
+            source_face,
+            source_span,
+            target_key,
+            &other_target,
+            kcore::tolerance::LINEAR_RESOLUTION,
+        ),
+        Err(ProjectedSourceCircleOnPlaneError::CircleNotOnPlane)
+    );
+}
 
 fn source() -> MixedSourceFaceKey {
     MixedSourceFaceKey {

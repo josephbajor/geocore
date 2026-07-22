@@ -40,6 +40,10 @@ pub(crate) enum CylinderSourceOutcome {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CertifiedCylinderBoundary {
     cap_face: FaceId,
+    cap_loop: LoopId,
+    cap_fin: FinId,
+    side_loop: LoopId,
+    side_fin: FinId,
     edge: EdgeId,
     center: Point3,
 }
@@ -47,6 +51,22 @@ pub(crate) struct CertifiedCylinderBoundary {
 impl CertifiedCylinderBoundary {
     pub(crate) const fn cap_face(self) -> FaceId {
         self.cap_face
+    }
+
+    pub(crate) const fn cap_loop(self) -> LoopId {
+        self.cap_loop
+    }
+
+    pub(crate) const fn cap_fin(self) -> FinId {
+        self.cap_fin
+    }
+
+    pub(crate) const fn side_loop(self) -> LoopId {
+        self.side_loop
+    }
+
+    pub(crate) const fn side_fin(self) -> FinId {
+        self.side_fin
     }
 
     pub(crate) const fn edge(self) -> EdgeId {
@@ -88,6 +108,10 @@ impl CertifiedCylinderSource {
 #[derive(Debug, Clone, Copy)]
 struct UnorderedBoundary {
     cap_face: FaceId,
+    cap_loop: LoopId,
+    cap_fin: FinId,
+    side_loop: LoopId,
+    side_fin: FinId,
     edge: EdgeId,
     center: Point3,
 }
@@ -304,6 +328,10 @@ fn bind_boundary(
     };
     Ok(Some(UnorderedBoundary {
         cap_face: cap_face_id,
+        cap_loop: cap_fin.parent(),
+        cap_fin: cap_fin_id,
+        side_loop: side_loop_id,
+        side_fin: *side_fin_id,
         edge: side_fin.edge(),
         center: circle.frame().origin(),
     }))
@@ -337,6 +365,10 @@ fn order_boundaries(
     };
     Some([low, high].map(|boundary| CertifiedCylinderBoundary {
         cap_face: boundary.cap_face,
+        cap_loop: boundary.cap_loop,
+        cap_fin: boundary.cap_fin,
+        side_loop: boundary.side_loop,
+        side_fin: boundary.side_fin,
         edge: boundary.edge,
         center: boundary.center,
     }))

@@ -30,7 +30,8 @@ use super::{
     ArrangementDirection, MixedArrangementBinding, MixedBoundedSourceSpanPlan, MixedPcurveLineage,
     MixedSectionEdgePlan, MixedShellEdgeKey, MixedShellFacePlan, MixedShellMaterializationGap,
     MixedShellProofPlan, MixedShellVertexKey, MixedSourceFaceKey, MixedSourceParameterEvidence,
-    MixedSourceSpanKey, SelectedOrientation,
+    MixedSourceSpanKey, ProjectedSourceCircleOnPlane, ProjectedSourceCircleOnPlaneError,
+    SelectedOrientation,
 };
 use crate::{
     BodySectionGraph, SectionCarrier, SectionCurveEndpointTopology, SectionCurveFragmentSpan,
@@ -253,6 +254,7 @@ pub(crate) enum MixedShellMaterializationError {
     UnsupportedSourceCurve,
     UnsupportedSourceSurface,
     UnsupportedPcurve,
+    ProjectedSourceCircleOnPlane(ProjectedSourceCircleOnPlaneError),
     InvalidAnalyticGeometry,
     InvalidEndpointFreePeriodicUse,
     NoCommonPeriodicWindow,
@@ -848,7 +850,7 @@ fn validate_periodic_source_use(
     let expected_seam = MixedShellVertexKey::ProofSeam { source, loop_key };
     if tail != &expected_seam
         || head != &expected_seam
-        || use_.pcurve() != MixedPcurveLineage::SourceTopology
+        || !matches!(use_.pcurve(), MixedPcurveLineage::SourceTopology)
     {
         return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
     }
@@ -1217,7 +1219,7 @@ fn apply_source_closure_winding(
 
 fn section_pcurve(
     edge: &MixedSectionEdgePlan,
-    lineage: MixedPcurveLineage,
+    lineage: &MixedPcurveLineage,
 ) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
     let MixedPcurveLineage::Section {
         branch,
@@ -1227,10 +1229,10 @@ fn section_pcurve(
     else {
         return Err(MixedShellMaterializationError::UnsupportedPcurve);
     };
-    if branch != edge.fragment().branch() || operand > 1 {
+    if *branch != edge.fragment().branch() || *operand > 1 {
         return Err(MixedShellMaterializationError::UnsupportedPcurve);
     }
-    let (curve, map) = match edge.branch().pcurves()[operand] {
+    let (curve, map) = match edge.branch().pcurves()[*operand] {
         SectionUvCurve::Line(line) => {
             let direction = Vec2::new(line.direction().x, line.direction().y);
             let scale = direction.norm();
@@ -1250,7 +1252,7 @@ fn section_pcurve(
             (curve, map)
         }
     };
-    let shift = i32::try_from(cylinder_period_shift)
+    let shift = i32::try_from(*cylinder_period_shift)
         .map_err(|_| MixedShellMaterializationError::PeriodShiftOverflow)?;
     Ok(AnalyticPcurveUse::new(curve, map).with_chart(PcurveChart::shifted([shift, 0])))
 }
@@ -1514,6 +1516,106 @@ fn physical_edge_for_use(
         .ok_or(MixedShellMaterializationError::PlanVertexMismatch)
 }
 
+fn projected_source_circle_error(
+    source: ProjectedSourceCircleOnPlaneError,
+) -> MixedShellMaterializationError {
+    MixedShellMaterializationError::ProjectedSourceCircleOnPlane(source)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn projected_source_circle_pcurve(
+    plan: &MixedShellProofPlan,
+    store: &Store,
+    face_index: usize,
+    loop_index: usize,
+    use_index: usize,
+    source: MixedSourceFaceKey,
+    span: &MixedSourceSpanKey,
+    retained: &RetainedPlanarSpan,
+    physical: &PhysicalEdge,
+    proof: &ProjectedSourceCircleOnPlane,
+) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
+    let fail =
+        || projected_source_circle_error(ProjectedSourceCircleOnPlaneError::SourceTopologyMismatch);
+    let target_face = plan.faces().get(face_index).ok_or_else(fail)?;
+    if proof.source() != source
+        || proof.span() != span
+        || proof.target() != target_face.source()
+        || proof.target_face() != target_face.source_face()
+        || proof.loop_id() != retained.loop_id
+        || proof.fin() != retained.fin
+        || proof.edge() != retained.edge
+        || retained.source != source
+        || &retained.span != span
+        || physical.carrier != PhysicalCarrier::Source(retained.edge)
+        || physical.endpoints.is_none()
+    {
+        return Err(fail());
+    }
+
+    let mut bounded = plan
+        .bounded_source_spans()
+        .iter()
+        .filter(|candidate| candidate.source() == source && candidate.span() == span);
+    let source_span = bounded.next().ok_or_else(fail)?;
+    if bounded.next().is_some()
+        || source_span.loop_id() != retained.loop_id
+        || source_span.fin() != retained.fin
+        || source_span.edge() != retained.edge
+    {
+        return Err(fail());
+    }
+
+    let mut peers = physical.uses().iter().copied().filter(|candidate| {
+        candidate.face() != face_index
+            || candidate.loop_index() != loop_index
+            || candidate.use_index() != use_index
+    });
+    let peer = peers.next().ok_or_else(fail)?;
+    if peers.next().is_some() {
+        return Err(fail());
+    }
+    let peer_face = plan.faces().get(peer.face()).ok_or_else(fail)?;
+    let peer_use = physical_use_at(plan, peer)?;
+    if peer_face.source() != source
+        || peer_face.source_face() != proof.source_face()
+        || !matches!(
+            peer_use.edge(),
+            MixedShellEdgeKey::PlanarSource {
+                source: candidate_source,
+                span: candidate_span,
+            } if *candidate_source == source && candidate_span == span
+        )
+        || !matches!(peer_use.pcurve(), MixedPcurveLineage::SourceTopology)
+    {
+        return Err(fail());
+    }
+
+    let expected = ProjectedSourceCircleOnPlane::certify(
+        store,
+        proof.source_face(),
+        source_span,
+        target_face.source(),
+        target_face.source_face(),
+        proof.tolerance(),
+    )
+    .map_err(projected_source_circle_error)?;
+    if &expected != proof {
+        return Err(projected_source_circle_error(
+            ProjectedSourceCircleOnPlaneError::InvalidProjection,
+        ));
+    }
+    let curve = proof
+        .circle()
+        .map(AnalyticShellPcurve::Circle)
+        .map_err(projected_source_circle_error)?;
+    let map =
+        AffineParamMap1d::new(proof.parameter_scale(), proof.parameter_offset()).map_err(|_| {
+            projected_source_circle_error(ProjectedSourceCircleOnPlaneError::InvalidProjection)
+        })?;
+    Ok(AnalyticPcurveUse::new(curve, map))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn materialized_pcurve_for_use(
     plan: &MixedShellProofPlan,
@@ -1528,7 +1630,18 @@ fn materialized_pcurve_for_use(
         MixedShellEdgeKey::PlanarSource { source, span } => {
             let retained = retained_span(plan, *source, span)
                 .ok_or(MixedShellMaterializationError::MissingPlanarLineage)?;
-            source_pcurve(store, retained)
+            match use_.pcurve() {
+                MixedPcurveLineage::SourceTopology => source_pcurve(store, retained),
+                MixedPcurveLineage::ProjectedSourceCircleOnPlane(proof) => {
+                    projected_source_circle_pcurve(
+                        plan, store, face_index, loop_index, use_index, *source, span, retained,
+                        physical, proof,
+                    )
+                }
+                MixedPcurveLineage::Section { .. } => {
+                    Err(MixedShellMaterializationError::UnsupportedPcurve)
+                }
+            }
         }
         MixedShellEdgeKey::SectionFragment(fragment) => {
             section_pcurve(section_edge(plan, *fragment)?, use_.pcurve())

@@ -17,6 +17,15 @@ use ktopo::store::Store;
 pub(crate) mod components;
 #[path = "mixed_shell_materialize.rs"]
 pub(crate) mod materialize;
+#[path = "mixed_shell_plan/parallel_cylinder_lens.rs"]
+mod parallel_cylinder_lens;
+#[path = "mixed_shell_plan/projected_source_circle.rs"]
+mod projected_source_circle;
+
+pub(crate) use parallel_cylinder_lens::plan_parallel_cylinder_coincident_intersection;
+pub(crate) use projected_source_circle::{
+    ProjectedSourceCircleOnPlane, ProjectedSourceCircleOnPlaneError,
+};
 
 use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrientation};
 use super::disk_face_arrangement::{ArrangedDiskFace, DiskChordKey, DiskSourceArcKey};
@@ -195,10 +204,12 @@ pub(crate) enum MixedShellEdgeKey {
 }
 
 /// Pcurve/chart authority retained for one directed face use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MixedPcurveLineage {
     /// Source topology remains the authority for its existing fin pcurve.
     SourceTopology,
+    /// A retained cylinder source circle projected into a coincident Plane.
+    ProjectedSourceCircleOnPlane(ProjectedSourceCircleOnPlane),
     /// Section branch pcurve plus an exact integer cylinder-period lift.
     Section {
         branch: usize,
@@ -224,8 +235,8 @@ impl MixedShellEdgeUse {
         self.direction
     }
 
-    pub(crate) const fn pcurve(&self) -> MixedPcurveLineage {
-        self.pcurve
+    pub(crate) const fn pcurve(&self) -> &MixedPcurveLineage {
+        &self.pcurve
     }
 }
 
@@ -504,6 +515,13 @@ pub(crate) enum MixedShellPlanError {
     },
     PlanarLineageMismatch(MixedSourceFaceKey),
     DiskLineageMismatch(MixedSourceFaceKey),
+    CoincidentCapSelectionMismatch,
+    CoincidentCapBoundaryUseCount {
+        physical_end: usize,
+        actual: usize,
+    },
+    CoincidentCapBoundaryChain(usize),
+    ProjectedSourceCircle(ProjectedSourceCircleOnPlaneError),
 }
 
 #[derive(Clone, Copy)]
@@ -511,6 +529,34 @@ struct SectionUseLineage {
     fragment: usize,
     arrangement_to_section: ArrangementDirection,
     cylinder_period_shift: i64,
+}
+
+enum SectionPlanningAdmission<'a> {
+    Complete,
+    CoincidentCaps(
+        &'a super::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation,
+    ),
+}
+
+impl SectionPlanningAdmission<'_> {
+    fn validate(&self, graph: &BodySectionGraph) -> Result<(), MixedShellPlanError> {
+        match self {
+            Self::Complete
+                if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() =>
+            {
+                Ok(())
+            }
+            Self::CoincidentCaps(relation)
+                if graph.completion() == SectionCompletion::Indeterminate
+                    && !graph.gaps().is_empty()
+                    && relation.overlap_ends().len() == 2
+                    && relation.rulings().len() == 2 =>
+            {
+                Ok(())
+            }
+            _ => Err(MixedShellPlanError::SectionIncomplete),
+        }
+    }
 }
 
 /// Translate certified arrangements and truth-selected cells into one exact
@@ -525,6 +571,32 @@ pub(crate) fn plan_mixed_shell<'a>(
         return Err(MixedShellPlanError::SectionIncomplete);
     }
 
+    plan_mixed_shell_with_augmentation(
+        store,
+        graph,
+        SectionPlanningAdmission::Complete,
+        bindings,
+        selected.into_iter().map(|fragment| {
+            let (key, operand, (), orientation) = fragment.into_parts();
+            (key, operand, orientation)
+        }),
+        |_, _| Ok(()),
+    )
+}
+
+fn plan_mixed_shell_with_augmentation<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    admission: SectionPlanningAdmission<'_>,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = (MixedShellCellKey, OperandSide, SelectedOrientation)>,
+    augment: impl FnOnce(
+        &mut Vec<MixedShellFacePlan>,
+        &mut Vec<MixedBoundedSourceSpanPlan>,
+    ) -> Result<(), MixedShellPlanError>,
+) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+    admission.validate(graph)?;
+
     let mut arrangements = BTreeMap::new();
     for binding in bindings {
         let source = source_face_key(store, graph, binding.face(), binding.operand())?;
@@ -534,8 +606,7 @@ pub(crate) fn plan_mixed_shell<'a>(
     }
 
     let mut selected_cells = BTreeMap::new();
-    for fragment in selected {
-        let (key, operand, (), orientation) = fragment.into_parts();
+    for (key, operand, orientation) in selected {
         if operand != operand_side(key.source.operand) {
             return Err(MixedShellPlanError::SelectionOperandMismatch(key));
         }
@@ -742,6 +813,7 @@ pub(crate) fn plan_mixed_shell<'a>(
         faces.push(face);
     }
 
+    augment(&mut faces, &mut bounded_source_spans)?;
     resolve_endpoint_free_cap_directions(&mut faces, &cap_rings)?;
     validate_section_pairing(&faces)?;
     validate_endpoint_free_ring_pairing(&faces)?;
@@ -1319,12 +1391,41 @@ fn periodic_cut_lineage(
     let mut output = BTreeMap::new();
     for cut in arrangement.cut_fragments() {
         let key = *cut.key();
-        let component = graph
-            .curve_components()
-            .get(key.component())
-            .ok_or(MixedShellPlanError::PeriodicComponentMismatch(key))?;
-        if component.fragments().get(key.ordinal()) != Some(&key.fragment()) {
-            return Err(MixedShellPlanError::PeriodicComponentMismatch(key));
+        match key.source_component() {
+            Some(component_index) => {
+                let component = graph
+                    .curve_components()
+                    .get(component_index)
+                    .ok_or(MixedShellPlanError::PeriodicComponentMismatch(key))?;
+                if component_index != key.component()
+                    || component.fragments().get(key.ordinal()) != Some(&key.fragment())
+                {
+                    return Err(MixedShellPlanError::PeriodicComponentMismatch(key));
+                }
+            }
+            None => {
+                // A face-local mixed path can leave and later return to this
+                // cylinder face, yielding several maximal traces under one
+                // stable trace-group key. The path ordinal, not group
+                // uniqueness, owns the exact occurrence.
+                let mut occurrences = certified
+                    .boundary_traces()
+                    .iter()
+                    .filter(|trace| {
+                        trace.source_component().is_none() && trace.component() == key.component()
+                    })
+                    .flat_map(|trace| trace.component_ordinals().iter().zip(trace.fragments()))
+                    .filter(|(ordinal, _)| **ordinal == key.ordinal());
+                let (_, embedded) = occurrences
+                    .next()
+                    .filter(|_| occurrences.next().is_none())
+                    .ok_or(MixedShellPlanError::PeriodicComponentMismatch(key))?;
+                if embedded.fragment() != key.fragment()
+                    || embedded.period_shift() != key.cylinder_period_shift()
+                {
+                    return Err(MixedShellPlanError::PeriodicComponentMismatch(key));
+                }
+            }
         }
         let fragment = graph
             .curve_fragments()
@@ -1917,7 +2018,9 @@ mod tests {
         select_boundary_fragments,
     };
     use super::super::mixed_face_arrangement::arrange_mixed_planar_face_with_lineage;
-    use super::super::mixed_periodic_arrangement::arrange_mixed_periodic_face;
+    use super::super::mixed_periodic_arrangement::{
+        arrange_mixed_periodic_face, arrange_mixed_periodic_face_from_certified_embedding,
+    };
     use super::*;
     use crate::{BlockRequest, CylinderRequest, Kernel, SectionBodiesRequest};
     use kgeom::frame::Frame;
@@ -1964,6 +2067,77 @@ mod tests {
             intrinsic_circle_period_shifts(Sense::Forward, [f64::NAN, 1.0]),
             None
         );
+    }
+
+    #[test]
+    fn face_local_path_ordinals_bind_multiple_runs_under_one_trace_group() {
+        let frame = Frame::world();
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (first, second) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let first = edit
+                .create_cylinder(CylinderRequest::new(
+                    frame.with_origin(frame.point_at(-0.5, 0.0, -1.0)),
+                    1.0,
+                    3.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let second = edit
+                .create_cylinder(CylinderRequest::new(
+                    frame.with_origin(frame.point_at(0.5, 0.0, -1.0)),
+                    1.0,
+                    2.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (first, second)
+        };
+        let part = session.part(part_id).unwrap();
+        let graph = part
+            .section_bodies(SectionBodiesRequest::new(first, second))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let mut saw_split_group = false;
+        for evidence in graph.periodic_face_embeddings() {
+            let SectionPeriodicFaceEmbeddingEvidence::Certified(evidence) = evidence else {
+                panic!("fixture lost certified periodic evidence")
+            };
+            let mut groups = BTreeMap::new();
+            for trace in evidence.boundary_traces() {
+                *groups.entry(trace.component()).or_insert(0_usize) += 1;
+            }
+            saw_split_group |= groups.values().any(|count| *count > 1);
+            let arrangement = arrange_mixed_periodic_face_from_certified_embedding(
+                &graph,
+                evidence.face(),
+                evidence.operand(),
+            )
+            .unwrap();
+            let source = source_face_key(
+                &part.state.store,
+                &graph,
+                &evidence.face(),
+                evidence.operand(),
+            )
+            .unwrap();
+            let lineage = periodic_cut_lineage(
+                &graph,
+                &evidence.face(),
+                evidence.operand(),
+                &arrangement,
+                source,
+            )
+            .unwrap();
+            assert_eq!(lineage.len(), arrangement.cut_fragments().len());
+        }
+        assert!(saw_split_group);
     }
 
     fn with_fixture(
