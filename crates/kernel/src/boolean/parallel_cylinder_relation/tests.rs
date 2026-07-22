@@ -86,22 +86,44 @@ fn fixture_with_geometry(
     } else {
         frame.with_origin(frame.point_at(radial_offsets[1], 0.0, second.0))
     };
+    fixture_with_frames(
+        frame.with_origin(frame.point_at(radial_offsets[0], 0.0, first.0)),
+        first.1,
+        radii[0],
+        second_frame,
+        second.1,
+        radii[1],
+    )
+}
+
+fn fixture_with_frames(
+    first_frame: Frame,
+    first_height: f64,
+    first_radius: f64,
+    second_frame: Frame,
+    second_height: f64,
+    second_radius: f64,
+) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
     let (outer, inner) = {
         let mut edit = session.edit_part(part.clone()).unwrap();
         let outer = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(radial_offsets[0], 0.0, first.0)),
-                radii[0],
-                first.1,
+                first_frame,
+                first_radius,
+                first_height,
             ))
             .unwrap()
             .into_result()
             .unwrap()
             .body();
         let inner = edit
-            .create_cylinder(CylinderRequest::new(second_frame, radii[1], second.1))
+            .create_cylinder(CylinderRequest::new(
+                second_frame,
+                second_radius,
+                second_height,
+            ))
             .unwrap()
             .into_result()
             .unwrap()
@@ -114,6 +136,30 @@ fn fixture_with_geometry(
         outer,
         inner,
     }
+}
+
+fn exact_axial_contact_fixture(
+    placement: Placement,
+    reverse_second_axis: bool,
+    radial_scale: f64,
+    radii: [f64; 2],
+) -> Fixture {
+    let frame = shared_frame(placement).with_origin(Point3::new(0.0, 0.0, 0.0));
+    let axis = frame.z();
+    let exact_perpendicular = if axis.x == 0.0 && axis.y == 0.0 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(axis.y, -axis.x, 0.0)
+    };
+    let radial = exact_perpendicular * radial_scale;
+    let first_frame = frame.with_origin(Point3::new(-axis.x, -axis.y, -axis.z));
+    let second_low = Point3::new(radial.x, radial.y, radial.z);
+    let second_frame = if reverse_second_axis {
+        Frame::new(second_low + axis, -axis, frame.x()).unwrap()
+    } else {
+        frame.with_origin(second_low)
+    };
+    fixture_with_frames(first_frame, 1.0, radii[0], second_frame, 1.0, radii[1])
 }
 
 fn fixture(placement: Placement) -> Fixture {
@@ -302,6 +348,16 @@ fn certified_axial_separation(
     match outcome {
         ParallelCylinderRelationOutcome::CertifiedAxialSeparation(certificate) => *certificate,
         other => panic!("expected certified axial separation, got {other:?}"),
+    }
+}
+
+fn certified_axial_contact(
+    outcome: ParallelCylinderRelationOutcome,
+    context: &str,
+) -> CertifiedParallelCylinderAxialContact {
+    match outcome {
+        ParallelCylinderRelationOutcome::CertifiedAxialContact(certificate) => *certificate,
+        other => panic!("{context}: expected certified axial contact, got {other:?}"),
     }
 }
 
@@ -512,6 +568,131 @@ fn strict_axial_separation_is_radial_independent_replay_and_swap_deterministic()
 }
 
 #[test]
+fn exact_axial_contact_is_radial_independent_replay_and_swap_deterministic() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let tangent_radii = match placement {
+            Placement::World => [1.0, 1.0],
+            Placement::Oblique => [0.8, 0.8],
+        };
+        let radial_relations = [
+            ("strict secant", 2.0, [2.0, 2.0]),
+            ("tangent", 2.0, tangent_radii),
+            ("strict internal", 2.0, [3.0, 0.5]),
+            ("coincident", 0.0, [1.0, 1.0]),
+        ];
+        for reverse_second_axis in [false, true] {
+            for (radial_relation, radial_distance, radii) in radial_relations {
+                let fixture = exact_axial_contact_fixture(
+                    placement,
+                    reverse_second_axis,
+                    radial_distance,
+                    radii,
+                );
+                let forward_graph = section(&fixture, false);
+                let replay_graph = section(&fixture, false);
+                let swapped_graph = section(&fixture, true);
+                let forward_sources = sources(&fixture, false);
+                let swapped_sources = sources(&fixture, true);
+                let context =
+                    format!("{placement:?} {radial_relation} antiparallel={reverse_second_axis}");
+
+                let forward = certified_axial_contact(
+                    certify(
+                        &fixture,
+                        &forward_graph,
+                        &forward_sources,
+                        PARALLEL_CYLINDER_RELATION_WORK,
+                    )
+                    .unwrap(),
+                    &context,
+                );
+                let replay = certified_axial_contact(
+                    certify(
+                        &fixture,
+                        &replay_graph,
+                        &forward_sources,
+                        PARALLEL_CYLINDER_RELATION_WORK,
+                    )
+                    .unwrap(),
+                    &context,
+                );
+                let swapped = certified_axial_contact(
+                    certify(
+                        &fixture,
+                        &swapped_graph,
+                        &swapped_sources,
+                        PARALLEL_CYLINDER_RELATION_WORK,
+                    )
+                    .unwrap(),
+                    &context,
+                );
+
+                assert_eq!(forward, replay, "{context}");
+                assert_eq!(
+                    forward.contact_boundaries().map(|witness| (
+                        witness.boundary(),
+                        witness.cap_face(),
+                        witness.edge(),
+                    )),
+                    swapped.contact_boundaries().map(|witness| (
+                        witness.boundary(),
+                        witness.cap_face(),
+                        witness.edge(),
+                    )),
+                    "{context}",
+                );
+                assert_eq!(
+                    forward
+                        .contact_boundaries()
+                        .map(|witness| witness.operand()),
+                    [0, 1],
+                    "{context}",
+                );
+                assert_eq!(
+                    swapped
+                        .contact_boundaries()
+                        .map(|witness| witness.operand()),
+                    [1, 0],
+                    "{context}",
+                );
+                assert_eq!(
+                    forward
+                        .contact_boundaries()
+                        .map(|witness| witness.boundary()),
+                    [1, usize::from(reverse_second_axis)],
+                    "{context}",
+                );
+                for witness in forward.contact_boundaries() {
+                    let source = &forward_sources[witness.operand()];
+                    let boundary = source.boundaries()[witness.boundary()];
+                    assert_eq!(witness.cap_face(), boundary.cap_face(), "{context}");
+                    assert_eq!(witness.edge(), boundary.edge(), "{context}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exterior_radial_separation_precedes_exact_axial_contact() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for reverse_second_axis in [false, true] {
+            let fixture =
+                exact_axial_contact_fixture(placement, reverse_second_axis, 4.0, [1.0, 1.0]);
+            for swapped in [false, true] {
+                let graph = section(&fixture, swapped);
+                let sources = sources(&fixture, swapped);
+                assert_eq!(
+                    certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+                    ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation,
+                    "{placement:?} antiparallel={reverse_second_axis} swapped={swapped}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn exterior_radial_witness_remains_available_without_an_axial_gap() {
     for placement in [Placement::World, Placement::Oblique] {
         for reverse_second_axis in [false, true] {
@@ -598,13 +779,32 @@ fn tolerance_backed_side_height_cannot_certify_a_one_ulp_cap_gap() {
 }
 
 #[test]
+fn tolerance_backed_side_height_cannot_certify_exact_axial_contact() {
+    for placement in [Placement::World, Placement::Oblique] {
+        for reverse_second_axis in [false, true] {
+            let mut fixture =
+                exact_axial_contact_fixture(placement, reverse_second_axis, 2.0, [2.0, 2.0]);
+            let body = fixture.outer.clone();
+            perturb_side_height_within_full_tolerance(&mut fixture, &body, 1);
+
+            let graph = section(&fixture, false);
+            let sources = sources(&fixture, false);
+            assert!(matches!(
+                certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+                ParallelCylinderRelationOutcome::Indeterminate(_)
+            ));
+        }
+    }
+}
+
+#[test]
 fn exact_constructor_one_ulp_gap_contact_and_overlap_are_distinct() {
     let boundary = 1.0;
     for reverse_second_axis in [false, true] {
-        for (second_low, separated, context) in [
-            (next_up_positive(boundary), true, "one-ulp gap"),
-            (boundary, false, "contact"),
-            (next_down_positive(boundary), false, "one-ulp overlap"),
+        for (second_low, expected, context) in [
+            (next_up_positive(boundary), 0, "one-ulp gap"),
+            (boundary, 1, "contact"),
+            (next_down_positive(boundary), 2, "one-ulp overlap"),
         ] {
             let fixture = fixture_with_geometry(
                 Placement::World,
@@ -619,11 +819,13 @@ fn exact_constructor_one_ulp_gap_contact_and_overlap_are_distinct() {
             let outcome =
                 certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap();
             assert_eq!(
-                matches!(
-                    outcome,
-                    ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
-                ),
-                separated,
+                match &outcome {
+                    ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_) => 0,
+                    ParallelCylinderRelationOutcome::CertifiedAxialContact(_) => 1,
+                    ParallelCylinderRelationOutcome::Indeterminate(_) => 2,
+                    _ => usize::MAX,
+                },
+                expected,
                 "{context} antiparallel={reverse_second_axis}: {outcome:?}",
             );
         }
@@ -855,6 +1057,8 @@ fn relation_work_accepts_exact_n_and_refuses_n_minus_one() {
         antiparallel_nested_fixture(Placement::World),
         axially_separated_fixture(Placement::World, false),
         axially_separated_fixture(Placement::World, true),
+        exact_axial_contact_fixture(Placement::World, false, 1.0, [1.0, 1.0]),
+        exact_axial_contact_fixture(Placement::World, true, 1.0, [1.0, 1.0]),
     ] {
         let graph = section(&fixture, false);
         let sources = sources(&fixture, false);
@@ -862,6 +1066,7 @@ fn relation_work_accepts_exact_n_and_refuses_n_minus_one() {
             certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
             ParallelCylinderRelationOutcome::Certified(_)
                 | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
+                | ParallelCylinderRelationOutcome::CertifiedAxialContact(_)
         ));
 
         let error = certify(

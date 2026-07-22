@@ -58,6 +58,9 @@ pub(super) fn execute_parallel_cylinder_boolean(
         | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_) => {
             execute_disjoint_source_boolean(edit, operation, &bodies, [&first, &second], scope)
         }
+        ParallelCylinderRelationOutcome::CertifiedAxialContact(_) => {
+            refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
+        }
         ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
             edit,
             operation,

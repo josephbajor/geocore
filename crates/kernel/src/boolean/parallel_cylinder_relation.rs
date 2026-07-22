@@ -1,12 +1,13 @@
 //! Operation-local theorem for the first parallel-cylinder Boolean slice.
 //!
 //! The section graph remains the general intersection authority.  This module
-//! recognizes two proof-complete relations needed by the first Cylinder/Cylinder
-//! Boolean slices: strict axial separation of exactly parallel or antiparallel
-//! finite sources, and the strict finite lens-prism relation. Both authored
-//! boundary orders are normalized onto one certified common axial coordinate
-//! before gap or overlap ownership is decided. Every retained boundary is
-//! topology-owned; rounded points are never used as topology keys.
+//! recognizes the proof-complete relations needed by the first Cylinder/Cylinder
+//! Boolean slices: strict axial separation or exact axial contact of exactly
+//! parallel or antiparallel finite sources, and the strict finite lens-prism
+//! relation. Both authored boundary orders are normalized onto one certified
+//! common axial coordinate before gap, contact, or overlap ownership is decided.
+//! Every retained boundary is topology-owned; rounded points are never used as
+//! topology keys.
 
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
@@ -187,17 +188,17 @@ impl CertifiedParallelCylinderLensRelation {
     }
 }
 
-/// One topology-owned cap boundary delimiting a strict axial gap.
+/// One topology-owned cap boundary delimiting an axial non-overlap relation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ParallelCylinderAxialGapBoundaryWitness {
+pub(super) struct ParallelCylinderAxialBoundaryWitness {
     operand: usize,
     boundary: usize,
     cap_face: RawFaceId,
     edge: RawEdgeId,
 }
 
-impl ParallelCylinderAxialGapBoundaryWitness {
-    /// Operand owning this gap boundary.
+impl ParallelCylinderAxialBoundaryWitness {
+    /// Operand owning this axial boundary.
     pub(super) const fn operand(&self) -> usize {
         self.operand
     }
@@ -221,13 +222,26 @@ impl ParallelCylinderAxialGapBoundaryWitness {
 /// Certified proof that two finite parallel-cylinder sources have a strict axial gap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CertifiedParallelCylinderAxialSeparation {
-    gap_boundaries: [ParallelCylinderAxialGapBoundaryWitness; 2],
+    gap_boundaries: [ParallelCylinderAxialBoundaryWitness; 2],
 }
 
 impl CertifiedParallelCylinderAxialSeparation {
     /// Gap boundaries in low/high order on the canonical common axis.
-    pub(super) const fn gap_boundaries(&self) -> &[ParallelCylinderAxialGapBoundaryWitness; 2] {
+    pub(super) const fn gap_boundaries(&self) -> &[ParallelCylinderAxialBoundaryWitness; 2] {
         &self.gap_boundaries
+    }
+}
+
+/// Certified proof that two finite parallel-cylinder sources have exact axial contact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CertifiedParallelCylinderAxialContact {
+    contact_boundaries: [ParallelCylinderAxialBoundaryWitness; 2],
+}
+
+impl CertifiedParallelCylinderAxialContact {
+    /// Touching cap/ring boundaries in low/high order on the canonical common axis.
+    pub(super) const fn contact_boundaries(&self) -> &[ParallelCylinderAxialBoundaryWitness; 2] {
+        &self.contact_boundaries
     }
 }
 
@@ -239,6 +253,8 @@ pub(super) enum ParallelCylinderRelationOutcome {
     CertifiedExteriorRadialSeparation,
     /// Exact or Full-envelope-bounded source supports prove a strict cap gap.
     CertifiedAxialSeparation(Box<CertifiedParallelCylinderAxialSeparation>),
+    /// Exact live cap/ring supports prove one zero axial gap.
+    CertifiedAxialContact(Box<CertifiedParallelCylinderAxialContact>),
     /// Every analytic, topology, and provenance obligation was discharged.
     Certified(Box<CertifiedParallelCylinderLensRelation>),
     /// The operation-local incomplete-Section theorem for one or two shared
@@ -273,18 +289,24 @@ pub(super) fn certify_parallel_cylinder_relation(
         Ok(normalized) => normalized,
         Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
     };
-    match certify_strict_axial_separation(cylinders, &normalized) {
-        Ok(Some(certificate)) => {
+    let axial_contact = match certify_axial_nonoverlap(cylinders, &normalized) {
+        Ok(Some(CertifiedAxialNonOverlap::Separation(certificate))) => {
             return Ok(ParallelCylinderRelationOutcome::CertifiedAxialSeparation(
                 Box::new(certificate),
             ));
         }
-        Ok(None) => {}
+        Ok(Some(CertifiedAxialNonOverlap::Contact(certificate))) => Some(certificate),
+        Ok(None) => None,
         Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
-    }
+    };
 
     if certifies_exterior_radial_separation(graph, cylinders, &normalized.supports) {
         return Ok(ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation);
+    }
+    if let Some(certificate) = axial_contact {
+        return Ok(ParallelCylinderRelationOutcome::CertifiedAxialContact(
+            Box::new(certificate),
+        ));
     }
 
     let overlap_ends = match certify_source_relation_from_normalized(cylinders, &normalized) {
@@ -476,6 +498,14 @@ fn certify_source_cap_supports(
                     // pcurve lift's fixed checker envelope.
                     LINEAR_RESOLUTION
                 },
+                exact_domain_boundary: side_face.domain().is_some_and(|domain| {
+                    side_line_origin.y
+                        == if boundary_ordinal == 0 {
+                            domain.v.lo
+                        } else {
+                            domain.v.hi
+                        }
+                }),
             };
         }
     }
@@ -582,14 +612,23 @@ fn normalize_source_axial_intervals(
     })
 }
 
-/// Return the two source caps delimiting a strictly positive axial gap.
+/// Certified non-overlap of the two normalized finite axial intervals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AxialNonOverlapBoundaries {
+    StrictGap([SourceBoundary; 2]),
+    ExactContact([SourceBoundary; 2]),
+}
+
+/// Return the two source caps delimiting either a strict gap or exact contact.
 ///
-/// Exact contact and every positive-overlap relation return `None`; callers
-/// can then continue with their existing relation proof without conflating it
-/// with separation.
-fn strict_axial_gap_boundaries(
+/// Both source intervals must first be certified strictly positive. Contact
+/// requires an exact affine-zero comparison between live ring centers and an
+/// exact identity between each side pcurve height and its authored face-domain
+/// end. A tolerance-backed pcurve drift therefore cannot masquerade as contact,
+/// even when both cap planes happen to compare at zero.
+fn axial_nonoverlap_boundaries(
     normalized: &NormalizedAxialIntervals,
-) -> core::result::Result<Option<[SourceBoundary; 2]>, ParallelCylinderRelationGap> {
+) -> core::result::Result<Option<AxialNonOverlapBoundaries>, ParallelCylinderRelationGap> {
     let intervals = normalized.sources;
     for (operand, interval) in intervals.into_iter().enumerate() {
         if certified_axial_compare(
@@ -601,64 +640,121 @@ fn strict_axial_gap_boundaries(
             return Ok(None);
         }
     }
-    if certified_axial_compare(
+
+    let first_before_second = [
+        SourceBoundary {
+            operand: 0,
+            boundary: intervals[0].high,
+        },
+        SourceBoundary {
+            operand: 1,
+            boundary: intervals[1].low,
+        },
+    ];
+    match certified_axial_compare(
         normalized.common_axis,
         normalized.supports[1][intervals[1].low],
         normalized.supports[0][intervals[0].high],
-    )? == Some(Orientation::Positive)
-    {
-        return Ok(Some([
-            SourceBoundary {
-                operand: 0,
-                boundary: intervals[0].high,
-            },
-            SourceBoundary {
-                operand: 1,
-                boundary: intervals[1].low,
-            },
-        ]));
+    )? {
+        Some(Orientation::Positive) => {
+            return Ok(Some(AxialNonOverlapBoundaries::StrictGap(
+                first_before_second,
+            )));
+        }
+        Some(Orientation::Negative | Orientation::Zero) | None => {}
     }
-    if certified_axial_compare(
+    if exact_axial_contact(
+        normalized.common_axis,
+        normalized.supports[1][intervals[1].low],
+        normalized.supports[0][intervals[0].high],
+    )? {
+        return Ok(Some(AxialNonOverlapBoundaries::ExactContact(
+            first_before_second,
+        )));
+    }
+
+    let second_before_first = [
+        SourceBoundary {
+            operand: 1,
+            boundary: intervals[1].high,
+        },
+        SourceBoundary {
+            operand: 0,
+            boundary: intervals[0].low,
+        },
+    ];
+    let comparison = certified_axial_compare(
         normalized.common_axis,
         normalized.supports[0][intervals[0].low],
         normalized.supports[1][intervals[1].high],
-    )? == Some(Orientation::Positive)
-    {
-        return Ok(Some([
-            SourceBoundary {
-                operand: 1,
-                boundary: intervals[1].high,
-            },
-            SourceBoundary {
-                operand: 0,
-                boundary: intervals[0].low,
-            },
-        ]));
+    )?;
+    match comparison {
+        Some(Orientation::Positive) => Ok(Some(AxialNonOverlapBoundaries::StrictGap(
+            second_before_first,
+        ))),
+        Some(Orientation::Negative | Orientation::Zero) | None => {
+            if exact_axial_contact(
+                normalized.common_axis,
+                normalized.supports[0][intervals[0].low],
+                normalized.supports[1][intervals[1].high],
+            )? {
+                Ok(Some(AxialNonOverlapBoundaries::ExactContact(
+                    second_before_first,
+                )))
+            } else {
+                Ok(None)
+            }
+        }
     }
-    Ok(None)
 }
 
-fn certify_strict_axial_separation(
+/// Test-facing strict-gap projection retained independently of contact.
+#[cfg(test)]
+fn strict_axial_gap_boundaries(
+    normalized: &NormalizedAxialIntervals,
+) -> core::result::Result<Option<[SourceBoundary; 2]>, ParallelCylinderRelationGap> {
+    match axial_nonoverlap_boundaries(normalized)? {
+        Some(AxialNonOverlapBoundaries::StrictGap(boundaries)) => Ok(Some(boundaries)),
+        Some(AxialNonOverlapBoundaries::ExactContact(_)) | None => Ok(None),
+    }
+}
+
+enum CertifiedAxialNonOverlap {
+    Separation(CertifiedParallelCylinderAxialSeparation),
+    Contact(CertifiedParallelCylinderAxialContact),
+}
+
+fn certify_axial_nonoverlap(
     cylinders: [&CertifiedCylinderSource; 2],
     normalized: &NormalizedAxialIntervals,
-) -> core::result::Result<
-    Option<CertifiedParallelCylinderAxialSeparation>,
-    ParallelCylinderRelationGap,
-> {
-    let Some(boundaries) = strict_axial_gap_boundaries(normalized)? else {
+) -> core::result::Result<Option<CertifiedAxialNonOverlap>, ParallelCylinderRelationGap> {
+    let Some(relation) = axial_nonoverlap_boundaries(normalized)? else {
         return Ok(None);
     };
-    let gap_boundaries = boundaries.map(|source| {
+    let boundaries = match relation {
+        AxialNonOverlapBoundaries::StrictGap(boundaries)
+        | AxialNonOverlapBoundaries::ExactContact(boundaries) => boundaries,
+    };
+    let witnesses = boundaries.map(|source| {
         let boundary = cylinders[source.operand].boundaries()[source.boundary];
-        ParallelCylinderAxialGapBoundaryWitness {
+        ParallelCylinderAxialBoundaryWitness {
             operand: source.operand,
             boundary: source.boundary,
             cap_face: boundary.cap_face(),
             edge: boundary.edge(),
         }
     });
-    Ok(Some(CertifiedParallelCylinderAxialSeparation {
-        gap_boundaries,
+    Ok(Some(match relation {
+        AxialNonOverlapBoundaries::StrictGap(_) => {
+            CertifiedAxialNonOverlap::Separation(CertifiedParallelCylinderAxialSeparation {
+                gap_boundaries: witnesses,
+            })
+        }
+        AxialNonOverlapBoundaries::ExactContact(_) => {
+            CertifiedAxialNonOverlap::Contact(CertifiedParallelCylinderAxialContact {
+                contact_boundaries: witnesses,
+            })
+        }
     }))
 }
 
@@ -791,6 +887,25 @@ fn axial_compare(
         .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)
 }
 
+/// Prove zero separation from exact live cap/ring and side-chart identities.
+///
+/// Rounded model-space construction can require a Full incidence envelope for
+/// a ring center relative to its cylinder evaluation. That does not weaken an
+/// exact cap-plane contact: both constant-height side pcurves must still equal
+/// their live face-domain ends bit-for-bit, and the cap centers must have exact
+/// zero affine projection on the common axis.
+fn exact_axial_contact(
+    axis: Vec3,
+    point: AxialBoundarySupport,
+    origin: AxialBoundarySupport,
+) -> core::result::Result<bool, ParallelCylinderRelationGap> {
+    if !point.exact_domain_boundary || !origin.exact_domain_boundary {
+        return Ok(false);
+    }
+    axial_compare(axis, point.point, origin.point)
+        .map(|orientation| orientation == Orientation::Zero)
+}
+
 /// Compare two cap supports only when their projected separation clears the
 /// Full-certified Euclidean incidence envelopes. Zero-envelope comparisons
 /// retain exact affine-dot behavior, including a one-ULP world-frame gap.
@@ -865,6 +980,7 @@ struct NormalizedSourceInterval {
 struct AxialBoundarySupport {
     point: Point3,
     envelope: f64,
+    exact_domain_boundary: bool,
 }
 
 impl AxialBoundarySupport {
@@ -872,6 +988,7 @@ impl AxialBoundarySupport {
         Self {
             point: Point3::new(0.0, 0.0, 0.0),
             envelope: 0.0,
+            exact_domain_boundary: false,
         }
     }
 
@@ -880,6 +997,7 @@ impl AxialBoundarySupport {
         Self {
             point,
             envelope: 0.0,
+            exact_domain_boundary: true,
         }
     }
 }
