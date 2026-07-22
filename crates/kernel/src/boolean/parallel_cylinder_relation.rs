@@ -3,10 +3,11 @@
 //! The section graph remains the general intersection authority.  This module
 //! recognizes the proof-complete relations needed by the first Cylinder/Cylinder
 //! Boolean slices: strict axial separation or exact axial contact of exactly
-//! parallel or antiparallel finite sources, and the strict finite lens-prism
-//! relation. Both authored boundary orders are normalized onto one certified
-//! common axial coordinate before gap, contact, or overlap ownership is decided.
-//! Every retained boundary is topology-owned; rounded points are never used as
+//! parallel or antiparallel finite sources, exact external radial tangency over
+//! a strictly positive axial overlap, and the strict finite lens-prism relation.
+//! Both authored boundary orders are normalized onto one certified common axial
+//! coordinate before gap, contact, or overlap ownership is decided. Every
+//! retained boundary is topology-owned; rounded points are never used as
 //! topology keys.
 
 use kcore::interval::Interval;
@@ -14,6 +15,7 @@ use kcore::operation::OperationScope;
 use kcore::predicates::{Orientation, affine_dot3, orient3d};
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::vec::{Point3, Vec3};
+use kops::intersect::{ParallelCylinderRadialRelation, classify_parallel_cylinder_radial_relation};
 use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId};
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
@@ -188,7 +190,7 @@ impl CertifiedParallelCylinderLensRelation {
     }
 }
 
-/// One topology-owned cap boundary delimiting an axial non-overlap relation.
+/// One topology-owned cap boundary participating in a certified axial relation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ParallelCylinderAxialBoundaryWitness {
     operand: usize,
@@ -238,6 +240,23 @@ pub(super) struct CertifiedParallelCylinderAxialContact {
     contact_boundaries: [ParallelCylinderAxialBoundaryWitness; 2],
 }
 
+/// Certified proof of exact external radial tangency over positive axial overlap.
+///
+/// The infinite side supports have exactly zero external clearance, while the
+/// normalized finite source intervals overlap with strict positive length. The
+/// retained cap witnesses bind that finite-overlap proof back to source topology.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CertifiedParallelCylinderExternalRadialTangency {
+    overlap_boundaries: [ParallelCylinderAxialBoundaryWitness; 2],
+}
+
+impl CertifiedParallelCylinderExternalRadialTangency {
+    /// Low/high boundaries of the strictly positive physical axial overlap.
+    pub(super) const fn overlap_boundaries(&self) -> &[ParallelCylinderAxialBoundaryWitness; 2] {
+        &self.overlap_boundaries
+    }
+}
+
 impl CertifiedParallelCylinderAxialContact {
     /// Touching cap/ring boundaries in low/high order on the canonical common axis.
     pub(super) const fn contact_boundaries(&self) -> &[ParallelCylinderAxialBoundaryWitness; 2] {
@@ -251,6 +270,9 @@ pub(super) enum ParallelCylinderRelationOutcome {
     /// Exact graph proof bound to both certified source side faces shows that
     /// the infinite radial supports are strictly exterior-disjoint.
     CertifiedExteriorRadialSeparation,
+    /// Exact infinite-support tangency and a strict finite axial overlap were
+    /// both proved and bound to the certified source topology.
+    CertifiedExternalRadialTangency(Box<CertifiedParallelCylinderExternalRadialTangency>),
     /// Exact or Full-envelope-bounded source supports prove a strict cap gap.
     CertifiedAxialSeparation(Box<CertifiedParallelCylinderAxialSeparation>),
     /// Exact live cap/ring supports prove one zero axial gap.
@@ -308,6 +330,17 @@ pub(super) fn certify_parallel_cylinder_relation(
             Box::new(certificate),
         ));
     }
+    match certify_external_radial_tangency(cylinders, &normalized) {
+        Ok(Some(certificate)) => {
+            return Ok(
+                ParallelCylinderRelationOutcome::CertifiedExternalRadialTangency(Box::new(
+                    certificate,
+                )),
+            );
+        }
+        Ok(None) => {}
+        Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+    }
 
     let overlap_ends = match certify_source_relation_from_normalized(cylinders, &normalized) {
         Ok(relation) => relation,
@@ -333,6 +366,40 @@ pub(super) fn certify_parallel_cylinder_relation(
             Err(gap) => Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
         }
     }
+}
+
+/// Bind kops' exact infinite-support tangency proof to a strict finite overlap.
+///
+/// The radial classifier is intentionally independent of finite windows. A
+/// tangent support therefore becomes a finite-cylinder set relation only after
+/// the already-normalized live cap supports prove a positive overlap interval.
+fn certify_external_radial_tangency(
+    cylinders: [&CertifiedCylinderSource; 2],
+    normalized: &NormalizedAxialIntervals,
+) -> core::result::Result<
+    Option<CertifiedParallelCylinderExternalRadialTangency>,
+    ParallelCylinderRelationGap,
+> {
+    if classify_parallel_cylinder_radial_relation([
+        cylinders[0].cylinder(),
+        cylinders[1].cylinder(),
+    ]) != ParallelCylinderRadialRelation::ExactExternalTangent
+    {
+        return Ok(None);
+    }
+
+    let overlap_boundaries = source_overlap_ends(normalized)?.map(|end| {
+        let boundary = cylinders[end.operand].boundaries()[end.boundary];
+        ParallelCylinderAxialBoundaryWitness {
+            operand: end.operand,
+            boundary: end.boundary,
+            cap_face: boundary.cap_face(),
+            edge: boundary.edge(),
+        }
+    });
+    Ok(Some(CertifiedParallelCylinderExternalRadialTangency {
+        overlap_boundaries,
+    }))
 }
 
 /// Bind Section's non-forgeable analytic miss witness to the two Full-checked

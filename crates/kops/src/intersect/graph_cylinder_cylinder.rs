@@ -52,6 +52,23 @@ impl ParallelCylinderExteriorRadialSeparation {
     }
 }
 
+/// Exact radial relation proved for two parallel Cylinder supports.
+///
+/// This is a proof-only classification of the two infinite radial supports;
+/// it does not inspect or make any claim about bounded axial windows.
+/// [`Self::Unresolved`] is deliberately broad and includes radial overlap,
+/// containment, coincident support, nonparallel axes, and arithmetic outside
+/// the bounded exact-expansion envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelCylinderRadialRelation {
+    /// The radial supports are separated by a strict positive clearance.
+    StrictExterior,
+    /// The radial supports have exactly zero external clearance.
+    ExactExternalTangent,
+    /// Neither supported proof completed; this is not a geometric relation.
+    Unresolved,
+}
+
 fn unsupported() -> GraphSurfaceIntersectionError {
     GraphSurfaceIntersectionError::BranchCertificate(
         kgraph::IntersectionCertificateError::UnsupportedCarrierParameterization {
@@ -136,44 +153,73 @@ pub(super) fn intersect_certified_parallel_cylinders(
     Ok((result, None))
 }
 
-/// Prove strict separation of the two infinite radial supports.
+/// Classify the supported exact relation of two infinite radial supports.
 ///
 /// For an axis vector `z` that is only floating-point normalized, the squared
-/// transverse distance comparison is division-free:
+/// transverse clearance comparison is division-free:
 ///
-/// `|(origin_b - origin_a) x z|^2 > (radius_a + radius_b)^2 |z|^2`.
+/// `|(origin_b - origin_a) x z|^2 - (radius_a + radius_b)^2 |z|^2`.
 ///
 /// Every source `f64` is treated as its exact dyadic value. Checked expansion
-/// arithmetic fails closed outside its fixed safe envelope. Requiring the same
-/// positive sign with either stored axis makes the result independent of
-/// operand order without assuming either axis has exact unit length.
-fn exact_strict_exterior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
+/// arithmetic fails closed outside its fixed safe envelope. The same sign is
+/// required with both stored axes, making the result independent of operand
+/// order without assuming either axis has exact unit length. Exact tangency
+/// additionally requires the mathematical radius sum to be represented by the
+/// rounded `f64` sum without error; this prevents a rounded sum from becoming
+/// false equality evidence.
+pub fn classify_parallel_cylinder_radial_relation(
+    cylinders: [Cylinder; 2],
+) -> ParallelCylinderRadialRelation {
+    if require_exact_parallel_cylinder_axes(cylinders).is_err() {
+        return ParallelCylinderRadialRelation::Unresolved;
+    }
     let Some(offset) = exact_vector_difference(
         cylinders[1].frame().origin().to_array(),
         cylinders[0].frame().origin().to_array(),
     ) else {
-        return false;
+        return ParallelCylinderRadialRelation::Unresolved;
     };
     let Some(radius_sum) = exact(cylinders[0].radius())
         .and_then(|first| exact(cylinders[1].radius()).and_then(|second| first.add(&second).ok()))
     else {
-        return false;
+        return ParallelCylinderRadialRelation::Unresolved;
     };
     let Some(radius_sum_squared) = radius_sum.mul(&radius_sum).ok() else {
-        return false;
+        return ParallelCylinderRadialRelation::Unresolved;
     };
 
-    cylinders.into_iter().all(|cylinder| {
-        exact_exterior_clearance(
+    let [Some(first_clearance), Some(second_clearance)] = cylinders.map(|cylinder| {
+        exact_parallel_radial_clearance(
             &offset,
             cylinder.frame().z().to_array(),
             &radius_sum_squared,
         )
-        .is_some_and(|clearance| clearance.sign() > 0)
-    })
+        .map(|clearance| clearance.sign())
+    }) else {
+        return ParallelCylinderRadialRelation::Unresolved;
+    };
+    let clearances = [first_clearance, second_clearance];
+    if clearances.into_iter().all(|clearance| clearance > 0) {
+        return ParallelCylinderRadialRelation::StrictExterior;
+    }
+
+    let rounded_radius_sum = cylinders[0].radius() + cylinders[1].radius();
+    let radius_sum_is_error_free = exact(rounded_radius_sum)
+        .and_then(|rounded| radius_sum.sub(&rounded).ok())
+        .is_some_and(|rounding_error| rounding_error.is_zero());
+    if radius_sum_is_error_free && clearances.into_iter().all(|clearance| clearance == 0) {
+        ParallelCylinderRadialRelation::ExactExternalTangent
+    } else {
+        ParallelCylinderRadialRelation::Unresolved
+    }
 }
 
-fn exact_exterior_clearance(
+fn exact_strict_exterior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
+    classify_parallel_cylinder_radial_relation(cylinders)
+        == ParallelCylinderRadialRelation::StrictExterior
+}
+
+fn exact_parallel_radial_clearance(
     offset: &[ExactScalar; 3],
     axis: [f64; 3],
     radius_sum_squared: &ExactScalar,

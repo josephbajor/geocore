@@ -32,10 +32,10 @@ use crate::{BodyId, BodySectionGraph};
 /// Consume proof-complete parallel-cylinder relations through Full-checked
 /// realization paths.
 ///
-/// Strictly disjoint sources retain whole boundaries; positive overlaps use
-/// shared arrangement, truth selection, and shell planning. Commutative
-/// operations receive a canonical source order; Subtract preserves caller
-/// order.
+/// Interior-disjoint sources retain whole boundaries, including exact external
+/// tangency under regularized-solid semantics. Volumetric overlaps use shared
+/// arrangement, truth selection, and shell planning. Commutative operations
+/// receive a canonical source order; Subtract preserves caller order.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -56,6 +56,7 @@ pub(super) fn execute_parallel_cylinder_boolean(
         certify_parallel_cylinder_relation(&edit.state.store, &graph, [&first, &second], scope)?;
     match relation {
         ParallelCylinderRelationOutcome::CertifiedExteriorRadialSeparation
+        | ParallelCylinderRelationOutcome::CertifiedExternalRadialTangency(_)
         | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_) => {
             execute_disjoint_source_boolean(edit, operation, &bodies, [&first, &second], scope)
         }

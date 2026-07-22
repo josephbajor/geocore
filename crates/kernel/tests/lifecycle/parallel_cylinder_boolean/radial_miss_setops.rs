@@ -31,6 +31,8 @@ enum RadialRelation {
     StrictSecant,
     StrictInternal,
     Tangent,
+    RoundedTangent,
+    InternalTangent,
     Coincident,
 }
 
@@ -227,6 +229,111 @@ const UNEQUAL_RADIUS_AXIAL_TANGENT: CylinderRelationCase = CylinderRelationCase 
 const AXIAL_TANGENT_CONTACTS: [CylinderRelationCase; 2] =
     [AXIAL_CONTACT[2], UNEQUAL_RADIUS_AXIAL_TANGENT];
 
+const AXIAL_OVERLAP_TANGENT_CONTACTS: [CylinderRelationCase; 6] = [
+    CylinderRelationCase {
+        name: "equal-radius external tangency with nested axial overlap",
+        cylinders: [
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 2.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [2.0, 0.0],
+                axial: [-1.0, 1.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation: RadialRelation::Tangent,
+    },
+    CylinderRelationCase {
+        name: "equal-radius external tangency with partial axial overlap",
+        cylinders: [
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [2.0, 0.0],
+                axial: [-1.0, 2.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation: RadialRelation::Tangent,
+    },
+    CylinderRelationCase {
+        name: "equal-radius external tangency with one shared axial end",
+        cylinders: [
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [2.0, 0.0],
+                axial: [-1.0, 1.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation: RadialRelation::Tangent,
+    },
+    CylinderRelationCase {
+        name: "unequal-radius external tangency with nested axial overlap",
+        cylinders: [
+            CylinderSpec {
+                radius: 3.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 2.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [4.0, 0.0],
+                axial: [-1.0, 1.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation: RadialRelation::Tangent,
+    },
+    CylinderRelationCase {
+        name: "unequal-radius external tangency with partial axial overlap",
+        cylinders: [
+            CylinderSpec {
+                radius: 3.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [4.0, 0.0],
+                axial: [-1.0, 2.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation: RadialRelation::Tangent,
+    },
+    CylinderRelationCase {
+        name: "unequal-radius external tangency with one shared axial end",
+        cylinders: [
+            CylinderSpec {
+                radius: 3.0,
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 1.0],
+            },
+            CylinderSpec {
+                radius: 1.0,
+                radial_center: [4.0, 0.0],
+                axial: [-1.0, 1.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation: RadialRelation::Tangent,
+    },
+];
+
 const DISJOINT_CASES: [CylinderRelationCase; 5] = [
     RADIAL_DISJOINT,
     AXIAL_DISJOINT[0],
@@ -300,6 +407,21 @@ fn assert_radial_relation(
         RadialRelation::Tangent => {
             assert_eq!(distance_squared.to_bits(), sum_squared.to_bits(), "{name}")
         }
+        RadialRelation::RoundedTangent => {
+            assert_eq!(distance_squared.to_bits(), sum_squared.to_bits(), "{name}");
+            assert_ne!(
+                kcore::expansion::two_sum(radii[0], radii[1]).1,
+                0.0,
+                "{name}: radius sum must retain a nonzero exact residual"
+            );
+        }
+        RadialRelation::InternalTangent => {
+            assert_eq!(
+                distance_squared.to_bits(),
+                difference_squared.to_bits(),
+                "{name}"
+            )
+        }
         RadialRelation::Coincident => {
             assert_eq!(distance_squared.to_bits(), 0.0_f64.to_bits(), "{name}");
             assert_eq!(radii[0].to_bits(), radii[1].to_bits(), "{name}");
@@ -350,9 +472,11 @@ fn assert_certified_relation(case: CylinderRelationCase) {
             "{} must retain one exact shared axial endpoint",
             case.name
         ),
-        AxialRelationWitness::AxialOverlap => {
-            assert!(first.axial[1] > second.axial[0], "{}", case.name)
-        }
+        AxialRelationWitness::AxialOverlap => assert!(
+            first.axial[0].max(second.axial[0]) < first.axial[1].min(second.axial[1]),
+            "{}",
+            case.name
+        ),
     }
 
     let dx = second.radial_center[0] - first.radial_center[0];
@@ -388,12 +512,27 @@ fn is_zero_or_power_of_two(value: f64) -> bool {
 
 fn authored_radius(case: CylinderRelationCase, frame: Frame, index: usize) -> f64 {
     let radius = case.cylinders[index].radius;
-    if matches!(case.witness, AxialRelationWitness::AxialContact)
-        && matches!(case.radial_relation, RadialRelation::Tangent)
-    {
+    if uses_exact_external_tangent_authorship(case) {
         radius * exact_contact_perpendicular(frame).norm()
     } else {
         radius
+    }
+}
+
+fn uses_exact_external_tangent_authorship(case: CylinderRelationCase) -> bool {
+    matches!(
+        case.witness,
+        AxialRelationWitness::AxialContact | AxialRelationWitness::AxialOverlap
+    ) && matches!(case.radial_relation, RadialRelation::Tangent)
+}
+
+fn exact_tangent_axial_reference(case: CylinderRelationCase) -> f64 {
+    match case.witness {
+        AxialRelationWitness::AxialContact => case.cylinders[0].axial[1],
+        AxialRelationWitness::AxialOverlap => 0.0,
+        AxialRelationWitness::RadialSeparation | AxialRelationWitness::AxialSeparation => {
+            unreachable!("exact tangent authorship requires contact or overlap")
+        }
     }
 }
 
@@ -402,7 +541,7 @@ fn authored_cylinders_with_directions(
     frame: Frame,
     reversed_axes: [bool; 2],
 ) -> [(Frame, f64, f64); 2] {
-    if !matches!(case.witness, AxialRelationWitness::AxialContact) {
+    if !uses_exact_external_tangent_authorship(case) {
         return core::array::from_fn(|index| {
             let cylinder = case.cylinders[index];
             let reversed = reversed_axes[index];
@@ -425,13 +564,15 @@ fn authored_cylinders_with_directions(
         });
     }
 
-    let contact_parameter = case.cylinders[0].axial[1];
-    assert_eq!(
-        contact_parameter.to_bits(),
-        case.cylinders[1].axial[0].to_bits(),
-        "{}",
-        case.name
-    );
+    let axial_reference = exact_tangent_axial_reference(case);
+    if matches!(case.witness, AxialRelationWitness::AxialContact) {
+        assert_eq!(
+            axial_reference.to_bits(),
+            case.cylinders[1].axial[0].to_bits(),
+            "{}",
+            case.name
+        );
+    }
     let axis = frame.z();
     let perpendicular = exact_contact_perpendicular(frame);
     let mut centers = [Point3::new(0.0, 0.0, 0.0); 2];
@@ -451,13 +592,18 @@ fn authored_cylinders_with_directions(
             );
         }
         let radial = perpendicular * cylinder.radial_center[0];
-        centers[index] = Point3::new(radial.x, radial.y, radial.z);
+        let frame_origin = frame.origin();
+        centers[index] = Point3::new(
+            frame_origin.x + radial.x,
+            frame_origin.y + radial.y,
+            frame_origin.z + radial.z,
+        );
         let reversed = reversed_axes[index];
-        let authored_start = cylinder.axial[usize::from(reversed)] - contact_parameter;
+        let authored_start = cylinder.axial[usize::from(reversed)] - axial_reference;
         let origin = Point3::new(
-            radial.x + axis.x * authored_start,
-            radial.y + axis.y * authored_start,
-            radial.z + axis.z * authored_start,
+            centers[index].x + axis.x * authored_start,
+            centers[index].y + axis.y * authored_start,
+            centers[index].z + axis.z * authored_start,
         );
         let cylinder_frame = if reversed {
             Frame::new(origin, -axis, frame.x()).unwrap()
@@ -493,15 +639,19 @@ fn fixture_with_directions(
     reversed_axes: [bool; 2],
 ) -> Fixture {
     let origin = Point3::new(0.0, 0.0, 0.0);
-    let frame = if matches!(case.witness, AxialRelationWitness::AxialContact)
-        && matches!(case.radial_relation, RadialRelation::Tangent)
+    let frame = if uses_exact_external_tangent_authorship(case)
         && matches!(placement, Placement::Oblique)
     {
         // A genuinely tilted axis with an exact coordinate-basis radial
         // direction. The zero y component makes world y exactly
         // perpendicular even though the normalized x/z axis is non-dyadic.
-        Frame::new(origin, Vec3::new(0.6, 0.0, 0.8), Vec3::new(0.0, 1.0, 0.0)).unwrap()
-    } else if matches!(case.witness, AxialRelationWitness::AxialContact) {
+        Frame::new(
+            Point3::new(0.0, 8.0, 0.0),
+            Vec3::new(0.6, 0.0, 0.8),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap()
+    } else if uses_exact_external_tangent_authorship(case) {
         shared_frame(placement).with_origin(origin)
     } else {
         shared_frame(placement)
@@ -704,11 +854,11 @@ fn assert_analytic_cylinder(
     };
     let height = cylinder.axial[1] - cylinder.axial[0];
     let radius = authored_radius(case, fixture.frame, index);
-    let centroid = if matches!(case.witness, AxialRelationWitness::AxialContact) {
+    let centroid = if uses_exact_external_tangent_authorship(case) {
         let perpendicular = exact_contact_perpendicular(fixture.frame);
         let radial = perpendicular * cylinder.radial_center[0];
-        let contact_parameter = case.cylinders[0].axial[1];
-        let axial = (cylinder.axial[0] + cylinder.axial[1]) / 2.0 - contact_parameter;
+        let axial =
+            (cylinder.axial[0] + cylinder.axial[1]) / 2.0 - exact_tangent_axial_reference(case);
         let origin = fixture.frame.origin();
         let axis = fixture.frame.z();
         Point3::new(
@@ -1039,6 +1189,24 @@ fn exact_external_tangent_axial_contact_has_deterministic_regularized_set_semant
     assert_eq!(executions, 192);
 }
 
+#[test]
+fn exact_external_tangent_positive_axial_overlap_has_deterministic_regularized_set_semantics() {
+    let mut executions = 0;
+    for case in AXIAL_OVERLAP_TANGENT_CONTACTS {
+        for placement in [Placement::World, Placement::Oblique] {
+            for reversed_axes in [[false, false], [false, true], [true, false], [true, true]] {
+                executions += exercise_operation_matrix_with_directions(
+                    case,
+                    placement,
+                    reversed_axes,
+                    assert_tangent_axial_contact,
+                );
+            }
+        }
+    }
+    assert_eq!(executions, 576);
+}
+
 fn axial_boundary_case(name: &'static str, second_lower: f64) -> CylinderRelationCase {
     let witness = if second_lower > 1.0 {
         AxialRelationWitness::AxialSeparation
@@ -1066,7 +1234,10 @@ fn axial_boundary_case(name: &'static str, second_lower: f64) -> CylinderRelatio
     }
 }
 
-fn assert_refusal_matrix(case: CylinderRelationCase, antiparallel: bool) -> usize {
+fn assert_refusal_matrix_with_directions(
+    case: CylinderRelationCase,
+    reversed_axes: [bool; 2],
+) -> usize {
     assert_certified_relation(case);
     let mut executions = 0;
     for operation in SET_OPERATIONS {
@@ -1074,7 +1245,7 @@ fn assert_refusal_matrix(case: CylinderRelationCase, antiparallel: bool) -> usiz
         for swapped in [false, true] {
             let canonical_index = usize::from(operation == SetOperation::Subtract && swapped);
             for repeat in 0..2 {
-                let mut fixture = fixture(case, Placement::World, antiparallel);
+                let mut fixture = fixture_with_directions(case, Placement::World, reversed_axes);
                 let before = fixture_signature(&fixture);
                 let outcome =
                     run_set_operation(&mut fixture, operation, swapped, OperationSettings::new());
@@ -1082,7 +1253,7 @@ fn assert_refusal_matrix(case: CylinderRelationCase, antiparallel: bool) -> usiz
                 let result = outcome.into_result().unwrap();
                 assert!(
                     matches!(result, BooleanOutcome::Refused(_)),
-                    "{} antiparallel={antiparallel} {operation:?} swapped={swapped} repeat={repeat} returned {result:#?}",
+                    "{} reversed_axes={reversed_axes:?} {operation:?} swapped={swapped} repeat={repeat} returned {result:#?}",
                     case.name
                 );
                 assert_eq!(fixture_signature(&fixture), before, "{}", case.name);
@@ -1100,7 +1271,7 @@ fn assert_refusal_matrix(case: CylinderRelationCase, antiparallel: bool) -> usiz
 }
 
 #[test]
-fn exact_axial_boundary_keeps_one_ulp_gap_and_overlap_distinct_from_contact() {
+fn exact_axial_boundary_preserves_gap_contact_and_positive_overlap_set_semantics() {
     let boundary = 1.0_f64;
     let gap = axial_boundary_case("one ULP axial gap", boundary.next_up());
     let contact = axial_boundary_case("exact axial contact", boundary);
@@ -1120,7 +1291,12 @@ fn exact_axial_boundary_keeps_one_ulp_gap_and_overlap_distinct_from_contact() {
             antiparallel,
             assert_tangent_axial_contact,
         );
-        executions += assert_refusal_matrix(overlap, antiparallel);
+        executions += exercise_operation_matrix(
+            overlap,
+            Placement::World,
+            antiparallel,
+            assert_tangent_axial_contact,
+        );
     }
     assert_eq!(executions, 72);
 }
@@ -1149,9 +1325,43 @@ fn radial_boundary_case(
     }
 }
 
+fn radial_overlap_boundary_case(
+    name: &'static str,
+    radii: [f64; 2],
+    second_radial: f64,
+    radial_relation: RadialRelation,
+) -> CylinderRelationCase {
+    CylinderRelationCase {
+        name,
+        cylinders: [
+            CylinderSpec {
+                radius: radii[0],
+                radial_center: [0.0, 0.0],
+                axial: [-2.0, 1.0],
+            },
+            CylinderSpec {
+                radius: radii[1],
+                radial_center: [second_radial, 0.0],
+                axial: [-1.0, 2.0],
+            },
+        ],
+        witness: AxialRelationWitness::AxialOverlap,
+        radial_relation,
+    }
+}
+
 fn boundary_contact_unite_refusal(
+    fixture: Fixture,
+    settings: OperationSettings,
+    label: &str,
+) -> kernel::OperationReport {
+    unite_refusal(fixture, settings, BooleanRefusal::BoundaryContact, label)
+}
+
+fn unite_refusal(
     mut fixture: Fixture,
     settings: OperationSettings,
+    expected: BooleanRefusal,
     label: &str,
 ) -> kernel::OperationReport {
     let before = fixture_signature(&fixture);
@@ -1172,13 +1382,10 @@ fn boundary_contact_unite_refusal(
         "{label}"
     );
     let report = outcome.report().clone();
-    assert!(
-        matches!(
-            outcome.into_result().unwrap(),
-            BooleanOutcome::Refused(BooleanRefusal::BoundaryContact)
-        ),
-        "{label}"
-    );
+    let BooleanOutcome::Refused(actual) = outcome.into_result().unwrap() else {
+        panic!("{label}: Unite did not refuse")
+    };
+    assert_eq!(actual, expected, "{label}");
     assert_eq!(fixture_signature(&fixture), before, "{label}");
     assert_source_bodies_preserved(&fixture, 2);
     report
@@ -1289,8 +1496,84 @@ fn exact_external_tangency_is_not_inferred_from_one_ulp_or_resolution_near_suppo
 }
 
 #[test]
+fn positive_overlap_external_tangency_is_not_inferred_from_near_or_internal_supports() {
+    let boundary = 2.0_f64;
+    let exterior = radial_overlap_boundary_case(
+        "positive overlap with one ULP exterior radial support",
+        [1.0, 1.0],
+        boundary.next_up(),
+        RadialRelation::Exterior,
+    );
+    let interior = radial_overlap_boundary_case(
+        "positive overlap with one ULP interior radial support",
+        [1.0, 1.0],
+        boundary.next_down(),
+        RadialRelation::StrictSecant,
+    );
+    let internal_tangent = radial_overlap_boundary_case(
+        "positive overlap with exact internal tangency",
+        [3.0, 1.0],
+        2.0,
+        RadialRelation::InternalTangent,
+    );
+    let rounded_radius_sum = 1.0 + 0.2;
+    let rounded_sum = radial_overlap_boundary_case(
+        "positive overlap with unrepresentable radius-sum equality",
+        [1.0, 0.2],
+        rounded_radius_sum,
+        RadialRelation::RoundedTangent,
+    );
+    for case in [exterior, interior, internal_tangent, rounded_sum] {
+        assert_certified_relation(case);
+    }
+
+    let mut executions = 0;
+    for reversed_axes in [[false, false], [false, true], [true, false], [true, true]] {
+        executions += exercise_operation_matrix_with_directions(
+            exterior,
+            Placement::World,
+            reversed_axes,
+            assert_success,
+        );
+        for refused in [interior, internal_tangent, rounded_sum] {
+            executions += assert_refusal_matrix_with_directions(refused, reversed_axes);
+        }
+    }
+    assert_eq!(executions, 192);
+
+    // This all-nonzero authored frame is tangent over real arithmetic, but
+    // normalization stores a rounded dyadic support with a tiny radial
+    // overlap. Operation tolerance must not promote it to exact tangency.
+    let all_nonzero = shared_frame(Placement::Oblique);
+    let baseline = unite_refusal(
+        fixture_with_frame(
+            AXIAL_OVERLAP_TANGENT_CONTACTS[0],
+            all_nonzero,
+            [false, true],
+        ),
+        OperationSettings::new(),
+        BooleanRefusal::CurvedResultTopologyUnsupported,
+        "positive-overlap all-nonzero oblique near tangent",
+    );
+    let loose = unite_refusal(
+        fixture_with_frame(
+            AXIAL_OVERLAP_TANGENT_CONTACTS[0],
+            all_nonzero,
+            [false, true],
+        ),
+        OperationSettings::new().with_tolerances(Tolerances::with_linear(1.0e-6).unwrap()),
+        BooleanRefusal::CurvedResultTopologyUnsupported,
+        "positive-overlap all-nonzero oblique near tangent",
+    );
+    assert_eq!(loose, baseline);
+}
+
+#[test]
 fn exact_external_tangent_unite_ignores_loose_operation_tolerance() {
-    for case in AXIAL_TANGENT_CONTACTS {
+    for case in AXIAL_TANGENT_CONTACTS
+        .into_iter()
+        .chain(AXIAL_OVERLAP_TANGENT_CONTACTS)
+    {
         let baseline = tangent_unite_evidence(
             case,
             Placement::Oblique,
@@ -1347,6 +1630,7 @@ fn separated_and_contact_relation_work_accepts_n_and_refuses_n_minus_one_atomica
         .into_iter()
         .chain(AXIAL_CONTACT)
         .chain([UNEQUAL_RADIUS_AXIAL_TANGENT])
+        .chain(AXIAL_OVERLAP_TANGENT_CONTACTS)
     {
         assert_certified_relation(case);
         for antiparallel in [false, true] {
@@ -1474,6 +1758,7 @@ fn whole_source_copy_work_accepts_n_and_refuses_n_minus_one_atomically() {
     for case in AXIAL_CONTACT
         .into_iter()
         .chain([UNEQUAL_RADIUS_AXIAL_TANGENT])
+        .chain(AXIAL_OVERLAP_TANGENT_CONTACTS)
     {
         for antiparallel in [false, true] {
             for swapped in [false, true] {
@@ -1481,7 +1766,10 @@ fn whole_source_copy_work_accepts_n_and_refuses_n_minus_one_atomically() {
             }
         }
     }
-    for case in AXIAL_TANGENT_CONTACTS {
+    for case in AXIAL_TANGENT_CONTACTS
+        .into_iter()
+        .chain(AXIAL_OVERLAP_TANGENT_CONTACTS)
+    {
         for antiparallel in [false, true] {
             assert_copy_work_frontier(case, antiparallel, SetOperation::Unite, false);
         }

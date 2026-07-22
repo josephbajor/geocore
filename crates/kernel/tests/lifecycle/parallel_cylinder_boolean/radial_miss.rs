@@ -147,7 +147,7 @@ fn exact_radial_boundary_distinguishes_adjacent_representable_offsets() {
     let radius_sum = 2.0_f64;
     let cases = [
         ("one ULP inside tangent", radius_sum.next_down(), false),
-        ("exact tangent", radius_sum, false),
+        ("exact tangent", radius_sum, true),
         ("one ULP outside tangent", radius_sum.next_up(), true),
     ];
     assert!(cases[0].1 < radius_sum);
@@ -155,7 +155,7 @@ fn exact_radial_boundary_distinguishes_adjacent_representable_offsets() {
     assert!(cases[2].1 > radius_sum);
 
     let mut executions = 0_usize;
-    for (name, separation, proven_miss) in cases {
+    for (name, separation, proven_empty) in cases {
         let case = RadialCase {
             name,
             radii: [1.0, 1.0],
@@ -168,7 +168,7 @@ fn exact_radial_boundary_distinguishes_adjacent_representable_offsets() {
                     let label = format!(
                         "{name} antiparallel={antiparallel} swapped={swapped} repeat={repeat}"
                     );
-                    if proven_miss {
+                    if proven_empty {
                         let _ = assert_proven_empty_without_mutation(&mut fixture, swapped, &label);
                     } else {
                         assert_refused_without_mutation(&mut fixture, swapped, &label);
