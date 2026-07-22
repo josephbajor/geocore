@@ -82,6 +82,7 @@ fn axial_chain_geometry(
     first_frame: Frame,
     radii: [f64; 2],
     center_distance: f64,
+    second_axis_reversed: bool,
 ) -> AxialChainGeometry {
     let [first_radius, second_radius] = radii;
     let intersection_x = (first_radius * first_radius - second_radius * second_radius
@@ -92,7 +93,12 @@ fn axial_chain_geometry(
         kcore::math::atan2(intersection_y, intersection_x),
         kcore::math::atan2(intersection_y, intersection_x - center_distance),
     ];
-    let second_frame = first_frame.with_origin(first_frame.point_at(center_distance, 0.0, 0.0));
+    let second_origin = first_frame.point_at(center_distance, 0.0, 0.0);
+    let second_frame = if second_axis_reversed {
+        Frame::new(second_origin, -first_frame.z(), first_frame.x()).unwrap()
+    } else {
+        first_frame.with_origin(second_origin)
+    };
     let upper_first = first_frame.with_origin(first_frame.point_at(0.0, 0.0, 1.0));
     let upper_second = second_frame.with_origin(first_frame.point_at(center_distance, 0.0, 1.0));
     let circles = [
@@ -147,6 +153,16 @@ fn cylinder_ruling_chart(
     longitude: f64,
     chart: i32,
 ) -> AnalyticShellFin {
+    cylinder_ruling_chart_scaled(edge, sense, longitude, chart, 1.0)
+}
+
+fn cylinder_ruling_chart_scaled(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    longitude: f64,
+    chart: i32,
+    parameter_scale: f64,
+) -> AnalyticShellFin {
     AnalyticShellFin::new(
         edge,
         sense,
@@ -154,7 +170,7 @@ fn cylinder_ruling_chart(
             AnalyticShellPcurve::Line(
                 Line2d::new(Point2::new(longitude, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
             ),
-            map(1.0, 0.0),
+            map(parameter_scale, 0.0),
         )
         .with_chart(crate::entity::PcurveChart::shifted([chart, 0])),
     )
@@ -557,23 +573,35 @@ pub(crate) fn cap_reaching_cylinder_notch_input(
 /// outer cap and one noncontractible side boundary; the two intermediate caps
 /// are the complementary exposed disk differences.
 pub(crate) fn two_host_axial_chain_union_input(frame: Frame, permuted: bool) -> AnalyticShellInput {
-    two_host_axial_chain_union_with_dimensions(frame, [1.0, 1.0], 1.0, permuted)
+    two_host_axial_chain_union_with_dimensions(frame, [1.0, 1.0], 1.0, false, permuted)
 }
 
 pub(crate) fn unequal_radius_two_host_axial_chain_union_input(
     frame: Frame,
     permuted: bool,
 ) -> AnalyticShellInput {
-    two_host_axial_chain_union_with_dimensions(frame, [1.25, 0.9], 1.0, permuted)
+    two_host_axial_chain_union_with_dimensions(frame, [1.25, 0.9], 1.0, false, permuted)
+}
+
+/// The same physical union with only the second cylinder chart reversed.
+/// Its authored coordinates satisfy `(u, v)_second = (-u, -v)_common`, so
+/// circle-edge endpoint order, host fin senses, and ruling pcurve scale are
+/// all reversed while the material boundary is unchanged.
+pub(crate) fn antiparallel_two_host_axial_chain_union_input(
+    frame: Frame,
+    permuted: bool,
+) -> AnalyticShellInput {
+    two_host_axial_chain_union_with_dimensions(frame, [1.0, 1.0], 1.0, true, permuted)
 }
 
 fn two_host_axial_chain_union_with_dimensions(
     frame: Frame,
     radii: [f64; 2],
     center_distance: f64,
+    second_axis_reversed: bool,
     permuted: bool,
 ) -> AnalyticShellInput {
-    let geometry = axial_chain_geometry(frame, radii, center_distance);
+    let geometry = axial_chain_geometry(frame, radii, center_distance, second_axis_reversed);
     let [a, b] = geometry.angles;
     let [first_radius, second_radius] = radii;
     let tau = core::f64::consts::TAU;
@@ -582,7 +610,11 @@ fn two_host_axial_chain_union_with_dimensions(
     let first_outer = -2.0;
     let second_outer = 2.5;
     let first_outer_origin = first_frame.point_at(0.0, 0.0, first_outer);
-    let second_outer_origin = second_frame.point_at(0.0, 0.0, second_outer);
+    let second_outer_origin = if second_axis_reversed {
+        first_frame.point_at(center_distance, 0.0, second_outer)
+    } else {
+        second_frame.point_at(0.0, 0.0, second_outer)
+    };
     let first_outer_circle =
         Circle::new(first_frame.with_origin(first_outer_origin), first_radius).unwrap();
     let second_outer_circle =
@@ -596,6 +628,16 @@ fn two_host_axial_chain_union_with_dimensions(
         Plane::new(first_frame.with_origin(first_frame.point_at(0.0, 0.0, second_outer)));
 
     let [lower_first, lower_second, upper_first, upper_second] = geometry.points;
+    let second_lower_vertices = if second_axis_reversed {
+        [V1, V0]
+    } else {
+        [V0, V1]
+    };
+    let second_upper_vertices = if second_axis_reversed {
+        [V2, V3]
+    } else {
+        [V3, V2]
+    };
     let edges = vec![
         AnalyticShellEdge::new(
             E0,
@@ -611,13 +653,13 @@ fn two_host_axial_chain_union_with_dimensions(
         ),
         AnalyticShellEdge::new(
             E2,
-            [V0, V1],
+            second_lower_vertices,
             AnalyticShellCurve::Circle(geometry.circles[2]),
             ParamRange::new(-b, b),
         ),
         AnalyticShellEdge::new(
             E3,
-            [V3, V2],
+            second_upper_vertices,
             AnalyticShellCurve::Circle(geometry.circles[3]),
             ParamRange::new(b, tau - b),
         ),
@@ -647,12 +689,28 @@ fn two_host_axial_chain_union_with_dimensions(
         )
         .with_closure_winding([1, 0]),
     );
+    let second_ring_sense = if second_axis_reversed {
+        Sense::Forward
+    } else {
+        Sense::Reversed
+    };
     let second_ring = AnalyticShellFin::new(
         E9,
-        Sense::Reversed,
+        second_ring_sense,
         AnalyticPcurveUse::new(
             AnalyticShellPcurve::Line(
-                Line2d::new(Point2::new(0.0, second_outer), Vec2::new(1.0, 0.0)).unwrap(),
+                Line2d::new(
+                    Point2::new(
+                        0.0,
+                        if second_axis_reversed {
+                            -second_outer
+                        } else {
+                            second_outer
+                        },
+                    ),
+                    Vec2::new(1.0, 0.0),
+                )
+                .unwrap(),
             ),
             map(1.0, 0.0),
         )
@@ -667,10 +725,10 @@ fn two_host_axial_chain_union_with_dimensions(
     );
     let second_cap_use = cap_arc_radius(
         E9,
-        Sense::Forward,
+        second_ring_sense.flipped(),
         Point2::new(center_distance, 0.0),
         second_radius,
-        1.0,
+        if second_axis_reversed { -1.0 } else { 1.0 },
     );
     let planar_domain = || FaceDomain::from_bounds(-3.0, 3.0, -3.0, 3.0).unwrap();
 
@@ -702,14 +760,56 @@ fn two_host_axial_chain_union_with_dimensions(
                 AnalyticFaceKey::new(1),
                 AnalyticShellSurface::Cylinder(geometry.cylinders[1]),
                 Sense::Forward,
-                FaceDomain::from_bounds(second_u[0], second_u[1], 0.0, second_outer).unwrap(),
+                FaceDomain::from_bounds(
+                    second_u[0],
+                    second_u[1],
+                    if second_axis_reversed {
+                        -second_outer
+                    } else {
+                        0.0
+                    },
+                    if second_axis_reversed {
+                        0.0
+                    } else {
+                        second_outer
+                    },
+                )
+                .unwrap(),
                 vec![
                     AnalyticShellLoop::new(vec![second_ring]),
                     AnalyticShellLoop::new(vec![
-                        cylinder_ruling(E4, Sense::Reversed, -b),
-                        cylinder_arc(E2, Sense::Forward, 0.0),
-                        cylinder_ruling(E5, Sense::Forward, b),
-                        cylinder_arc(E3, Sense::Forward, 1.0),
+                        cylinder_ruling_chart_scaled(
+                            E4,
+                            Sense::Reversed,
+                            if second_axis_reversed { b } else { -b },
+                            0,
+                            if second_axis_reversed { -1.0 } else { 1.0 },
+                        ),
+                        cylinder_arc(
+                            E2,
+                            if second_axis_reversed {
+                                Sense::Reversed
+                            } else {
+                                Sense::Forward
+                            },
+                            0.0,
+                        ),
+                        cylinder_ruling_chart_scaled(
+                            E5,
+                            Sense::Forward,
+                            if second_axis_reversed { -b } else { b },
+                            0,
+                            if second_axis_reversed { -1.0 } else { 1.0 },
+                        ),
+                        cylinder_arc(
+                            E3,
+                            if second_axis_reversed {
+                                Sense::Reversed
+                            } else {
+                                Sense::Forward
+                            },
+                            if second_axis_reversed { -1.0 } else { 1.0 },
+                        ),
                     ]),
                 ],
             ),
@@ -739,10 +839,14 @@ fn two_host_axial_chain_union_with_dimensions(
                     ),
                     cap_arc_radius(
                         E2,
-                        Sense::Reversed,
+                        if second_axis_reversed {
+                            Sense::Forward
+                        } else {
+                            Sense::Reversed
+                        },
                         Point2::new(center_distance, 0.0),
                         second_radius,
-                        -1.0,
+                        if second_axis_reversed { 1.0 } else { -1.0 },
                     ),
                 ])],
             ),
@@ -755,10 +859,14 @@ fn two_host_axial_chain_union_with_dimensions(
                     cap_arc_radius(E1, Sense::Forward, Point2::new(0.0, 0.0), first_radius, 1.0),
                     cap_arc_radius(
                         E3,
-                        Sense::Reversed,
+                        if second_axis_reversed {
+                            Sense::Forward
+                        } else {
+                            Sense::Reversed
+                        },
                         Point2::new(center_distance, 0.0),
                         second_radius,
-                        1.0,
+                        if second_axis_reversed { -1.0 } else { 1.0 },
                     ),
                 ])],
             ),

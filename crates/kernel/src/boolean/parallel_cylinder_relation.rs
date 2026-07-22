@@ -2,12 +2,13 @@
 //!
 //! The section graph remains the general intersection authority.  This module
 //! only recognizes the strict finite lens-prism relation needed by the first
-//! Cylinder/Cylinder Boolean slices: same-directed exactly parallel axes,
+//! Cylinder/Cylinder Boolean slices: exactly parallel or antiparallel axes,
 //! strict transverse radial secancy, a strict positive axial overlap with two
 //! uniquely owned physical ends, and one closed section component alternating
-//! between two rulings and the matching cap arcs.  Every join is owned by the
-//! section graph's source-edge/root identity; rounded points are never used as
-//! topology keys.
+//! between two rulings and the matching cap arcs. Both authored boundary
+//! orders are normalized onto one certified common axial coordinate before
+//! overlap ownership is decided. Every join is owned by the section graph's
+//! source-edge/root identity; rounded points are never used as topology keys.
 
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
@@ -39,11 +40,9 @@ pub(super) enum ParallelCylinderRelationGap {
     ArithmeticGuard,
     /// The two authored cylinder axes are not exactly parallel.
     AxesNotExactlyParallel,
-    /// Exactly parallel axes have opposed authored directions.
-    AxesOppositelySigned,
     /// The radial circles are not certified as a strict two-root secant.
     RadialSecancyNotStrict,
-    /// A source's topology-ordered cap interval is not positive on the common axis.
+    /// A source's authored cap interval is not strictly positive on its own axis.
     SourceAxialOrder,
     /// Both source cap intervals describe the same two axial planes.
     AxialIntervalsEqual,
@@ -239,34 +238,42 @@ fn certify_source_relation(
     let axis_sign = affine_dot3(axis_a.to_array(), axis_b.to_array(), [0.0; 3], 0.0)
         .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)?
         .sign();
-    if axis_sign != Orientation::Positive {
-        return Err(if axis_sign == Orientation::Negative {
-            ParallelCylinderRelationGap::AxesOppositelySigned
-        } else {
-            ParallelCylinderRelationGap::ArithmeticGuard
-        });
-    }
+    let common_axis = match axis_sign {
+        Orientation::Positive => axis_a,
+        Orientation::Negative => canonical_unoriented_axis(axis_a)?,
+        Orientation::Zero => return Err(ParallelCylinderRelationGap::ArithmeticGuard),
+    };
     certify_strict_radial_secancy(cylinders)?;
 
-    for source in cylinders {
+    let mut intervals = [NormalizedSourceInterval::default(); 2];
+    for (operand, source) in cylinders.into_iter().enumerate() {
         if axial_compare(
-            axis_a,
+            source.cylinder().frame().z(),
             source.boundaries()[1].center(),
             source.boundaries()[0].center(),
         )? != Orientation::Positive
         {
             return Err(ParallelCylinderRelationGap::SourceAxialOrder);
         }
+        intervals[operand] = match axial_compare(
+            common_axis,
+            source.boundaries()[1].center(),
+            source.boundaries()[0].center(),
+        )? {
+            Orientation::Positive => NormalizedSourceInterval { low: 0, high: 1 },
+            Orientation::Negative => NormalizedSourceInterval { low: 1, high: 0 },
+            Orientation::Zero => return Err(ParallelCylinderRelationGap::SourceAxialOrder),
+        };
     }
     let low = axial_compare(
-        axis_a,
-        cylinders[1].boundaries()[0].center(),
-        cylinders[0].boundaries()[0].center(),
+        common_axis,
+        cylinders[1].boundaries()[intervals[1].low].center(),
+        cylinders[0].boundaries()[intervals[0].low].center(),
     )?;
     let high = axial_compare(
-        axis_a,
-        cylinders[1].boundaries()[1].center(),
-        cylinders[0].boundaries()[1].center(),
+        common_axis,
+        cylinders[1].boundaries()[intervals[1].high].center(),
+        cylinders[0].boundaries()[intervals[0].high].center(),
     )?;
     if low == Orientation::Zero && high == Orientation::Zero {
         return Err(ParallelCylinderRelationGap::AxialIntervalsEqual);
@@ -274,11 +281,11 @@ fn certify_source_relation(
     let low_end = match low {
         Orientation::Positive => SourceOverlapEnd {
             operand: 1,
-            boundary: 0,
+            boundary: intervals[1].low,
         },
         Orientation::Negative => SourceOverlapEnd {
             operand: 0,
-            boundary: 0,
+            boundary: intervals[0].low,
         },
         Orientation::Zero => {
             return Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique);
@@ -287,18 +294,18 @@ fn certify_source_relation(
     let high_end = match high {
         Orientation::Positive => SourceOverlapEnd {
             operand: 0,
-            boundary: 1,
+            boundary: intervals[0].high,
         },
         Orientation::Negative => SourceOverlapEnd {
             operand: 1,
-            boundary: 1,
+            boundary: intervals[1].high,
         },
         Orientation::Zero => {
             return Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique);
         }
     };
     if axial_compare(
-        axis_a,
+        common_axis,
         cylinders[high_end.operand].boundaries()[high_end.boundary].center(),
         cylinders[low_end.operand].boundaries()[low_end.boundary].center(),
     )? != Orientation::Positive
@@ -306,6 +313,22 @@ fn certify_source_relation(
         return Err(ParallelCylinderRelationGap::AxialOverlapNotStrictlyPositive);
     }
     Ok([low_end, high_end])
+}
+
+fn canonical_unoriented_axis(
+    axis: Vec3,
+) -> core::result::Result<Vec3, ParallelCylinderRelationGap> {
+    for basis in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
+        let sign = affine_dot3(axis.to_array(), basis, [0.0; 3], 0.0)
+            .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)?
+            .sign();
+        match sign {
+            Orientation::Positive => return Ok(axis),
+            Orientation::Negative => return Ok(-axis),
+            Orientation::Zero => {}
+        }
+    }
+    Err(ParallelCylinderRelationGap::ArithmeticGuard)
 }
 
 fn certify_strict_radial_secancy(
@@ -357,6 +380,12 @@ fn axial_compare(
 struct SourceOverlapEnd {
     operand: usize,
     boundary: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NormalizedSourceInterval {
+    low: usize,
+    high: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -937,513 +966,5 @@ fn valid_interval(lo: f64, hi: f64) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use kcore::operation::{
-        AccountingMode, BudgetPlan, LimitSpec, OperationContext, OperationScope, ResourceKind,
-    };
-    use kcore::tolerance::Tolerances;
-    use kgeom::frame::Frame;
-    use kgeom::vec::{Point3, Vec3};
-
-    use super::*;
-    use crate::{
-        BodyId, CylinderRequest, Kernel, PartId, SectionBodiesRequest, SectionCompletion, Session,
-    };
-
-    #[derive(Debug, Clone, Copy)]
-    enum Placement {
-        World,
-        Oblique,
-    }
-
-    struct Fixture {
-        session: Session,
-        part: PartId,
-        outer: BodyId,
-        inner: BodyId,
-    }
-
-    fn shared_frame(placement: Placement) -> Frame {
-        match placement {
-            Placement::World => Frame::world(),
-            Placement::Oblique => Frame::new(
-                Point3::new(2.5, -1.75, 0.625),
-                Vec3::new(0.48, 0.64, 0.6),
-                Vec3::new(0.8, -0.6, 0.0),
-            )
-            .unwrap(),
-        }
-    }
-
-    fn fixture_with_axial_intervals(
-        placement: Placement,
-        first: (f64, f64),
-        second: (f64, f64),
-    ) -> Fixture {
-        let frame = shared_frame(placement);
-        let mut session = Kernel::new().create_session();
-        let part = session.create_part();
-        let (outer, inner) = {
-            let mut edit = session.edit_part(part.clone()).unwrap();
-            let outer = edit
-                .create_cylinder(CylinderRequest::new(
-                    frame.with_origin(frame.point_at(-0.5, 0.0, first.0)),
-                    1.0,
-                    first.1,
-                ))
-                .unwrap()
-                .into_result()
-                .unwrap()
-                .body();
-            let inner = edit
-                .create_cylinder(CylinderRequest::new(
-                    frame.with_origin(frame.point_at(0.5, 0.0, second.0)),
-                    1.0,
-                    second.1,
-                ))
-                .unwrap()
-                .into_result()
-                .unwrap()
-                .body();
-            (outer, inner)
-        };
-        Fixture {
-            session,
-            part,
-            outer,
-            inner,
-        }
-    }
-
-    fn fixture(placement: Placement) -> Fixture {
-        fixture_with_axial_intervals(placement, (-2.0, 4.0), (-1.0, 2.0))
-    }
-
-    fn partial_overlap_fixture(placement: Placement) -> Fixture {
-        fixture_with_axial_intervals(placement, (-1.0, 2.0), (0.0, 2.0))
-    }
-
-    fn section(fixture: &Fixture, swapped: bool) -> BodySectionGraph {
-        let (first, second) = if swapped {
-            (fixture.inner.clone(), fixture.outer.clone())
-        } else {
-            (fixture.outer.clone(), fixture.inner.clone())
-        };
-        fixture
-            .session
-            .part(fixture.part.clone())
-            .unwrap()
-            .section_bodies(SectionBodiesRequest::new(first, second))
-            .unwrap()
-            .into_result()
-            .unwrap()
-    }
-
-    fn extract_source(fixture: &Fixture, body: &BodyId) -> CertifiedCylinderSource {
-        let part = fixture.session.part(fixture.part.clone()).unwrap();
-        let context = OperationContext::new(part.policy(), Tolerances::default())
-            .unwrap()
-            .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults());
-        let mut scope = OperationScope::new(&context);
-        match super::super::curved_source::extract_cylinder_source(
-            &part.state.store,
-            body.raw(),
-            &mut scope,
-        )
-        .unwrap()
-        {
-            super::super::curved_source::CylinderSourceOutcome::Ready(source) => source,
-            other => panic!("unexpected cylinder source outcome: {other:?}"),
-        }
-    }
-
-    fn sources(fixture: &Fixture, swapped: bool) -> [CertifiedCylinderSource; 2] {
-        let outer = extract_source(fixture, &fixture.outer);
-        let inner = extract_source(fixture, &fixture.inner);
-        if swapped {
-            [inner, outer]
-        } else {
-            [outer, inner]
-        }
-    }
-
-    fn certify(
-        fixture: &Fixture,
-        graph: &BodySectionGraph,
-        sources: &[CertifiedCylinderSource; 2],
-        allowed: u64,
-    ) -> Result<ParallelCylinderRelationOutcome> {
-        let part = fixture.session.part(fixture.part.clone()).unwrap();
-        let overrides = BudgetPlan::new([LimitSpec::new(
-            PLANAR_BOOLEAN_BSP_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            allowed,
-        )])
-        .unwrap();
-        let context = OperationContext::new(part.policy(), Tolerances::default())
-            .unwrap()
-            .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults())
-            .with_budget_overrides(overrides);
-        let mut scope = OperationScope::new(&context);
-        certify_parallel_cylinder_relation(graph, [&sources[0], &sources[1]], &mut scope)
-    }
-
-    fn certified(
-        outcome: ParallelCylinderRelationOutcome,
-    ) -> CertifiedParallelCylinderLensRelation {
-        match outcome {
-            ParallelCylinderRelationOutcome::Certified(certificate) => *certificate,
-            other => panic!("expected certified relation, got {other:?}"),
-        }
-    }
-
-    fn certified_relation(
-        fixture: &Fixture,
-        graph: &BodySectionGraph,
-        sources: &[CertifiedCylinderSource; 2],
-    ) -> CertifiedParallelCylinderLensRelation {
-        certified(certify(fixture, graph, sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap())
-    }
-
-    #[test]
-    fn strict_world_and_oblique_relations_are_replay_and_swap_deterministic() {
-        for placement in [Placement::World, Placement::Oblique] {
-            let fixture = fixture(placement);
-            let forward_graph = section(&fixture, false);
-            let replay_graph = section(&fixture, false);
-            let swapped_graph = section(&fixture, true);
-            let forward_sources = sources(&fixture, false);
-            let swapped_sources = sources(&fixture, true);
-
-            let forward = certified_relation(&fixture, &forward_graph, &forward_sources);
-            let replay = certified_relation(&fixture, &replay_graph, &forward_sources);
-            let swapped = certified_relation(&fixture, &swapped_graph, &swapped_sources);
-            assert_eq!(forward, replay);
-            assert_eq!(forward.strict_nesting_operands(), Some([1, 0]));
-            assert_eq!(swapped.strict_nesting_operands(), Some([0, 1]));
-            assert_eq!(forward.component(), 0);
-            assert_eq!(swapped.component(), 0);
-            assert_eq!(
-                forward.overlap_ends().map(|witness| (
-                    witness.boundary(),
-                    witness.cap_face(),
-                    witness.edge(),
-                    witness.root_ordinals()
-                )),
-                swapped.overlap_ends().map(|witness| (
-                    witness.boundary(),
-                    witness.cap_face(),
-                    witness.edge(),
-                    witness.root_ordinals()
-                ))
-            );
-            assert_eq!(
-                forward.rulings().map(|witness| witness.root_ordinals()),
-                swapped.rulings().map(|witness| witness.root_ordinals())
-            );
-            for (boundary, witness) in forward.overlap_ends().iter().enumerate() {
-                assert_eq!(witness.operand(), 1);
-                assert_eq!(witness.boundary(), boundary);
-                assert_eq!(witness.root_ordinals(), [0, 1]);
-                assert!(witness.branch() < forward_graph.branches().len());
-                assert!(witness.fragment() < forward_graph.curve_fragments().len());
-            }
-            for witness in forward.rulings() {
-                assert!(witness.branch() < forward_graph.branches().len());
-                assert!(witness.fragment() < forward_graph.curve_fragments().len());
-                assert!(witness.endpoints().into_iter().all(|endpoint| endpoint < 4));
-            }
-        }
-    }
-
-    #[test]
-    fn partial_overlap_ends_are_physical_replay_and_swap_deterministic() {
-        for placement in [Placement::World, Placement::Oblique] {
-            let fixture = partial_overlap_fixture(placement);
-            let forward_graph = section(&fixture, false);
-            let replay_graph = section(&fixture, false);
-            let swapped_graph = section(&fixture, true);
-            let forward_sources = sources(&fixture, false);
-            let swapped_sources = sources(&fixture, true);
-
-            let forward = certified_relation(&fixture, &forward_graph, &forward_sources);
-            let replay = certified_relation(&fixture, &replay_graph, &forward_sources);
-            let swapped = certified_relation(&fixture, &swapped_graph, &swapped_sources);
-
-            assert_eq!(forward, replay);
-            assert_eq!(forward.strict_nesting_operands(), None);
-            assert_eq!(swapped.strict_nesting_operands(), None);
-            assert_eq!(
-                forward.overlap_ends().map(|witness| (
-                    witness.boundary(),
-                    witness.cap_face(),
-                    witness.edge(),
-                    witness.root_ordinals(),
-                )),
-                swapped.overlap_ends().map(|witness| (
-                    witness.boundary(),
-                    witness.cap_face(),
-                    witness.edge(),
-                    witness.root_ordinals(),
-                ))
-            );
-            assert_eq!(
-                forward
-                    .overlap_ends()
-                    .map(|witness| (witness.operand(), witness.boundary())),
-                [(1, 0), (0, 1)]
-            );
-            assert_eq!(
-                swapped
-                    .overlap_ends()
-                    .map(|witness| (witness.operand(), witness.boundary())),
-                [(0, 0), (1, 1)]
-            );
-            assert_eq!(
-                forward.rulings().map(|witness| witness.root_ordinals()),
-                swapped.rulings().map(|witness| witness.root_ordinals())
-            );
-            assert!(
-                forward
-                    .overlap_ends()
-                    .iter()
-                    .all(|witness| witness.root_ordinals() == [0, 1])
-            );
-        }
-    }
-
-    #[test]
-    fn relation_work_accepts_exact_n_and_refuses_n_minus_one() {
-        let fixture = fixture(Placement::World);
-        let graph = section(&fixture, false);
-        let sources = sources(&fixture, false);
-        assert!(matches!(
-            certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
-            ParallelCylinderRelationOutcome::Certified(_)
-        ));
-
-        let error = certify(
-            &fixture,
-            &graph,
-            &sources,
-            PARALLEL_CYLINDER_RELATION_WORK - 1,
-        )
-        .unwrap_err();
-        let snapshot = error
-            .limit()
-            .expect("relation must retain exact limit evidence");
-        assert_eq!(snapshot.stage, PLANAR_BOOLEAN_BSP_WORK);
-        assert_eq!(snapshot.resource, ResourceKind::Work);
-        assert_eq!(snapshot.consumed, PARALLEL_CYLINDER_RELATION_WORK);
-        assert_eq!(snapshot.allowed, PARALLEL_CYLINDER_RELATION_WORK - 1);
-    }
-
-    #[test]
-    fn incomplete_layout_binding_and_endpoint_failures_are_typed() {
-        let fixture = fixture(Placement::World);
-        let graph = section(&fixture, false);
-        let sources = sources(&fixture, false);
-
-        let mut incomplete = graph.clone();
-        incomplete.completion = SectionCompletion::Indeterminate;
-        assert_eq!(
-            certify(
-                &fixture,
-                &incomplete,
-                &sources,
-                PARALLEL_CYLINDER_RELATION_WORK,
-            )
-            .unwrap(),
-            ParallelCylinderRelationOutcome::Indeterminate(
-                ParallelCylinderRelationGap::SectionIncomplete,
-            )
-        );
-
-        let mut truncated = graph.clone();
-        truncated.curve_fragments.pop();
-        assert_eq!(
-            certify(
-                &fixture,
-                &truncated,
-                &sources,
-                PARALLEL_CYLINDER_RELATION_WORK,
-            )
-            .unwrap(),
-            ParallelCylinderRelationOutcome::Indeterminate(
-                ParallelCylinderRelationGap::SectionLayout,
-            )
-        );
-
-        let reversed_sources = [sources[1].clone(), sources[0].clone()];
-        assert_eq!(
-            certify(
-                &fixture,
-                &graph,
-                &reversed_sources,
-                PARALLEL_CYLINDER_RELATION_WORK,
-            )
-            .unwrap(),
-            ParallelCylinderRelationOutcome::Indeterminate(
-                ParallelCylinderRelationGap::SectionOperandBinding,
-            )
-        );
-
-        let mut mismatched_endpoints = graph;
-        mismatched_endpoints.curve_endpoints.swap(0, 1);
-        assert_eq!(
-            certify(
-                &fixture,
-                &mismatched_endpoints,
-                &sources,
-                PARALLEL_CYLINDER_RELATION_WORK,
-            )
-            .unwrap(),
-            ParallelCylinderRelationOutcome::Indeterminate(
-                ParallelCylinderRelationGap::SectionEndpointProvenance,
-            )
-        );
-    }
-
-    fn analytic_sources(
-        first_frame: Frame,
-        first_height: f64,
-        second_frame: Frame,
-        second_height: f64,
-    ) -> [CertifiedCylinderSource; 2] {
-        let mut session = Kernel::new().create_session();
-        let part_id = session.create_part();
-        let (first, second) = {
-            let mut edit = session.edit_part(part_id.clone()).unwrap();
-            let first = edit
-                .create_cylinder(CylinderRequest::new(first_frame, 1.0, first_height))
-                .unwrap()
-                .into_result()
-                .unwrap()
-                .body();
-            let second = edit
-                .create_cylinder(CylinderRequest::new(second_frame, 1.0, second_height))
-                .unwrap()
-                .into_result()
-                .unwrap()
-                .body();
-            (first, second)
-        };
-        let part = session.part(part_id).unwrap();
-        let context = OperationContext::new(part.policy(), Tolerances::default())
-            .unwrap()
-            .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults());
-        let mut scope = OperationScope::new(&context);
-        [first, second].map(|body| {
-            match super::super::curved_source::extract_cylinder_source(
-                &part.state.store,
-                body.raw(),
-                &mut scope,
-            )
-            .unwrap()
-            {
-                super::super::curved_source::CylinderSourceOutcome::Ready(source) => source,
-                other => panic!("unexpected source extraction: {other:?}"),
-            }
-        })
-    }
-
-    #[test]
-    fn analytic_boundary_cases_have_distinct_typed_gaps() {
-        let world = Frame::world();
-        let equal = analytic_sources(
-            world.with_origin(Point3::new(-0.5, 0.0, -1.0)),
-            2.0,
-            world.with_origin(Point3::new(0.5, 0.0, -1.0)),
-            2.0,
-        );
-        assert_eq!(
-            certify_source_relation([&equal[0], &equal[1]]),
-            Err(ParallelCylinderRelationGap::AxialIntervalsEqual)
-        );
-
-        let partial = analytic_sources(
-            world.with_origin(Point3::new(-0.5, 0.0, -1.0)),
-            2.0,
-            world.with_origin(Point3::new(0.5, 0.0, 0.0)),
-            2.0,
-        );
-        assert_eq!(
-            certify_source_relation([&partial[0], &partial[1]]),
-            Ok([
-                SourceOverlapEnd {
-                    operand: 1,
-                    boundary: 0,
-                },
-                SourceOverlapEnd {
-                    operand: 0,
-                    boundary: 1,
-                },
-            ])
-        );
-
-        for second_low in [0.0, 0.25] {
-            let no_overlap = analytic_sources(
-                world.with_origin(Point3::new(-0.5, 0.0, -2.0)),
-                2.0,
-                world.with_origin(Point3::new(0.5, 0.0, second_low)),
-                2.0,
-            );
-            assert_eq!(
-                certify_source_relation([&no_overlap[0], &no_overlap[1]]),
-                Err(ParallelCylinderRelationGap::AxialOverlapNotStrictlyPositive)
-            );
-        }
-
-        let shared_low = analytic_sources(
-            world.with_origin(Point3::new(-0.5, 0.0, -1.0)),
-            3.0,
-            world.with_origin(Point3::new(0.5, 0.0, -1.0)),
-            2.0,
-        );
-        assert_eq!(
-            certify_source_relation([&shared_low[0], &shared_low[1]]),
-            Err(ParallelCylinderRelationGap::AxialOverlapEndNotUnique)
-        );
-
-        let tangent = analytic_sources(
-            world.with_origin(Point3::new(-1.0, 0.0, -2.0)),
-            4.0,
-            world.with_origin(Point3::new(1.0, 0.0, -1.0)),
-            2.0,
-        );
-        assert_eq!(
-            certify_source_relation([&tangent[0], &tangent[1]]),
-            Err(ParallelCylinderRelationGap::RadialSecancyNotStrict)
-        );
-
-        let reversed = Frame::new(Point3::new(0.5, 0.0, 1.0), -world.z(), world.x()).unwrap();
-        let opposed = analytic_sources(
-            world.with_origin(Point3::new(-0.5, 0.0, -2.0)),
-            4.0,
-            reversed,
-            2.0,
-        );
-        assert_eq!(
-            certify_source_relation([&opposed[0], &opposed[1]]),
-            Err(ParallelCylinderRelationGap::AxesOppositelySigned)
-        );
-
-        let skew = Frame::new(
-            Point3::new(0.5, 0.0, -1.0),
-            Vec3::new(0.0, 1.0, 1.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        )
-        .unwrap();
-        let nonparallel = analytic_sources(
-            world.with_origin(Point3::new(-0.5, 0.0, -2.0)),
-            4.0,
-            skew,
-            2.0,
-        );
-        assert_eq!(
-            certify_source_relation([&nonparallel[0], &nonparallel[1]]),
-            Err(ParallelCylinderRelationGap::AxesNotExactlyParallel)
-        );
-    }
-}
+#[path = "parallel_cylinder_relation/tests.rs"]
+mod tests;

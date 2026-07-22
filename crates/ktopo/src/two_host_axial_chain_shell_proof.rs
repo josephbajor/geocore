@@ -1,9 +1,12 @@
 //! Shell theorem for the union of two strict-secant axial cylinder bands.
 //!
 //! The admitted unsplit representation is the boundary of
-//! `(D0 x [a0,a1]) union (D1 x [b0,b1])` for parallel cylinder disks with a
-//! strict axial chain `a0 < b0 < a1 < b1` (or the same chain in the reversed
-//! common-axis direction). Each cylinder face owns one endpoint-free outer
+//! `(D0 x [a0,a1]) union (D1 x [b0,b1])` for geometrically parallel cylinder
+//! disks with a strict axial chain `a0 < b0 < a1 < b1` (or the same chain in
+//! the reversed common-axis direction). The authored cylinder frames may be
+//! parallel or antiparallel: the translated transition roots establish the
+//! proof-local common axial direction instead of either surface chart. Each
+//! cylinder face owns one endpoint-free outer
 //! ring and one simple noncontractible boundary made from its two translated
 //! strict-secant arcs and the common rulings. The transition planes own the
 //! complementary exposed disk differences. Incidence, not face storage or

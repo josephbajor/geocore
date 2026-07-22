@@ -13,6 +13,8 @@ const OUTER_HALF_HEIGHT: f64 = 2.0;
 const INNER_HALF_HEIGHT: f64 = 1.0;
 const ANALYTIC_ORACLE_TOLERANCE: f64 = 1.0e-10;
 const CYLINDER_TOPOLOGY: [usize; 3] = [3, 2, 0];
+const LENS_INTERSECTION_REALIZATION_WORK: u64 = 3_208;
+const LENS_INTERSECTION_BODY_PROPERTIES_WORK: u64 = 13_649;
 const PARTIAL_SUBTRACT_REALIZATION_WORK: u64 = 4_192;
 const PARTIAL_SUBTRACT_BODY_PROPERTIES_WORK: u64 = 15_617;
 const PARTIAL_UNITE_REALIZATION_WORK: u64 = 5_334;
@@ -68,30 +70,29 @@ fn shared_frame(placement: Placement) -> Frame {
     }
 }
 
-fn fixture(placement: Placement) -> Fixture {
-    fixture_with_half_heights(placement, OUTER_HALF_HEIGHT, INNER_HALF_HEIGHT)
-}
-
-fn partial_overlap_fixture(placement: Placement) -> Fixture {
-    fixture_with_axial_intervals(placement, [-2.0, 1.0], [-1.0, 2.0])
-}
-
-fn fixture_with_half_heights(
-    placement: Placement,
-    outer_half_height: f64,
-    inner_half_height: f64,
-) -> Fixture {
-    fixture_with_axial_intervals(
+fn directed_nested_fixture(placement: Placement, reverse_inner_axis: bool) -> Fixture {
+    fixture_with_axial_intervals_and_inner_direction(
         placement,
-        [-outer_half_height, outer_half_height],
-        [-inner_half_height, inner_half_height],
+        [-OUTER_HALF_HEIGHT, OUTER_HALF_HEIGHT],
+        [-INNER_HALF_HEIGHT, INNER_HALF_HEIGHT],
+        reverse_inner_axis,
     )
 }
 
-fn fixture_with_axial_intervals(
+fn directed_partial_overlap_fixture(placement: Placement, reverse_inner_axis: bool) -> Fixture {
+    fixture_with_axial_intervals_and_inner_direction(
+        placement,
+        [-2.0, 1.0],
+        [-1.0, 2.0],
+        reverse_inner_axis,
+    )
+}
+
+fn fixture_with_axial_intervals_and_inner_direction(
     placement: Placement,
     outer_interval: [f64; 2],
     inner_interval: [f64; 2],
+    reverse_inner_axis: bool,
 ) -> Fixture {
     assert!(outer_interval[0] < outer_interval[1]);
     assert!(inner_interval[0] < inner_interval[1]);
@@ -110,9 +111,19 @@ fn fixture_with_axial_intervals(
             .into_result()
             .unwrap()
             .body();
+        let inner_origin = frame.point_at(
+            AXIS_OFFSET,
+            0.0,
+            inner_interval[usize::from(reverse_inner_axis)],
+        );
+        let inner_frame = if reverse_inner_axis {
+            Frame::new(inner_origin, -frame.z(), frame.x()).unwrap()
+        } else {
+            frame.with_origin(inner_origin)
+        };
         let inner = edit
             .create_cylinder(CylinderRequest::new(
-                frame.with_origin(frame.point_at(AXIS_OFFSET, 0.0, inner_interval[0])),
+                inner_frame,
                 RADIUS,
                 inner_interval[1] - inner_interval[0],
             ))
@@ -549,13 +560,22 @@ fn assert_xt_equal(actual: &[u8], expected: &[u8], message: &str) {
     );
 }
 
-fn assert_partial_intersection_created(
+fn assert_lens_intersection_created(
     fixture: &Fixture,
     outcome: OperationOutcome<BooleanOutcome>,
 ) -> Vec<u8> {
+    let realization = *outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == BOOLEAN_POST_SELECTION_WORK && usage.resource == ResourceKind::Work
+        })
+        .expect("lens Intersect did not charge realization work");
+    assert_eq!(realization.consumed, LENS_INTERSECTION_REALIZATION_WORK);
     let result = outcome.into_result().unwrap();
     let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
-        panic!("partial-overlap parallel-cylinder Intersect returned {result:#?}")
+        panic!("parallel-cylinder lens Intersect returned {result:#?}")
     };
     assert_eq!(created.bodies().len(), 1);
     assert_eq!(created.reports().len(), 1);
@@ -569,21 +589,14 @@ fn assert_partial_intersection_created(
         .into_result()
         .unwrap();
     assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
-    let BodyPropertiesOutcome::Certified {
-        properties,
-        full_check,
-    } = part
-        .body_properties(BodyPropertiesRequest::new(result.clone()))
-        .unwrap()
-        .into_result()
-        .unwrap()
-    else {
-        panic!("partial-overlap lens-prism analytic properties were refused")
-    };
-    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
-    // The two height-three cylinders overlap over z in [-1, 1], so their
-    // result is mathematically identical to the independently integrated
-    // height-two lens prism used by these analytic oracles.
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        result.clone(),
+        LENS_INTERSECTION_BODY_PROPERTIES_WORK,
+        "lens Intersect",
+    );
+    // Strict nesting and the two height-three partial-overlap cylinders both
+    // produce the independently integrated height-two lens prism.
     assert_scalar_matches_analytic(properties.volume(), expected_volume(), "volume");
     assert_scalar_matches_analytic(
         properties.surface_area(),
@@ -630,18 +643,12 @@ fn assert_inner_subtract_created(
         .into_result()
         .unwrap();
     assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
-    let BodyPropertiesOutcome::Certified {
-        properties,
-        full_check,
-    } = part
-        .body_properties(BodyPropertiesRequest::new(result.clone()))
-        .unwrap()
-        .into_result()
-        .unwrap()
-    else {
-        panic!("crescent-prism analytic properties were refused")
-    };
-    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        result.clone(),
+        LENS_INTERSECTION_BODY_PROPERTIES_WORK,
+        "nested inner-minus-outer Subtract",
+    );
     assert_scalar_matches_analytic(properties.volume(), expected_subtract_volume(), "volume");
     assert_scalar_matches_analytic(
         properties.surface_area(),
@@ -698,18 +705,12 @@ fn assert_outer_subtract_created(
         .into_result()
         .unwrap();
     assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
-    let BodyPropertiesOutcome::Certified {
-        properties,
-        full_check,
-    } = part
-        .body_properties(BodyPropertiesRequest::new(result.clone()))
-        .unwrap()
-        .into_result()
-        .unwrap()
-    else {
-        panic!("outer-minus-inner analytic properties were refused")
-    };
-    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        result.clone(),
+        PARTIAL_UNITE_BODY_PROPERTIES_WORK,
+        "nested outer-minus-inner Subtract",
+    );
     assert_scalar_matches_analytic(
         properties.volume(),
         expected_outer_subtract_volume(),
@@ -897,18 +898,12 @@ fn assert_unite_created(fixture: &Fixture, outcome: OperationOutcome<BooleanOutc
         .into_result()
         .unwrap();
     assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
-    let BodyPropertiesOutcome::Certified {
-        properties,
-        full_check,
-    } = part
-        .body_properties(BodyPropertiesRequest::new(result.clone()))
-        .unwrap()
-        .into_result()
-        .unwrap()
-    else {
-        panic!("connected-union analytic properties were refused")
-    };
-    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        result.clone(),
+        PARTIAL_UNITE_BODY_PROPERTIES_WORK,
+        "nested Unite",
+    );
     assert_scalar_matches_analytic(properties.volume(), expected_unite_volume(), "volume");
     assert_scalar_matches_analytic(
         properties.surface_area(),
@@ -1016,66 +1011,81 @@ fn assert_partial_unite_created(
     first.bytes().to_vec()
 }
 
-#[test]
-fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
-    for placement in [Placement::World, Placement::Oblique] {
+fn assert_commutative_direction_matrix(
+    placement: Placement,
+    operation: BooleanOperation,
+    make_fixture: fn(Placement, bool) -> Fixture,
+    assert_created: fn(&Fixture, OperationOutcome<BooleanOutcome>) -> Vec<u8>,
+) {
+    for antiparallel in [false, true] {
+        // Reparameterized source charts may preserve a different signed zero;
+        // determinism is required across operand order and repeats per chart.
         let mut canonical_bytes: Option<Vec<u8>> = None;
         for swapped in [false, true] {
-            let mut fixture = fixture(placement);
+            for _ in 0..2 {
+                let mut fixture = make_fixture(placement, antiparallel);
+                assert_source_bodies_preserved(&fixture, 2);
+                let outcome =
+                    run_commutative(&mut fixture, operation, swapped, OperationSettings::new());
+                let bytes = assert_created(&fixture, outcome);
+                assert_source_bodies_preserved(&fixture, 3);
+                if let Some(canonical) = canonical_bytes.as_ref() {
+                    assert_xt_equal(
+                        &bytes,
+                        canonical,
+                        "operand swap or repeat changed direction-local X_T bytes",
+                    );
+                } else {
+                    canonical_bytes = Some(bytes.clone());
+                }
+                assert_fast_self_import(&mut fixture.session, &bytes);
+            }
+        }
+    }
+}
+
+fn assert_partial_subtract_direction_matrix(placement: Placement, meaning: PartialSubtractMeaning) {
+    for antiparallel in [false, true] {
+        let mut canonical_bytes: Option<Vec<u8>> = None;
+        for _ in 0..2 {
+            let mut fixture = directed_partial_overlap_fixture(placement, antiparallel);
             assert_source_bodies_preserved(&fixture, 2);
-            let outcome = run(&mut fixture, swapped, OperationSettings::new());
-            let result = outcome.into_result().unwrap();
-            let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
-                panic!("parallel-cylinder Intersect returned {result:#?}")
-            };
-            assert_eq!(created.bodies().len(), 1);
-            assert_eq!(created.reports().len(), 1);
-            assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
-            let result = created.bodies()[0].clone();
-            let bytes = {
-                let part = fixture.session.part(fixture.part_id.clone()).unwrap();
-                assert_eq!(body_topology(&part, result.clone()), [4, 6, 4]);
-                let full = part
-                    .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
-                    .unwrap()
-                    .into_result()
-                    .unwrap();
-                assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:#?}");
-                let BodyPropertiesOutcome::Certified {
-                    properties,
-                    full_check,
-                } = part
-                    .body_properties(BodyPropertiesRequest::new(result.clone()))
-                    .unwrap()
-                    .into_result()
-                    .unwrap()
-                else {
-                    panic!("lens-prism analytic properties were refused")
-                };
-                assert_eq!(full_check.outcome(), CheckOutcome::Valid);
-                assert_scalar_matches_analytic(properties.volume(), expected_volume(), "volume");
-                assert_scalar_matches_analytic(
-                    properties.surface_area(),
-                    expected_surface_area(),
-                    "surface area",
-                );
-                assert_point_matches_analytic(properties.centroid(), fixture.frame.origin());
-                let first = part
-                    .export_xt(ExportXtRequest::new(result.clone()))
-                    .unwrap()
-                    .into_result()
-                    .unwrap();
-                let second = part
-                    .export_xt(ExportXtRequest::new(result))
-                    .unwrap()
-                    .into_result()
-                    .unwrap();
-                assert_eq!(first.bytes(), second.bytes());
-                first.bytes().to_vec()
-            };
+            let outcome = run_subtract(&mut fixture, meaning.reverse(), OperationSettings::new());
+            let bytes = assert_partial_subtract_created(&fixture, meaning, outcome);
             assert_source_bodies_preserved(&fixture, 3);
             if let Some(canonical) = canonical_bytes.as_ref() {
-                assert_xt_equal(&bytes, canonical, "operand swap changed X_T bytes");
+                assert_xt_equal(
+                    &bytes,
+                    canonical,
+                    "repeat changed direction-local ordered Subtract X_T bytes",
+                );
+            } else {
+                canonical_bytes = Some(bytes.clone());
+            }
+            assert_fast_self_import(&mut fixture.session, &bytes);
+        }
+    }
+}
+
+fn assert_nested_subtract_direction_matrix(
+    placement: Placement,
+    reverse: bool,
+    assert_created: fn(&Fixture, OperationOutcome<BooleanOutcome>) -> Vec<u8>,
+) {
+    for antiparallel in [false, true] {
+        let mut canonical_bytes: Option<Vec<u8>> = None;
+        for _ in 0..2 {
+            let mut fixture = directed_nested_fixture(placement, antiparallel);
+            assert_source_bodies_preserved(&fixture, 2);
+            let outcome = run_subtract(&mut fixture, reverse, OperationSettings::new());
+            let bytes = assert_created(&fixture, outcome);
+            assert_source_bodies_preserved(&fixture, 3);
+            if let Some(canonical) = canonical_bytes.as_ref() {
+                assert_xt_equal(
+                    &bytes,
+                    canonical,
+                    "repeat changed direction-local nested Subtract X_T bytes",
+                );
             } else {
                 canonical_bytes = Some(bytes.clone());
             }
@@ -1085,80 +1095,50 @@ fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
 }
 
 #[test]
+fn parallel_cylinder_intersection_full_commits_a_deterministic_lens_prism() {
+    for placement in [Placement::World, Placement::Oblique] {
+        assert_commutative_direction_matrix(
+            placement,
+            BooleanOperation::Intersect,
+            directed_nested_fixture,
+            assert_lens_intersection_created,
+        );
+    }
+}
+
+#[test]
 fn partial_axial_overlap_intersection_full_commits_a_deterministic_lens_prism() {
     for placement in [Placement::World, Placement::Oblique] {
-        let mut canonical_bytes: Option<Vec<u8>> = None;
-        for swapped in [false, true] {
-            for _ in 0..2 {
-                let mut fixture = partial_overlap_fixture(placement);
-                assert_source_bodies_preserved(&fixture, 2);
-                let outcome = run(&mut fixture, swapped, OperationSettings::new());
-                let bytes = assert_partial_intersection_created(&fixture, outcome);
-                assert_source_bodies_preserved(&fixture, 3);
-                if let Some(canonical) = canonical_bytes.as_ref() {
-                    assert_xt_equal(
-                        &bytes,
-                        canonical,
-                        "operand swap or repeat changed partial-overlap Intersect X_T bytes",
-                    );
-                } else {
-                    canonical_bytes = Some(bytes.clone());
-                }
-                assert_fast_self_import(&mut fixture.session, &bytes);
-            }
-        }
+        assert_commutative_direction_matrix(
+            placement,
+            BooleanOperation::Intersect,
+            directed_partial_overlap_fixture,
+            assert_lens_intersection_created,
+        );
     }
 }
 
 #[test]
 fn parallel_cylinder_unite_full_commits_a_deterministic_connected_union() {
     for placement in [Placement::World, Placement::Oblique] {
-        let mut canonical_bytes: Option<Vec<u8>> = None;
-        for swapped in [false, true] {
-            for _ in 0..2 {
-                let mut fixture = fixture(placement);
-                assert_source_bodies_preserved(&fixture, 2);
-                let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
-                let bytes = assert_unite_created(&fixture, outcome);
-                assert_source_bodies_preserved(&fixture, 3);
-                if let Some(canonical) = canonical_bytes.as_ref() {
-                    assert_xt_equal(
-                        &bytes,
-                        canonical,
-                        "operand swap or repeat changed Unite X_T bytes",
-                    );
-                } else {
-                    canonical_bytes = Some(bytes.clone());
-                }
-                assert_fast_self_import(&mut fixture.session, &bytes);
-            }
-        }
+        assert_commutative_direction_matrix(
+            placement,
+            BooleanOperation::Unite,
+            directed_nested_fixture,
+            assert_unite_created,
+        );
     }
 }
 
 #[test]
 fn partial_axial_overlap_unite_full_commits_a_deterministic_two_host_chain() {
     for placement in [Placement::World, Placement::Oblique] {
-        let mut canonical_bytes: Option<Vec<u8>> = None;
-        for swapped in [false, true] {
-            for _ in 0..2 {
-                let mut fixture = partial_overlap_fixture(placement);
-                assert_source_bodies_preserved(&fixture, 2);
-                let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
-                let bytes = assert_partial_unite_created(&fixture, outcome);
-                assert_source_bodies_preserved(&fixture, 3);
-                if let Some(canonical) = canonical_bytes.as_ref() {
-                    assert_xt_equal(
-                        &bytes,
-                        canonical,
-                        "operand swap or repeat changed partial-overlap Unite X_T bytes",
-                    );
-                } else {
-                    canonical_bytes = Some(bytes.clone());
-                }
-                assert_fast_self_import(&mut fixture.session, &bytes);
-            }
-        }
+        assert_commutative_direction_matrix(
+            placement,
+            BooleanOperation::Unite,
+            directed_partial_overlap_fixture,
+            assert_partial_unite_created,
+        );
     }
 }
 
@@ -1177,41 +1157,43 @@ fn partial_overlap_unite_shell_work_accepts_n_and_refuses_n_minus_one_atomically
         )
     };
 
-    let mut baseline = partial_overlap_fixture(Placement::World);
-    let baseline_outcome = run_unite(&mut baseline, false, OperationSettings::new());
-    assert!(matches!(
-        baseline_outcome.result().unwrap(),
-        BooleanOutcome::Success(BooleanResult::Created(_))
-    ));
-    let usage = *baseline_outcome
-        .report()
-        .usage()
-        .iter()
-        .find(|usage| usage.stage == stage && usage.resource == ResourceKind::Work)
-        .expect("partial Unite did not charge its shell theorem");
-    assert_eq!(usage.consumed, PARTIAL_UNITE_SHELL_WORK);
+    for antiparallel in [false, true] {
+        let mut baseline = directed_partial_overlap_fixture(Placement::World, antiparallel);
+        let baseline_outcome = run_unite(&mut baseline, false, OperationSettings::new());
+        assert!(matches!(
+            baseline_outcome.result().unwrap(),
+            BooleanOutcome::Success(BooleanResult::Created(_))
+        ));
+        let usage = *baseline_outcome
+            .report()
+            .usage()
+            .iter()
+            .find(|usage| usage.stage == stage && usage.resource == ResourceKind::Work)
+            .expect("partial Unite did not charge its shell theorem");
+        assert_eq!(usage.consumed, PARTIAL_UNITE_SHELL_WORK);
 
-    let mut admitted = partial_overlap_fixture(Placement::World);
-    let admitted_outcome = run_unite(&mut admitted, false, settings_at(usage.consumed));
-    assert!(matches!(
-        admitted_outcome.into_result().unwrap(),
-        BooleanOutcome::Success(BooleanResult::Created(_))
-    ));
+        let mut admitted = directed_partial_overlap_fixture(Placement::World, antiparallel);
+        let admitted_outcome = run_unite(&mut admitted, false, settings_at(usage.consumed));
+        assert!(matches!(
+            admitted_outcome.into_result().unwrap(),
+            BooleanOutcome::Success(BooleanResult::Created(_))
+        ));
 
-    let mut denied = partial_overlap_fixture(Placement::World);
-    let before = fixture_signature(&denied);
-    let denied_outcome = run_unite(&mut denied, false, settings_at(usage.consumed - 1));
-    let expected = kernel::LimitSnapshot {
-        allowed: usage.consumed - 1,
-        ..usage
-    };
-    assert_eq!(denied_outcome.result().unwrap_err().limit(), Some(expected));
-    assert_eq!(denied_outcome.report().limit_events(), &[expected]);
-    assert_eq!(
-        fixture_signature(&denied),
-        before,
-        "shell N-1 refusal mutated a source or retained candidate topology"
-    );
+        let mut denied = directed_partial_overlap_fixture(Placement::World, antiparallel);
+        let before = fixture_signature(&denied);
+        let denied_outcome = run_unite(&mut denied, false, settings_at(usage.consumed - 1));
+        let expected = kernel::LimitSnapshot {
+            allowed: usage.consumed - 1,
+            ..usage
+        };
+        assert_eq!(denied_outcome.result().unwrap_err().limit(), Some(expected));
+        assert_eq!(denied_outcome.report().limit_events(), &[expected]);
+        assert_eq!(
+            fixture_signature(&denied),
+            before,
+            "shell N-1 refusal mutated a source or retained candidate topology"
+        );
+    }
 }
 
 #[test]
@@ -1222,21 +1204,29 @@ fn unsupported_equal_height_or_shared_end_unite_refuses_atomically() {
             ("shared lower end", [-2.0, 1.0], [-2.0, 2.0]),
             ("shared upper end", [-2.0, 2.0], [-1.0, 2.0]),
         ] {
-            for swapped in [false, true] {
-                let mut fixture = fixture_with_axial_intervals(placement, outer, inner);
-                assert_source_bodies_preserved(&fixture, 2);
-                let before = fixture_signature(&fixture);
-                let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
-                assert!(matches!(
-                    outcome.into_result().unwrap(),
-                    BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
-                ));
-                assert_eq!(
-                    fixture_signature(&fixture),
-                    before,
-                    "{name} Unite mutated the part for {placement:?}, swapped={swapped}"
-                );
-                assert_source_bodies_preserved(&fixture, 2);
+            for antiparallel in [false, true] {
+                for swapped in [false, true] {
+                    let mut fixture = fixture_with_axial_intervals_and_inner_direction(
+                        placement,
+                        outer,
+                        inner,
+                        antiparallel,
+                    );
+                    assert_source_bodies_preserved(&fixture, 2);
+                    let before = fixture_signature(&fixture);
+                    let outcome = run_unite(&mut fixture, swapped, OperationSettings::new());
+                    assert!(matches!(
+                        outcome.into_result().unwrap(),
+                        BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+                    ));
+                    assert_eq!(
+                        fixture_signature(&fixture),
+                        before,
+                        "{name} Unite mutated the part for {placement:?}, \
+                         antiparallel={antiparallel}, swapped={swapped}"
+                    );
+                    assert_source_bodies_preserved(&fixture, 2);
+                }
             }
         }
     }
@@ -1249,25 +1239,7 @@ fn partial_axial_overlap_both_ordered_subtractions_commit_deterministically() {
             PartialSubtractMeaning::AMinusB,
             PartialSubtractMeaning::BMinusA,
         ] {
-            let mut canonical_bytes: Option<Vec<u8>> = None;
-            for _ in 0..2 {
-                let mut fixture = partial_overlap_fixture(placement);
-                assert_source_bodies_preserved(&fixture, 2);
-                let outcome =
-                    run_subtract(&mut fixture, meaning.reverse(), OperationSettings::new());
-                let bytes = assert_partial_subtract_created(&fixture, meaning, outcome);
-                assert_source_bodies_preserved(&fixture, 3);
-                if let Some(canonical) = canonical_bytes.as_ref() {
-                    assert_xt_equal(
-                        &bytes,
-                        canonical,
-                        "repeat changed partial-overlap ordered Subtract X_T bytes",
-                    );
-                } else {
-                    canonical_bytes = Some(bytes.clone());
-                }
-                assert_fast_self_import(&mut fixture.session, &bytes);
-            }
+            assert_partial_subtract_direction_matrix(placement, meaning);
         }
     }
 }
@@ -1275,40 +1247,14 @@ fn partial_axial_overlap_both_ordered_subtractions_commit_deterministically() {
 #[test]
 fn parallel_cylinder_inner_minus_outer_full_commits_a_deterministic_crescent_prism() {
     for placement in [Placement::World, Placement::Oblique] {
-        let mut canonical_bytes: Option<Vec<u8>> = None;
-        for _ in 0..2 {
-            let mut fixture = fixture(placement);
-            assert_source_bodies_preserved(&fixture, 2);
-            let outcome = run_subtract(&mut fixture, false, OperationSettings::new());
-            let bytes = assert_inner_subtract_created(&fixture, outcome);
-            assert_source_bodies_preserved(&fixture, 3);
-            if let Some(canonical) = canonical_bytes.as_ref() {
-                assert_xt_equal(&bytes, canonical, "repeat Subtract changed X_T bytes");
-            } else {
-                canonical_bytes = Some(bytes.clone());
-            }
-            assert_fast_self_import(&mut fixture.session, &bytes);
-        }
+        assert_nested_subtract_direction_matrix(placement, false, assert_inner_subtract_created);
     }
 }
 
 #[test]
 fn parallel_cylinder_outer_minus_inner_full_commits_a_deterministic_notched_cylinder() {
     for placement in [Placement::World, Placement::Oblique] {
-        let mut canonical_bytes: Option<Vec<u8>> = None;
-        for _ in 0..2 {
-            let mut fixture = fixture(placement);
-            assert_source_bodies_preserved(&fixture, 2);
-            let outcome = run_subtract(&mut fixture, true, OperationSettings::new());
-            let bytes = assert_outer_subtract_created(&fixture, outcome);
-            assert_source_bodies_preserved(&fixture, 3);
-            if let Some(canonical) = canonical_bytes.as_ref() {
-                assert_xt_equal(&bytes, canonical, "repeat Subtract changed X_T bytes");
-            } else {
-                canonical_bytes = Some(bytes.clone());
-            }
-            assert_fast_self_import(&mut fixture.session, &bytes);
-        }
+        assert_nested_subtract_direction_matrix(placement, true, assert_outer_subtract_created);
     }
 }
 
@@ -1324,16 +1270,18 @@ enum RealizationCase {
     OuterMinusInner,
 }
 
-fn realization_fixture(case: RealizationCase, placement: Placement) -> Fixture {
+fn realization_fixture(case: RealizationCase, placement: Placement, antiparallel: bool) -> Fixture {
     match case {
         RealizationCase::PartialOverlapIntersection
         | RealizationCase::PartialOverlapUnite
         | RealizationCase::PartialOverlapAMinusB
-        | RealizationCase::PartialOverlapBMinusA => partial_overlap_fixture(placement),
+        | RealizationCase::PartialOverlapBMinusA => {
+            directed_partial_overlap_fixture(placement, antiparallel)
+        }
         RealizationCase::Intersection
         | RealizationCase::Unite
         | RealizationCase::InnerMinusOuter
-        | RealizationCase::OuterMinusInner => fixture(placement),
+        | RealizationCase::OuterMinusInner => directed_nested_fixture(placement, antiparallel),
     }
 }
 
@@ -1355,9 +1303,9 @@ fn run_realization_case(
     }
 }
 
-fn assert_realization_budget_case(case: RealizationCase) {
+fn assert_realization_budget_case(case: RealizationCase, antiparallel: bool) {
     let baseline = run_realization_case(
-        &mut realization_fixture(case, Placement::World),
+        &mut realization_fixture(case, Placement::World, antiparallel),
         case,
         OperationSettings::new(),
     );
@@ -1371,13 +1319,19 @@ fn assert_realization_budget_case(case: RealizationCase) {
         .expect("parallel-cylinder realization did not charge its shared stage");
     assert!(usage.consumed > 0);
     match case {
-        RealizationCase::PartialOverlapUnite => {
+        RealizationCase::Intersection
+        | RealizationCase::PartialOverlapIntersection
+        | RealizationCase::InnerMinusOuter => {
+            assert_eq!(usage.consumed, LENS_INTERSECTION_REALIZATION_WORK)
+        }
+        RealizationCase::PartialOverlapUnite
+        | RealizationCase::Unite
+        | RealizationCase::OuterMinusInner => {
             assert_eq!(usage.consumed, PARTIAL_UNITE_REALIZATION_WORK)
         }
         RealizationCase::PartialOverlapAMinusB | RealizationCase::PartialOverlapBMinusA => {
             assert_eq!(usage.consumed, PARTIAL_SUBTRACT_REALIZATION_WORK)
         }
-        _ => {}
     }
     let baseline_result = baseline.into_result().unwrap();
     assert!(
@@ -1400,7 +1354,7 @@ fn assert_realization_budget_case(case: RealizationCase) {
         )
     };
     let admitted = run_realization_case(
-        &mut realization_fixture(case, Placement::World),
+        &mut realization_fixture(case, Placement::World, antiparallel),
         case,
         settings_at(usage.consumed),
     );
@@ -1409,7 +1363,7 @@ fn assert_realization_budget_case(case: RealizationCase) {
         BooleanOutcome::Success(BooleanResult::Created(_))
     ));
 
-    let mut denied_fixture = realization_fixture(case, Placement::World);
+    let mut denied_fixture = realization_fixture(case, Placement::World, antiparallel);
     let before = fixture_signature(&denied_fixture);
     let denied = run_realization_case(&mut denied_fixture, case, settings_at(usage.consumed - 1));
     let expected = kernel::LimitSnapshot {
@@ -1423,16 +1377,18 @@ fn assert_realization_budget_case(case: RealizationCase) {
 
 #[test]
 fn parallel_cylinder_realization_budget_accepts_n_and_refuses_n_minus_one_atomically() {
-    for case in [
-        RealizationCase::Intersection,
-        RealizationCase::PartialOverlapIntersection,
-        RealizationCase::PartialOverlapUnite,
-        RealizationCase::PartialOverlapAMinusB,
-        RealizationCase::PartialOverlapBMinusA,
-        RealizationCase::Unite,
-        RealizationCase::InnerMinusOuter,
-        RealizationCase::OuterMinusInner,
-    ] {
-        assert_realization_budget_case(case);
+    for antiparallel in [false, true] {
+        for case in [
+            RealizationCase::Intersection,
+            RealizationCase::PartialOverlapIntersection,
+            RealizationCase::PartialOverlapUnite,
+            RealizationCase::PartialOverlapAMinusB,
+            RealizationCase::PartialOverlapBMinusA,
+            RealizationCase::Unite,
+            RealizationCase::InnerMinusOuter,
+            RealizationCase::OuterMinusInner,
+        ] {
+            assert_realization_budget_case(case, antiparallel);
+        }
     }
 }

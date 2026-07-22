@@ -1,8 +1,9 @@
 use super::*;
-use crate::analytic_shell::AnalyticShellOutput;
 use crate::analytic_shell::cylinder_cylinder_tests::{
-    two_host_axial_chain_union_input, unequal_radius_two_host_axial_chain_union_input,
+    antiparallel_two_host_axial_chain_union_input, two_host_axial_chain_union_input,
+    unequal_radius_two_host_axial_chain_union_input,
 };
+use crate::analytic_shell::{AnalyticShellInput, AnalyticShellOutput};
 use crate::check::{CheckLevel, CheckOutcome, check_body_report};
 use crate::transaction::FullCommitRequirement;
 
@@ -119,6 +120,109 @@ fn two_host_axial_chain_accepts_unequal_strict_secant_radii() {
 }
 
 #[test]
+fn two_host_antiparallel_chain_is_full_valid_across_frames_and_permutations() {
+    for frame in [Frame::world(), oblique_frame()] {
+        for permuted in [false, true] {
+            let mut store = Store::new();
+            let mut transaction = store.transaction().unwrap();
+            let output = transaction
+                .assemble_analytic_shell(
+                    &antiparallel_two_host_axial_chain_union_input(frame, permuted),
+                    TOLERANCE,
+                )
+                .unwrap();
+            let first = face_for_key(&output, 0);
+            let second = face_for_key(&output, 1);
+            let axes = [first, second].map(|face| {
+                let face = transaction.store().get(face).unwrap();
+                let SurfaceGeom::Cylinder(cylinder) =
+                    transaction.store().get(face.surface).unwrap()
+                else {
+                    panic!("two-host role must retain its cylinder surface")
+                };
+                cylinder.frame().z()
+            });
+            assert!(axes[0].dot(axes[1]) < 0.0);
+            for key in [4, 5] {
+                let edge = transaction.store().get(edge_for_key(&output, key)).unwrap();
+                let scales = edge
+                    .fins
+                    .iter()
+                    .map(|fin| {
+                        transaction
+                            .store()
+                            .get(*fin)
+                            .unwrap()
+                            .pcurve
+                            .unwrap()
+                            .edge_to_pcurve()
+                            .scale()
+                    })
+                    .collect::<Vec<_>>();
+                let [first, second] = scales.as_slice() else {
+                    panic!("a shared ruling must retain exactly two pcurve lifts")
+                };
+                assert!(first * second < 0.0);
+            }
+            assert_eq!(
+                certify_two_host_axial_chain_shell(transaction.store(), output.shell(), None,)
+                    .unwrap(),
+                expected_positive(),
+            );
+            let report =
+                check_body_report(transaction.store(), output.body(), CheckLevel::Full).unwrap();
+            assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:#?}");
+            transaction
+                .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn two_host_antiparallel_orientation_and_incidence_tampers_fail_closed() {
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(
+            &antiparallel_two_host_axial_chain_union_input(Frame::world(), false),
+            TOLERANCE,
+        )
+        .unwrap();
+
+    let second_host = face_for_key(&output, 1);
+    let mut wrong_sense = transaction.store().clone();
+    wrong_sense.get_mut(second_host).unwrap().sense = Sense::Reversed;
+    assert_eq!(
+        certify_two_host_axial_chain_shell(&wrong_sense, output.shell(), None).unwrap(),
+        Some(ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            orientation: ShellOrientation::Invalid,
+        }),
+    );
+
+    let lower_second_arc = edge_for_key(&output, 2);
+    let mut wrong_incidence = transaction.store().clone();
+    let host_fin = wrong_incidence
+        .get(lower_second_arc)
+        .unwrap()
+        .fins
+        .iter()
+        .copied()
+        .find(|fin| {
+            let loop_id = wrong_incidence.get(*fin).unwrap().parent;
+            wrong_incidence.get(loop_id).unwrap().face == second_host
+        })
+        .unwrap();
+    let original_sense = wrong_incidence.get(host_fin).unwrap().sense;
+    wrong_incidence.get_mut(host_fin).unwrap().sense = original_sense.flipped();
+    assert_eq!(
+        certify_two_host_axial_chain_shell(&wrong_incidence, output.shell(), None).unwrap(),
+        None,
+    );
+}
+
+#[test]
 fn two_host_axial_chain_tampers_fail_closed() {
     let mut store = Store::new();
     let mut transaction = store.transaction().unwrap();
@@ -198,15 +302,11 @@ fn session_with_work(allowed: u64) -> kcore::operation::SessionPolicy {
     )
 }
 
-#[test]
-fn two_host_axial_chain_work_is_exact_and_inapplicable_path_is_free() {
+fn assert_exact_work_contract(input: AnalyticShellInput) {
     let mut store = Store::new();
     let mut transaction = store.transaction().unwrap();
     let output = transaction
-        .assemble_analytic_shell(
-            &two_host_axial_chain_union_input(Frame::world(), false),
-            TOLERANCE,
-        )
+        .assemble_analytic_shell(&input, TOLERANCE)
         .unwrap();
     let required = proof_work(transaction.store(), output.shell(), 2)
         .unwrap()
@@ -247,7 +347,24 @@ fn two_host_axial_chain_work_is_exact_and_inapplicable_path_is_free() {
         error.limit().map(|limit| limit.stage),
         Some(TWO_HOST_AXIAL_CHAIN_SHELL_WORK),
     );
+}
 
+#[test]
+fn two_host_axial_chain_work_is_exact_and_inapplicable_path_is_free() {
+    assert_exact_work_contract(two_host_axial_chain_union_input(Frame::world(), false));
+    assert_exact_work_contract(antiparallel_two_host_axial_chain_union_input(
+        Frame::world(),
+        false,
+    ));
+
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(
+            &two_host_axial_chain_union_input(Frame::world(), false),
+            TOLERANCE,
+        )
+        .unwrap();
     let mut inapplicable = transaction.store().clone();
     inapplicable
         .get_mut(output.shell())
