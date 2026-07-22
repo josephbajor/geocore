@@ -3,7 +3,10 @@
 //! Wall-time budget: less than 60 seconds as part of the `lifecycle` target.
 
 use super::*;
-use kernel::{BodyDistanceOutcome, BodyDistanceRequest, CertifiedBodyDistance};
+use kernel::{
+    BodyClashAssessment, BodyClashOutcome, BodyClashRequest, BodyClashVerdict, BodyDistanceOutcome,
+    BodyDistanceRequest, CertifiedBodyDistance,
+};
 
 fn certified_distance(
     part: &kernel::Part<'_>,
@@ -36,6 +39,56 @@ fn certified_distance(
     distance
 }
 
+fn assessed_clash(
+    part: &kernel::Part<'_>,
+    body_a: BodyId,
+    body_b: BodyId,
+    clearance: f64,
+) -> BodyClashAssessment {
+    let outcome = part
+        .body_clash(BodyClashRequest::new(
+            body_a.clone(),
+            body_b.clone(),
+            clearance,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert!(outcome.assessment().is_some());
+    assert!(outcome.refusal().is_none());
+    let BodyClashOutcome::Assessed {
+        assessment,
+        full_checks,
+    } = outcome
+    else {
+        panic!("Full-valid exact Plane/Cylinder bodies must admit clash assessment")
+    };
+    assert_eq!(assessment.bodies(), [body_a.clone(), body_b.clone()]);
+    assert_eq!(assessment.body_a(), body_a);
+    assert_eq!(assessment.body_b(), body_b);
+    assert_eq!(assessment.clearance().to_bits(), clearance.to_bits());
+    assert_eq!(assessment.distance().bodies(), [body_a, body_b]);
+    assert_eq!(
+        assessment.distance().upper_witness().distance().upper(),
+        assessment.distance().distance().upper()
+    );
+    assert_eq!(full_checks[0].body(), assessment.body_a());
+    assert_eq!(full_checks[1].body(), assessment.body_b());
+    assert!(
+        full_checks
+            .iter()
+            .all(|check| check.report().outcome() == CheckOutcome::Valid)
+    );
+    assessment
+}
+
+fn distance_bits(distance: &CertifiedBodyDistance) -> [u64; 2] {
+    [
+        distance.distance().lower().to_bits(),
+        distance.distance().upper().to_bits(),
+    ]
+}
+
 fn rigid_frame() -> Frame {
     Frame::new(
         Point3::new(10.0, -7.0, 3.0),
@@ -46,7 +99,7 @@ fn rigid_frame() -> Frame {
 }
 
 #[test]
-fn public_distance_certifies_block_and_cylinder_clearance_under_rigid_motion_and_swap() {
+fn public_distance_and_clash_certify_block_and_cylinder_thresholds_under_rigid_motion_and_swap() {
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
     let frame = rigid_frame();
@@ -90,10 +143,46 @@ fn public_distance_certifies_block_and_cylinder_clearance_under_rigid_motion_and
 
     let block_gap = certified_distance(&part, block_a.clone(), block_b.clone());
     let block_gap_repeat = certified_distance(&part, block_a.clone(), block_b.clone());
-    let block_gap_swapped = certified_distance(&part, block_b, block_a);
+    let block_gap_swapped = certified_distance(&part, block_b.clone(), block_a.clone());
     assert!(block_gap.distance().contains(3.0));
     assert_eq!(block_gap.distance(), block_gap_repeat.distance());
     assert_eq!(block_gap.distance(), block_gap_swapped.distance());
+
+    let lower = block_gap.distance().lower();
+    let upper = block_gap.distance().upper();
+    assert!(0.0 < lower);
+    assert!(lower < upper);
+    let interior_clearance = lower + (upper - lower) * 0.5;
+    assert!(lower < interior_clearance && interior_clearance < upper);
+
+    let clear = assessed_clash(&part, block_a.clone(), block_b.clone(), 0.0);
+    assert!(clear.clearance() < clear.distance().distance().lower());
+    assert_eq!(clear.verdict(), BodyClashVerdict::Clear);
+
+    let clashing = assessed_clash(&part, block_a.clone(), block_b.clone(), upper);
+    assert!(clashing.distance().distance().upper() <= clashing.clearance());
+    assert_eq!(clashing.verdict(), BodyClashVerdict::Clashing);
+
+    let indeterminate = assessed_clash(&part, block_a.clone(), block_b.clone(), interior_clearance);
+    let indeterminate_repeat =
+        assessed_clash(&part, block_a.clone(), block_b.clone(), interior_clearance);
+    let indeterminate_swapped =
+        assessed_clash(&part, block_b.clone(), block_a.clone(), interior_clearance);
+    assert_eq!(indeterminate.verdict(), BodyClashVerdict::Indeterminate);
+    assert!(indeterminate.distance().distance().lower() < indeterminate.clearance());
+    assert!(indeterminate.clearance() < indeterminate.distance().distance().upper());
+    assert_eq!(indeterminate_repeat.verdict(), indeterminate.verdict());
+    assert_eq!(indeterminate_swapped.verdict(), indeterminate.verdict());
+    assert_eq!(
+        distance_bits(indeterminate.distance()),
+        distance_bits(indeterminate_repeat.distance())
+    );
+    assert_eq!(
+        distance_bits(indeterminate.distance()),
+        distance_bits(indeterminate_swapped.distance())
+    );
+    assert_eq!(indeterminate.bodies(), [block_a.clone(), block_b.clone()]);
+    assert_eq!(indeterminate_swapped.bodies(), [block_b, block_a]);
 
     let radial_gap = certified_distance(&part, radial_block.clone(), cylinder.clone());
     let radial_gap_swapped = certified_distance(&part, cylinder, radial_block);
@@ -103,7 +192,7 @@ fn public_distance_certifies_block_and_cylinder_clearance_under_rigid_motion_and
 }
 
 #[test]
-fn public_distance_preserves_material_semantics_for_containment_and_a_boolean_cavity() {
+fn public_distance_and_clash_preserve_material_semantics_for_containment_and_a_boolean_cavity() {
     let mut fixture = block_cylinder_boolean_fixture(
         Frame::world(),
         [6.0, 6.0, 6.0],
@@ -118,6 +207,13 @@ fn public_distance_preserves_material_semantics_for_containment_and_a_boolean_ca
     };
     assert_eq!(contained.distance().lower(), 0.0);
     assert!(contained.distance().contains(0.0));
+    let contained_zero = {
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        assessed_clash(&part, fixture.left.clone(), fixture.right.clone(), 0.0)
+    };
+    assert_eq!(contained_zero.distance().distance().lower(), 0.0);
+    assert!(contained_zero.distance().distance().upper() > 0.0);
+    assert_eq!(contained_zero.verdict(), BodyClashVerdict::Indeterminate);
 
     let result = boolean_success(run_boolean(
         &mut fixture,
@@ -144,8 +240,10 @@ fn public_distance_preserves_material_semantics_for_containment_and_a_boolean_ca
         .body();
 
     let part = fixture.session.part(fixture.part.clone()).unwrap();
-    let cavity_gap = certified_distance(&part, cavity, inner);
+    let cavity_gap = certified_distance(&part, cavity.clone(), inner.clone());
     assert_eq!(cavity_gap.distance().lower(), 0.0);
     assert!(cavity_gap.distance().contains(0.5));
     assert!(cavity_gap.distance().upper().is_finite());
+    let cavity_proximity = assessed_clash(&part, cavity, inner, cavity_gap.distance().upper());
+    assert_eq!(cavity_proximity.verdict(), BodyClashVerdict::Clashing);
 }

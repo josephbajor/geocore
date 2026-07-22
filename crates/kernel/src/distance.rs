@@ -6,7 +6,9 @@
 //! containment, contact, or an unresolved near separation.  Callers that need
 //! that distinction must compose this query with classification or clash
 //! evidence. Enclosures include the fixed incidence envelope accepted by Full
-//! validation, even for topology without explicit tolerances.
+//! validation, even for topology without explicit tolerances. [`Part::body_clash`]
+//! derives a clearance-threshold verdict from the same certificate and report;
+//! it is not an overlap classifier.
 
 use kcore::operation::OperationScope;
 
@@ -59,6 +61,53 @@ impl BodyDistanceRequest {
     }
 }
 
+/// Typed request to assess a certified material-set clearance threshold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyClashRequest {
+    body_a: BodyId,
+    body_b: BodyId,
+    clearance: f64,
+    settings: OperationSettings,
+}
+
+impl BodyClashRequest {
+    /// Construct a request using default operation settings.
+    pub fn new(body_a: BodyId, body_b: BodyId, clearance: f64) -> Self {
+        Self {
+            body_a,
+            body_b,
+            clearance,
+            settings: OperationSettings::default(),
+        }
+    }
+
+    /// Replace contextual operation settings.
+    pub fn with_settings(mut self, settings: OperationSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// First operand body.
+    pub fn body_a(&self) -> BodyId {
+        self.body_a.clone()
+    }
+
+    /// Second operand body.
+    pub fn body_b(&self) -> BodyId {
+        self.body_b.clone()
+    }
+
+    /// Requested material-distance threshold, validated by [`Part::body_clash`].
+    pub const fn clearance(&self) -> f64 {
+        self.clearance
+    }
+
+    /// Contextual operation settings.
+    pub const fn settings(&self) -> &OperationSettings {
+        &self.settings
+    }
+}
+
 /// Request-relative operand named by body-distance refusal evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -67,6 +116,21 @@ pub enum BodyDistanceOperand {
     A,
     /// Second request operand.
     B,
+}
+
+/// Certified relationship between material-set distance and a clearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BodyClashVerdict {
+    /// The certified distance lower bound is strictly above the clearance.
+    Clear,
+    /// The certified distance upper bound is at or below the clearance.
+    ///
+    /// This proves only a threshold violation. It includes contact and near
+    /// clearance and does not by itself prove overlap or interference.
+    Clashing,
+    /// The certified distance enclosure straddles the clearance decision.
+    Indeterminate,
 }
 
 /// One topology-owned feasible boundary point in an upper-bound proof.
@@ -180,6 +244,59 @@ impl CertifiedBodyDistance {
     /// The pair is not asserted to minimize distance.
     pub const fn upper_witness(&self) -> &BodyDistanceUpperWitness {
         &self.upper_witness
+    }
+}
+
+/// Certified clearance assessment tied to the exact ordered body identities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyClashAssessment {
+    clearance: f64,
+    verdict: BodyClashVerdict,
+    distance: CertifiedBodyDistance,
+}
+
+impl BodyClashAssessment {
+    /// Canonical finite nonnegative threshold used by the assessment.
+    ///
+    /// Authored negative zero is retained by [`BodyClashRequest`] but is
+    /// canonicalized to positive zero here.
+    pub const fn clearance(&self) -> f64 {
+        self.clearance
+    }
+
+    /// Certified threshold relationship.
+    pub const fn verdict(&self) -> BodyClashVerdict {
+        self.verdict
+    }
+
+    /// Complete distance certificate consumed by this assessment.
+    pub const fn distance(&self) -> &CertifiedBodyDistance {
+        &self.distance
+    }
+
+    /// Certified material-set distance enclosure.
+    pub const fn enclosure(&self) -> ScalarEnclosure {
+        self.distance.distance()
+    }
+
+    /// Exact operand identities in `(A, B)` request order.
+    pub fn bodies(&self) -> [BodyId; 2] {
+        self.distance.bodies()
+    }
+
+    /// First request operand.
+    pub fn body_a(&self) -> BodyId {
+        self.distance.body_a()
+    }
+
+    /// Second request operand.
+    pub fn body_b(&self) -> BodyId {
+        self.distance.body_b()
+    }
+
+    /// Body named by a request-relative operand.
+    pub fn body(&self, operand: BodyDistanceOperand) -> BodyId {
+        self.distance.body(operand)
     }
 }
 
@@ -334,6 +451,66 @@ impl BodyDistanceOutcome {
     }
 }
 
+/// Full-check evidence paired with a clearance assessment or distance refusal.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BodyClashOutcome {
+    /// The distance certificate supports a threshold assessment.
+    Assessed {
+        /// Certified clearance assessment.
+        assessment: BodyClashAssessment,
+        /// Full checker evidence in `(A, B)` request order.
+        full_checks: [BodyCheckReport; 2],
+    },
+    /// The distance request was valid but outside the current proof boundary.
+    Refused {
+        /// Unchanged distance-refusal reason.
+        reason: BodyDistanceRefusal,
+        /// Full checker evidence in `(A, B)` request order.
+        full_checks: [BodyCheckReport; 2],
+    },
+}
+
+impl BodyClashOutcome {
+    /// Full checker reports retained in `(A, B)` request order.
+    pub const fn full_checks(&self) -> &[BodyCheckReport; 2] {
+        match self {
+            Self::Assessed { full_checks, .. } | Self::Refused { full_checks, .. } => full_checks,
+        }
+    }
+
+    /// Certified clearance assessment, if distance certification completed.
+    pub const fn assessment(&self) -> Option<&BodyClashAssessment> {
+        match self {
+            Self::Assessed { assessment, .. } => Some(assessment),
+            Self::Refused { .. } => None,
+        }
+    }
+
+    /// Typed distance refusal, if the proof failed closed.
+    pub const fn refusal(&self) -> Option<&BodyDistanceRefusal> {
+        match self {
+            Self::Assessed { .. } => None,
+            Self::Refused { reason, .. } => Some(reason),
+        }
+    }
+
+    /// Certified threshold relationship, when assessed.
+    pub const fn verdict(&self) -> Option<BodyClashVerdict> {
+        match self {
+            Self::Assessed { assessment, .. } => Some(assessment.verdict()),
+            Self::Refused { .. } => None,
+        }
+    }
+
+    /// Complete distance certificate consumed by the assessment.
+    pub const fn distance(&self) -> Option<&CertifiedBodyDistance> {
+        match self {
+            Self::Assessed { assessment, .. } => Some(assessment.distance()),
+            Self::Refused { .. } => None,
+        }
+    }
+}
+
 impl Part<'_> {
     /// Enclose the distance between two closed solid material sets in one
     /// operation scope.
@@ -353,36 +530,138 @@ impl Part<'_> {
             body_b,
             settings,
         } = request;
-        self.body(body_a.clone())?;
-        self.body(body_b.clone())?;
-        if body_a == body_b {
+        validate_body_pair(
+            self,
+            &body_a,
+            &body_b,
+            "body distance requires two distinct operand bodies",
+        )?;
+        run_body_distance_operation(self, [body_a, body_b], settings)
+    }
+
+    /// Assess a finite nonnegative clearance from one certified material-set
+    /// distance operation.
+    ///
+    /// Operand A is validated before B. Distinctness is then checked before
+    /// clearance validity, and clearance validity precedes settings or scope
+    /// construction. The query runs exactly the distance theorem's two Full
+    /// checks and analytic work in one scope and reuses their reports.
+    ///
+    /// [`BodyClashVerdict::Clashing`] proves only that the certified distance
+    /// is at or below the requested threshold. That includes contact and near
+    /// clearance and does not prove overlap or interference. In particular, a
+    /// zero lower bound never produces `Clashing` unless the upper bound also
+    /// lies at or below the threshold.
+    pub fn body_clash(
+        &self,
+        request: BodyClashRequest,
+    ) -> Result<OperationOutcome<BodyClashOutcome>> {
+        let BodyClashRequest {
+            body_a,
+            body_b,
+            clearance,
+            settings,
+        } = request;
+        validate_body_pair(
+            self,
+            &body_a,
+            &body_b,
+            "body clash requires two distinct operand bodies",
+        )?;
+        if !(clearance.is_finite() && clearance >= 0.0) {
             return Err(Error::Core {
                 source: kcore::error::Error::InvalidGeometry {
-                    reason: "body distance requires two distinct operand bodies",
+                    reason: "body clash clearance must be finite and nonnegative",
                 },
             });
         }
+        let clearance = if clearance == 0.0 { 0.0 } else { clearance };
+        Ok(
+            run_body_distance_operation(self, [body_a, body_b], settings)?
+                .map(|outcome| assess_clash_outcome(outcome, clearance)),
+        )
+    }
+}
 
-        let defaults = ktopo::body_distance::BodyDistanceBudgetProfile::v1_defaults();
-        let context = settings
-            .context(self.policy)?
-            .with_family_budget_defaults(defaults.clone());
-        let effective = context.effective_budget();
-        for required in defaults.limits() {
-            effective.require_limit(required.stage, required.resource, required.mode)?;
-        }
-
-        let mut scope = OperationScope::new(&context);
-        let lower = ktopo::body_distance::certify_body_distance_in_scope(
-            &self.state.store,
-            body_a.raw(),
-            body_b.raw(),
-            &mut scope,
-        );
-        let result = lower.map_err(Error::from).and_then(|outcome| {
-            adapt_outcome(&self.id, &self.state.store, [body_a, body_b], outcome)
+fn validate_body_pair(
+    part: &Part<'_>,
+    body_a: &BodyId,
+    body_b: &BodyId,
+    distinct_reason: &'static str,
+) -> Result<()> {
+    part.body(body_a.clone())?;
+    part.body(body_b.clone())?;
+    if body_a == body_b {
+        return Err(Error::Core {
+            source: kcore::error::Error::InvalidGeometry {
+                reason: distinct_reason,
+            },
         });
-        Ok(scope.finish_typed(result))
+    }
+    Ok(())
+}
+
+fn run_body_distance_operation(
+    part: &Part<'_>,
+    bodies: [BodyId; 2],
+    settings: OperationSettings,
+) -> Result<OperationOutcome<BodyDistanceOutcome>> {
+    let defaults = ktopo::body_distance::BodyDistanceBudgetProfile::v1_defaults();
+    let context = settings
+        .context(part.policy)?
+        .with_family_budget_defaults(defaults.clone());
+    let effective = context.effective_budget();
+    for required in defaults.limits() {
+        effective.require_limit(required.stage, required.resource, required.mode)?;
+    }
+
+    let mut scope = OperationScope::new(&context);
+    let lower = ktopo::body_distance::certify_body_distance_in_scope(
+        &part.state.store,
+        bodies[0].raw(),
+        bodies[1].raw(),
+        &mut scope,
+    );
+    let result = lower
+        .map_err(Error::from)
+        .and_then(|outcome| adapt_outcome(&part.id, &part.state.store, bodies, outcome));
+    Ok(scope.finish_typed(result))
+}
+
+fn assess_clash_outcome(outcome: BodyDistanceOutcome, clearance: f64) -> BodyClashOutcome {
+    match outcome {
+        BodyDistanceOutcome::Certified {
+            distance,
+            full_checks,
+        } => {
+            let enclosure = distance.distance();
+            let verdict = clash_verdict(enclosure.lower(), enclosure.upper(), clearance);
+            BodyClashOutcome::Assessed {
+                assessment: BodyClashAssessment {
+                    clearance,
+                    verdict,
+                    distance,
+                },
+                full_checks,
+            }
+        }
+        BodyDistanceOutcome::Refused {
+            reason,
+            full_checks,
+        } => BodyClashOutcome::Refused {
+            reason,
+            full_checks,
+        },
+    }
+}
+
+const fn clash_verdict(lower: f64, upper: f64, clearance: f64) -> BodyClashVerdict {
+    if lower > clearance {
+        BodyClashVerdict::Clear
+    } else if upper <= clearance {
+        BodyClashVerdict::Clashing
+    } else {
+        BodyClashVerdict::Indeterminate
     }
 }
 
@@ -533,16 +812,25 @@ fn adapt_refusal(
 mod tests {
     use super::*;
     use crate::{
-        BlockRequest, BudgetPlan, CheckOutcome, DiagnosticLevel, ExecutionPolicy, Frame, Kernel,
-        KernelError, NumericalPolicy, Point3, PolicyVersion, Session, SessionPolicy,
-        SessionPrecision, Tolerances, Vec3,
+        AccountingMode, BlockRequest, BudgetPlan, CheckOutcome, DiagnosticLevel, ErrorClass,
+        ExecutionPolicy, Frame, Kernel, KernelError, LimitSpec, NumericalPolicy, Point3,
+        PolicyVersion, ResourceKind, Session, SessionPolicy, SessionPrecision, Tolerances, Vec3,
     };
 
     fn add_block(session: &mut Session, part: &PartId, frame: Frame) -> BodyId {
+        add_block_with_extents(session, part, frame, [2.0, 2.0, 2.0])
+    }
+
+    fn add_block_with_extents(
+        session: &mut Session,
+        part: &PartId,
+        frame: Frame,
+        extents: [f64; 3],
+    ) -> BodyId {
         session
             .edit_part(part.clone())
             .unwrap()
-            .create_block(BlockRequest::new(frame, [2.0, 2.0, 2.0]))
+            .create_block(BlockRequest::new(frame, extents))
             .unwrap()
             .into_result()
             .unwrap()
@@ -714,5 +1002,321 @@ mod tests {
             Some(capability::ANALYTIC_BODY_DISTANCE)
         );
         assert_eq!(BodyDistanceRefusal::IndeterminateEnclosure.operand(), None);
+    }
+
+    #[test]
+    fn clash_verdict_uses_only_the_certified_endpoint_theorem() {
+        assert_eq!(clash_verdict(3.0, 4.0, 2.0), BodyClashVerdict::Clear);
+        assert_eq!(
+            clash_verdict(3.0, 4.0, 3.0),
+            BodyClashVerdict::Indeterminate
+        );
+        assert_eq!(
+            clash_verdict(3.0, 4.0, 3.5),
+            BodyClashVerdict::Indeterminate
+        );
+        assert_eq!(clash_verdict(3.0, 4.0, 4.0), BodyClashVerdict::Clashing);
+        assert_eq!(
+            clash_verdict(0.0, 1.0, 0.0),
+            BodyClashVerdict::Indeterminate,
+            "a zero lower bound alone must never imply clash"
+        );
+    }
+
+    #[test]
+    fn clash_reuses_one_distance_report_and_is_deterministic_under_swap() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let body_a = add_block(&mut session, &part_id, Frame::world());
+        let body_b = add_block(&mut session, &part_id, translated_frame(5.0));
+        let settings = OperationSettings::new().with_diagnostics(DiagnosticLevel::Summary, 4);
+        let authored = BodyClashRequest::new(body_a.clone(), body_b.clone(), -0.0)
+            .with_settings(settings.clone());
+        assert_eq!(authored.body_a(), body_a);
+        assert_eq!(authored.body_b(), body_b);
+        assert_eq!(authored.clearance().to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(authored.settings(), &settings);
+
+        let part = session.part(part_id).unwrap();
+        let direct = part
+            .body_distance(
+                BodyDistanceRequest::new(body_a.clone(), body_b.clone())
+                    .with_settings(settings.clone()),
+            )
+            .unwrap();
+        let clash = part.body_clash(authored).unwrap();
+        let repeated = part
+            .body_clash(
+                BodyClashRequest::new(body_a.clone(), body_b.clone(), -0.0)
+                    .with_settings(settings.clone()),
+            )
+            .unwrap();
+        let swapped = part
+            .body_clash(
+                BodyClashRequest::new(body_b.clone(), body_a.clone(), -0.0).with_settings(settings),
+            )
+            .unwrap();
+
+        assert_eq!(clash.report(), direct.report());
+        assert_eq!(repeated.report(), clash.report());
+        assert_eq!(swapped.report(), clash.report());
+        let distance_outcome = direct.result().unwrap();
+        let distance = distance_outcome.distance().unwrap();
+        let assessment = clash.result().unwrap().assessment().unwrap();
+        let repeated_assessment = repeated.result().unwrap().assessment().unwrap();
+        let swapped_assessment = swapped.result().unwrap().assessment().unwrap();
+        assert_eq!(assessment.clearance().to_bits(), 0.0_f64.to_bits());
+        assert_eq!(assessment.verdict(), BodyClashVerdict::Clear);
+        assert_eq!(assessment.enclosure(), distance.distance());
+        assert_eq!(assessment.distance(), distance);
+        assert_eq!(assessment.bodies(), [body_a.clone(), body_b.clone()]);
+        assert_eq!(assessment.body_a(), body_a);
+        assert_eq!(assessment.body_b(), body_b);
+        assert_eq!(assessment.body(BodyDistanceOperand::A), body_a);
+        assert_eq!(assessment.body(BodyDistanceOperand::B), body_b);
+        assert_eq!(
+            clash.result().unwrap().verdict(),
+            Some(BodyClashVerdict::Clear)
+        );
+        assert_eq!(clash.result().unwrap().distance(), Some(distance));
+        assert_eq!(clash.result().unwrap().refusal(), None);
+        assert_eq!(
+            clash.result().unwrap().full_checks(),
+            distance_outcome.full_checks()
+        );
+        assert_eq!(repeated_assessment, assessment);
+        assert_eq!(swapped_assessment.verdict(), assessment.verdict());
+        assert_eq!(swapped_assessment.enclosure(), assessment.enclosure());
+        assert_eq!(
+            swapped_assessment.bodies(),
+            [body_b.clone(), body_a.clone()]
+        );
+    }
+
+    #[test]
+    fn clash_forwards_distance_refusal_and_full_checks_unchanged() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let solid = add_block(&mut session, &part_id, Frame::world());
+        let non_solid = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let raw =
+                ktopo::make::acorn(edit.store_mut_for_test(), Point3::new(5.0, 0.0, 0.0)).unwrap();
+            BodyId::new(part_id.clone(), raw)
+        };
+        let part = session.part(part_id).unwrap();
+        let direct = part
+            .body_distance(BodyDistanceRequest::new(solid.clone(), non_solid.clone()))
+            .unwrap();
+        let clash = part
+            .body_clash(BodyClashRequest::new(solid, non_solid, 0.25))
+            .unwrap();
+        assert_eq!(clash.report(), direct.report());
+
+        let BodyDistanceOutcome::Refused {
+            reason: distance_reason,
+            full_checks: distance_checks,
+        } = direct.result().unwrap()
+        else {
+            panic!("non-solid distance operand must be refused")
+        };
+        let BodyClashOutcome::Refused {
+            reason: clash_reason,
+            full_checks: clash_checks,
+        } = clash.result().unwrap()
+        else {
+            panic!("distance refusal must remain a clash refusal")
+        };
+        assert_eq!(clash_reason, distance_reason);
+        assert_eq!(clash_checks, distance_checks);
+        assert_eq!(clash.result().unwrap().refusal(), Some(distance_reason));
+        assert_eq!(clash.result().unwrap().assessment(), None);
+        assert_eq!(clash.result().unwrap().verdict(), None);
+        assert_eq!(clash.result().unwrap().distance(), None);
+    }
+
+    #[test]
+    fn clash_preserves_distance_exact_n_and_n_minus_one_budget_boundary() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let body_a = add_block(&mut session, &part_id, Frame::world());
+        let body_b = add_block(&mut session, &part_id, translated_frame(5.0));
+        let part = session.part(part_id).unwrap();
+        let request = |allowed| {
+            BodyClashRequest::new(body_a.clone(), body_b.clone(), 0.0).with_settings(
+                OperationSettings::new().with_budget_overrides(
+                    BudgetPlan::new([LimitSpec::new(
+                        crate::BODY_DISTANCE_ANALYTIC_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        allowed,
+                    )])
+                    .unwrap(),
+                ),
+            )
+        };
+
+        let baseline = part
+            .body_clash(BodyClashRequest::new(body_a.clone(), body_b.clone(), 0.0))
+            .unwrap();
+        let consumed = baseline
+            .report()
+            .usage()
+            .iter()
+            .find(|usage| {
+                usage.stage == crate::BODY_DISTANCE_ANALYTIC_WORK
+                    && usage.resource == ResourceKind::Work
+            })
+            .expect("distance analytic stage was not charged")
+            .consumed;
+        assert!(consumed > 0);
+
+        let exact = part.body_clash(request(consumed)).unwrap();
+        assert!(exact.result().is_ok());
+        let denied = part.body_clash(request(consumed - 1)).unwrap();
+        let error = denied.result().unwrap_err();
+        assert_eq!(error.class(), ErrorClass::ResourceLimit);
+        let limit = error.limit().expect("resource failure lost its limit");
+        assert_eq!(limit.stage, crate::BODY_DISTANCE_ANALYTIC_WORK);
+        assert_eq!(limit.consumed, consumed);
+        assert_eq!(limit.allowed, consumed - 1);
+    }
+
+    #[test]
+    fn clash_identity_and_distinctness_precede_threshold_and_settings() {
+        let mut session = Kernel::new().create_session();
+        let receiving = session.create_part();
+        let first_wrong = session.create_part();
+        let second_wrong = session.create_part();
+        let body_a = add_block(&mut session, &first_wrong, Frame::world());
+        let body_b = add_block(&mut session, &second_wrong, translated_frame(5.0));
+
+        let result = session
+            .part(receiving.clone())
+            .unwrap()
+            .body_clash(BodyClashRequest::new(body_a, body_b.clone(), f64::NAN));
+        assert!(matches!(
+            result,
+            Err(KernelError::WrongPart { expected, actual })
+                if expected == receiving && actual == first_wrong
+        ));
+        let valid_a = add_block(&mut session, &receiving, Frame::world());
+        let result = session
+            .part(receiving.clone())
+            .unwrap()
+            .body_clash(BodyClashRequest::new(valid_a.clone(), body_b, f64::NAN));
+        assert!(matches!(
+            result,
+            Err(KernelError::WrongPart { expected, actual })
+                if expected == receiving && actual == second_wrong
+        ));
+        let result = session
+            .part(receiving.clone())
+            .unwrap()
+            .body_clash(BodyClashRequest::new(
+                valid_a.clone(),
+                valid_a.clone(),
+                f64::NAN,
+            ));
+        assert!(matches!(
+            result,
+            Err(KernelError::Core {
+                source: kcore::error::Error::InvalidGeometry {
+                    reason: "body clash requires two distinct operand bodies"
+                }
+            })
+        ));
+
+        let valid_b = add_block(&mut session, &receiving, translated_frame(5.0));
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            let result =
+                session
+                    .part(receiving.clone())
+                    .unwrap()
+                    .body_clash(BodyClashRequest::new(
+                        valid_b.clone(),
+                        valid_a.clone(),
+                        invalid,
+                    ));
+            assert!(matches!(
+                result,
+                Err(KernelError::Core {
+                    source: kcore::error::Error::InvalidGeometry {
+                        reason: "body clash clearance must be finite and nonnegative"
+                    }
+                })
+            ));
+        }
+
+        let strict_policy = SessionPolicy::new(
+            SessionPrecision::try_new(1.0e-6, 1.0e-11, 500.0).unwrap(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BudgetPlan::empty(),
+            PolicyVersion::V1,
+        );
+        let mut strict = Kernel::with_default_policy(strict_policy).create_session();
+        let strict_part = strict.create_part();
+        let valid_settings =
+            OperationSettings::new().with_tolerances(Tolerances::with_linear(1.0e-6).unwrap());
+        let (strict_a, strict_b) = {
+            let mut edit = strict.edit_part(strict_part.clone()).unwrap();
+            let first = edit
+                .create_block(
+                    BlockRequest::new(Frame::world(), [2.0, 2.0, 2.0])
+                        .with_settings(valid_settings.clone()),
+                )
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let second = edit
+                .create_block(
+                    BlockRequest::new(translated_frame(5.0), [2.0, 2.0, 2.0])
+                        .with_settings(valid_settings),
+                )
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (first, second)
+        };
+        let strict_view = strict.part(strict_part).unwrap();
+        assert!(matches!(
+            strict_view.body_clash(BodyClashRequest::new(
+                strict_a.clone(),
+                strict_b.clone(),
+                f64::NAN,
+            )),
+            Err(KernelError::Core {
+                source: kcore::error::Error::InvalidGeometry {
+                    reason: "body clash clearance must be finite and nonnegative"
+                }
+            })
+        ));
+        assert!(
+            strict_view
+                .body_clash(BodyClashRequest::new(strict_a, strict_b, 0.0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn zero_lower_bound_without_upper_threshold_proof_is_indeterminate() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let outer = add_block_with_extents(&mut session, &part_id, Frame::world(), [4.0, 4.0, 4.0]);
+        let inner = add_block_with_extents(&mut session, &part_id, Frame::world(), [2.0, 2.0, 2.0]);
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .body_clash(BodyClashRequest::new(outer, inner, 0.0))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let assessment = outcome.assessment().unwrap();
+        assert_eq!(assessment.enclosure().lower(), 0.0);
+        assert!(assessment.enclosure().upper() > 0.0);
+        assert_eq!(assessment.verdict(), BodyClashVerdict::Indeterminate);
     }
 }

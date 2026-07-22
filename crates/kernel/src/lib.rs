@@ -291,6 +291,7 @@ pub use classify::{
     RayParityWitness,
 };
 pub use distance::{
+    BodyClashAssessment, BodyClashOutcome, BodyClashRequest, BodyClashVerdict,
     BodyDistanceBoundaryWitness, BodyDistanceOperand, BodyDistanceOutcome, BodyDistanceRefusal,
     BodyDistanceRequest, BodyDistanceUpperWitness, CertifiedBodyDistance,
 };

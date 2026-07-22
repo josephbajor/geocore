@@ -89,11 +89,11 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    cap-crossing Unite and both ordered Subtract meanings alongside Intersect:
    the 4F/6E/4V and 9F/18E/12V results commit across both rigid frames/orders
    with analytic volume, deterministic X_T, and Fast self-import. Public
-   `body_properties` certifies outward volume, centroid, area, and inertia;
-   `body_distance` now Full-validates pairs of pure exact Plane/Cylinder solids
-   and encloses whole-material minimum distance from support bounds plus a
-   retained feasible pcurve-lift witness, with deterministic/refusal and exact
-   N/N-1 work. Next: certified clearance/clash; new booleans remain queued.)*
+   `body_properties` certifies volume/centroid/area/inertia; `body_distance`
+   Full-validates exact Plane/Cylinder solid pairs and encloses whole-material
+   distance with a retained feasible witness;
+   `body_clash` derives Clear/Clashing/Indeterminate clearance verdicts in the
+   same scope without treating zero lower bounds as interference. Next: resume general curved Boolean surface-pair breadth.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

@@ -26,7 +26,7 @@ boundary.
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy with independent pcurves, tolerant edges, transaction-owned checked Euler edits, deterministic journals, and pcurve-driven watertight tessellation. |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; boolean-ready results remain gated. |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic Parasolid XT (`.x_t`/`.x_b`) import for the supported subset plus a deterministic schema-13006 text writer for self-authored analytic solids, sheets, wires, and acorns. |
-| [`crates/kernel`](crates/kernel) | Supported native facade | Session/part lifecycle, opaque IDs/views, block/cylinder/profile-extrusion construction, rigid copy, certified Plane/Cylinder section graphs, mass properties and body-distance bounds, failure-atomic block/block and mixed Plane/Cylinder booleans, checking, tessellation, and typed X_T import/export without raw topology leakage. |
+| [`crates/kernel`](crates/kernel) | Supported native facade | Session/part lifecycle, opaque IDs/views, block/cylinder/profile-extrusion construction, rigid copy, certified Plane/Cylinder section graphs, mass properties, body-distance bounds and clearance/clash verdicts, failure-atomic block/block and mixed Plane/Cylinder booleans, checking, tessellation, and typed X_T import/export without raw topology leakage. |
 | [`examples/kernel-lifecycle`](examples/kernel-lifecycle) | Facade-only client | Executable application lifecycle with `kernel` as its only direct kernel dependency. |
 
 ### Facade quickstart

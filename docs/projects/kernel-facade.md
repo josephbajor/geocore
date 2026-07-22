@@ -279,7 +279,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Public `body_properties` returns outward volume/centroid/area/inertia for Full-valid exact Plane/Cylinder solids. Public `body_distance` retains ordered Full reports and returns a whole-material minimum-distance enclosure plus the feasible topology-owned pcurve/surface point pair proving its upper endpoint; primitive, rigid, containment, Boolean-cavity, refusal, deterministic-swap, and exact N/N-1 evidence are green. Clearance/clash is next; new booleans remain queued.
+- Public `body_properties` returns outward volume/centroid/area/inertia for Full-valid exact Plane/Cylinder solids. Public `body_distance` retains ordered Full reports and a feasible upper witness; `body_clash` maps that certificate in the same scope to Clear/Clashing/Indeterminate for a finite nonnegative clearance, without equating zero lower distance with interference. Primitive, rigid, containment, Boolean-cavity, refusal, deterministic-swap, and exact N/N-1 evidence are green. Broader curved Boolean surface-pair coverage is next.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor
