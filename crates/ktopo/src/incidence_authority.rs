@@ -8,8 +8,10 @@
 use crate::entity::{Edge, FaceId, FinId, LoopId, Sense};
 use crate::incidence::{
     IncidenceCertification, certify_edge_surface_incidence, certify_pcurve_incidence,
-    check_pcurve_incidence, check_pcurve_metadata,
+    certify_persistent_skew_pcurve_incidence, check_pcurve_incidence, check_pcurve_metadata,
+    precheck_persistent_skew_pcurve_incidence,
 };
+use crate::incidence::{PersistentSkewIncidence, PersistentSkewPcurvePrecheck};
 use crate::store::Store;
 
 /// Result of topology-owned whole-fin incidence validation.
@@ -75,6 +77,12 @@ pub fn certify_whole_fin_incidence(
         return WholeFinIncidence::Indeterminate;
     };
 
+    let persistent =
+        precheck_persistent_skew_pcurve_incidence(store, edge, face.surface, pcurve, tolerance);
+    if persistent == PersistentSkewPcurvePrecheck::Indeterminate {
+        return WholeFinIncidence::Indeterminate;
+    }
+
     if check_pcurve_metadata(store, edge, face.surface, face.domain, pcurve).is_err()
         || check_pcurve_incidence(
             store,
@@ -87,6 +95,20 @@ pub fn certify_whole_fin_incidence(
         .is_err()
     {
         return WholeFinIncidence::Indeterminate;
+    }
+    if persistent == PersistentSkewPcurvePrecheck::Admissible {
+        return match certify_persistent_skew_pcurve_incidence(
+            store,
+            edge,
+            face.surface,
+            pcurve,
+            tolerance,
+        ) {
+            PersistentSkewIncidence::Certified => WholeFinIncidence::Certified,
+            PersistentSkewIncidence::NotApplicable | PersistentSkewIncidence::Indeterminate => {
+                WholeFinIncidence::Indeterminate
+            }
+        };
     }
 
     if certify_edge_surface_incidence(store, edge_id, face.surface, tolerance).ok()

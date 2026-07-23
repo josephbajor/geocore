@@ -10,6 +10,15 @@
 use super::*;
 use crate::{Curve2dHandle, GeometryRef, SurfaceHandle};
 
+#[path = "skew_cylinder_branch_persistent_relationship.rs"]
+mod relationship;
+pub use relationship::{
+    PersistentSkewCylinderDirectedChartIntegralCertificate, PersistentSkewCylinderSpanRangeOrder,
+    PersistentSkewCylinderSpanRelationshipCertificate, PersistentSkewCylinderSpanRelationshipError,
+    PersistentSkewCylinderSpanRelationshipKind, PersistentSkewCylinderSpanRelationshipRequest,
+    certify_persistent_skew_cylinder_span_relationship,
+};
+
 const LOGICAL_RANGE: ParamRange = ParamRange { lo: 0.0, hi: 1.0 };
 
 /// Exact logical work represented by one persistent open-span proof.
@@ -54,6 +63,7 @@ pub struct PersistentSkewCylinderOpenSpanCertificate {
     endpoint_points: [Vec3; 2],
     residual_bounds: [f64; 2],
     required_edge_tolerance: f64,
+    directed_chart_integrals: [SkewCylinderBranchDirectedChartIntegral; 2],
 }
 
 impl PersistentSkewCylinderOpenSpanCertificate {
@@ -139,6 +149,12 @@ pub fn certify_persistent_skew_cylinder_open_span(
     let (carrier, pcurves, residual_bounds) =
         build_composite_evaluators(residual, root_corridors, parameter_map)?;
     let endpoint_points = orientation.orient_pair(physical_endpoint_points);
+    let directed_chart_integrals = certify_persistent_directed_chart_integrals(
+        residual,
+        root_corridors,
+        canonical_representatives,
+        orientation,
+    )?;
     let required_edge_tolerance = certify_required_edge_tolerance(
         residual,
         carrier,
@@ -156,7 +172,80 @@ pub fn certify_persistent_skew_cylinder_open_span(
         endpoint_points,
         residual_bounds,
         required_edge_tolerance,
+        directed_chart_integrals,
     })
+}
+
+fn certify_persistent_directed_chart_integrals(
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+    canonical_representatives: [f64; 2],
+    orientation: PersistentSkewCylinderOpenSpanOrientation,
+) -> Result<[SkewCylinderBranchDirectedChartIntegral; 2], IntersectionCertificateError> {
+    let guarded = residual.carrier_range();
+    let corridor_widths = [
+        positive_interval_width(canonical_representatives[0], guarded.lo)?,
+        positive_interval_width(guarded.hi, canonical_representatives[1])?,
+    ];
+    let mut integrals = residual.directed_chart_integrals;
+    for (corridor, width) in root_corridors.into_iter().zip(corridor_widths) {
+        for (aggregate, pcurve) in integrals.iter_mut().zip(corridor.corridor().pcurves()) {
+            accumulate_directed_chart_integral(aggregate, pcurve, width)?;
+        }
+    }
+    if orientation == PersistentSkewCylinderOpenSpanOrientation::Reversed {
+        for integral in &mut integrals {
+            integral.stored = negate_interval(integral.stored)?;
+            integral.source = negate_interval(integral.source)?;
+            integral.stored_ordinate_delta = negate_interval(integral.stored_ordinate_delta)?;
+            integral.source_ordinate_delta = negate_interval(integral.source_ordinate_delta)?;
+        }
+    }
+    Ok(integrals)
+}
+
+fn accumulate_directed_chart_integral(
+    aggregate: &mut SkewCylinderBranchDirectedChartIntegral,
+    pcurve: SkewCylinderBranchPcurveEnclosure,
+    width: Interval,
+) -> Result<(), IntersectionCertificateError> {
+    aggregate.stored = finite_interval(
+        aggregate.stored
+            + directed_line_integral_cell(pcurve.stored_uv(), pcurve.stored_derivative(), width)?,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    aggregate.source = finite_interval(
+        aggregate.source
+            + directed_line_integral_cell(pcurve.source_uv(), pcurve.source_derivative(), width)?,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    aggregate.stored_ordinate_delta =
+        finite_interval(aggregate.stored_ordinate_delta + pcurve.stored_derivative()[1] * width)
+            .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    aggregate.source_ordinate_delta =
+        finite_interval(aggregate.source_ordinate_delta + pcurve.source_derivative()[1] * width)
+            .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    Ok(())
+}
+
+fn directed_line_integral_cell(
+    uv: [Interval; 2],
+    derivative: [Interval; 2],
+    width: Interval,
+) -> Result<Interval, IntersectionCertificateError> {
+    finite_interval((uv[0] * derivative[1] - uv[1] * derivative[0]) * width)
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)
+}
+
+fn positive_interval_width(lo: f64, hi: f64) -> Result<Interval, IntersectionCertificateError> {
+    finite_interval(Interval::point(hi) - Interval::point(lo))
+        .filter(|width| width.lo() > 0.0)
+        .ok_or(IntersectionCertificateError::InvalidCarrierRange)
+}
+
+fn negate_interval(interval: Interval) -> Result<Interval, IntersectionCertificateError> {
+    finite_interval(Interval::point(-1.0) * interval)
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)
 }
 
 fn validate_composite_inputs(

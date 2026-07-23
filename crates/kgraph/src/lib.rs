@@ -89,8 +89,11 @@ pub use plane_cylinder_ruling::{
 };
 pub use skew_cylinder_branch::{
     PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PairedSkewCylinderBranchResidualCertificate,
-    PersistentSkewCylinderOpenSpanCarrier, PersistentSkewCylinderOpenSpanCertificate,
-    PersistentSkewCylinderOpenSpanOrientation, PersistentSkewCylinderOpenSpanPcurve,
+    PersistentSkewCylinderDirectedChartIntegralCertificate, PersistentSkewCylinderOpenSpanCarrier,
+    PersistentSkewCylinderOpenSpanCertificate, PersistentSkewCylinderOpenSpanOrientation,
+    PersistentSkewCylinderOpenSpanPcurve, PersistentSkewCylinderSpanRangeOrder,
+    PersistentSkewCylinderSpanRelationshipCertificate, PersistentSkewCylinderSpanRelationshipError,
+    PersistentSkewCylinderSpanRelationshipKind, PersistentSkewCylinderSpanRelationshipRequest,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
     SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
     SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchCarrier, SkewCylinderBranchGuardedEnd,
@@ -99,5 +102,5 @@ pub use skew_cylinder_branch::{
     SkewCylinderBranchTrace, SkewCylinderSheet, VerifiedSkewCylinderOpenSpanCurveDescriptor,
     certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
-    certify_persistent_skew_cylinder_open_span,
+    certify_persistent_skew_cylinder_open_span, certify_persistent_skew_cylinder_span_relationship,
 };

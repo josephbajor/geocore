@@ -250,6 +250,61 @@ struct PcurvePairIntervals {
     residual_bounds: [f64; 2],
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PcurvePairChartIntervals {
+    canonical: SkewCylinderBranchPcurveEnclosure,
+    opposite: SkewCylinderBranchPcurveEnclosure,
+    stored_root: RootJetIntervals,
+    source_root: RootJetIntervals,
+    stored_dual: [[Interval; 2]; 3],
+}
+
+pub(super) fn certify_directed_chart_integral_cell(
+    algebra: BranchAlgebra,
+    coefficients: CoefficientProof,
+    roots: CellRootEnclosures,
+    parameter: Interval,
+    cosine: Interval,
+    sine: Interval,
+    opposite_chart_window: Option<ParamRange>,
+) -> Result<[SkewCylinderBranchDirectedChartIntegral; 2], IntersectionCertificateError> {
+    let pair = enclose_pair_charts(
+        algebra,
+        coefficients,
+        roots,
+        parameter,
+        cosine,
+        sine,
+        opposite_chart_window,
+    )?;
+    let width = finite_interval(Interval::point(parameter.hi()) - Interval::point(parameter.lo()))
+        .filter(|width| width.hi() >= 0.0)
+        .map(|width| Interval::new(0.0, width.hi()))
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    Ok([
+        directed_chart_integral(pair.canonical, width)?,
+        directed_chart_integral(pair.opposite, width)?,
+    ])
+}
+
+fn directed_chart_integral(
+    pcurve: SkewCylinderBranchPcurveEnclosure,
+    width: Interval,
+) -> Result<SkewCylinderBranchDirectedChartIntegral, IntersectionCertificateError> {
+    let stored = directed_line_integral_cell(pcurve.stored_uv, pcurve.stored_derivative, width)?;
+    let source = directed_line_integral_cell(pcurve.source_uv, pcurve.source_derivative, width)?;
+    let stored_ordinate_delta = finite_interval(pcurve.stored_derivative[1] * width)
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    let source_ordinate_delta = finite_interval(pcurve.source_derivative[1] * width)
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    Ok(SkewCylinderBranchDirectedChartIntegral {
+        stored,
+        source,
+        stored_ordinate_delta,
+        source_ordinate_delta,
+    })
+}
+
 fn certify_interval(
     certificate: &PairedSkewCylinderBranchResidualCertificate,
     parameter: Interval,
@@ -302,6 +357,59 @@ fn enclose_pair(
             "skew Cylinder/Cylinder pcurve cell has no positive source/evaluator radicand margin",
         )
     })?;
+    let charts = enclose_pair_charts(
+        algebra,
+        coefficients,
+        roots,
+        parameter,
+        cosine,
+        sine,
+        Some(certificate.chart_windows[1]),
+    )?;
+    let PcurvePairChartIntervals {
+        canonical,
+        opposite,
+        stored_root,
+        source_root,
+        stored_dual,
+    } = charts;
+    let (carrier_box, residual_bounds) = certify_pair_metric_proof(
+        certificate,
+        algebra,
+        coefficients,
+        roots,
+        stored_root,
+        source_root,
+        stored_dual,
+        canonical,
+        opposite,
+        cosine,
+        sine,
+    )?;
+    Ok(PcurvePairIntervals {
+        canonical,
+        opposite,
+        carrier_box,
+        residual_bounds,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn enclose_pair_charts(
+    algebra: BranchAlgebra,
+    coefficients: CoefficientProof,
+    roots: CellRootEnclosures,
+    parameter: Interval,
+    cosine: Interval,
+    sine: Interval,
+    opposite_chart_window: Option<ParamRange>,
+) -> Result<PcurvePairChartIntervals, IntersectionCertificateError> {
+    // The aggregate pass runs before the one common opposite-chart lift is
+    // selected, so `None` deliberately accumulates the raw longitude. The
+    // caller applies that selected lift exactly once to the retained integral.
+    let longitude_offset = opposite_chart_window
+        .map(|_| algebra.longitude_offset)
+        .unwrap_or(0.0);
     let stored_root = root_jet(
         algebra.m,
         algebra.l,
@@ -351,14 +459,14 @@ fn enclose_pair(
     let stored_opposite = opposite_pcurve(
         stored_dual,
         Interval::point(algebra.e),
-        algebra.longitude_offset,
-        certificate.chart_windows[1],
+        longitude_offset,
+        opposite_chart_window,
     )?;
     let source_opposite = opposite_pcurve(
         source_dual,
         coefficients.e_true,
-        algebra.longitude_offset,
-        certificate.chart_windows[1],
+        longitude_offset,
+        opposite_chart_window,
     )?;
     let opposite = SkewCylinderBranchPcurveEnclosure {
         operand: 1,
@@ -376,25 +484,22 @@ fn enclose_pair(
             "skew Cylinder/Cylinder pcurve cell has no strict source/evaluator first-derivative margin",
         ));
     }
-    let (carrier_box, residual_bounds) = certify_pair_metric_proof(
-        certificate,
-        algebra,
-        coefficients,
-        roots,
+    Ok(PcurvePairChartIntervals {
+        canonical,
+        opposite,
         stored_root,
         source_root,
         stored_dual,
-        canonical,
-        opposite,
-        cosine,
-        sine,
-    )?;
-    Ok(PcurvePairIntervals {
-        canonical,
-        opposite,
-        carrier_box,
-        residual_bounds,
     })
+}
+
+fn directed_line_integral_cell(
+    uv: [Interval; 2],
+    derivative: [Interval; 2],
+    width: Interval,
+) -> Result<Interval, IntersectionCertificateError> {
+    finite_interval((uv[0] * derivative[1] - uv[1] * derivative[0]) * width)
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -450,6 +555,12 @@ fn certify_pair_metric_proof(
         ]
         .into_iter()
         .fold(1.0, f64::max),
+        directed_chart_integrals: [SkewCylinderBranchDirectedChartIntegral {
+            stored: Interval::point(0.0),
+            source: Interval::point(0.0),
+            stored_ordinate_delta: Interval::point(0.0),
+            source_ordinate_delta: Interval::point(0.0),
+        }; 2],
     };
     let second_residual = paired_residual_bound(algebra, proof).ok_or(
         IntersectionCertificateError::NonFiniteResidualBound {
@@ -619,7 +730,7 @@ fn opposite_pcurve(
     dual: [[Interval; 2]; 3],
     determinant: Interval,
     longitude_offset: f64,
-    longitude_window: ParamRange,
+    longitude_window: Option<ParamRange>,
 ) -> Result<([Interval; 2], [Interval; 2]), IntersectionCertificateError> {
     let normalized = [0, 1, 2].map(|axis| {
         dual[axis][0]
@@ -638,7 +749,9 @@ fn opposite_pcurve(
     }
     let longitude = finite_interval(longitude_interval(x, y) + Interval::point(longitude_offset))
         .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-    if longitude.lo() <= longitude_window.lo || longitude.hi() >= longitude_window.hi {
+    if longitude_window
+        .is_some_and(|window| longitude.lo() <= window.lo || longitude.hi() >= window.hi)
+    {
         return Err(unsupported(
             "skew Cylinder/Cylinder pcurve cell escapes the retained opposite longitude lift",
         ));

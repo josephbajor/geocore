@@ -44,10 +44,14 @@ pub use cells::{
 #[path = "skew_cylinder_branch_persistent.rs"]
 mod persistent;
 pub use persistent::{
-    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PersistentSkewCylinderOpenSpanCarrier,
+    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK,
+    PersistentSkewCylinderDirectedChartIntegralCertificate, PersistentSkewCylinderOpenSpanCarrier,
     PersistentSkewCylinderOpenSpanCertificate, PersistentSkewCylinderOpenSpanOrientation,
-    PersistentSkewCylinderOpenSpanPcurve, VerifiedSkewCylinderOpenSpanCurveDescriptor,
-    certify_persistent_skew_cylinder_open_span,
+    PersistentSkewCylinderOpenSpanPcurve, PersistentSkewCylinderSpanRangeOrder,
+    PersistentSkewCylinderSpanRelationshipCertificate, PersistentSkewCylinderSpanRelationshipError,
+    PersistentSkewCylinderSpanRelationshipKind, PersistentSkewCylinderSpanRelationshipRequest,
+    VerifiedSkewCylinderOpenSpanCurveDescriptor, certify_persistent_skew_cylinder_open_span,
+    certify_persistent_skew_cylinder_span_relationship,
 };
 
 #[cfg(test)]
@@ -382,6 +386,16 @@ impl SkewCylinderBranchTrace {
     }
 }
 
+/// Outward aggregate of one pcurve's directed chart integral and ordinate
+/// displacement in the retained source and evaluator constructions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct SkewCylinderBranchDirectedChartIntegral {
+    stored: Interval,
+    source: Interval,
+    stored_ordinate_delta: Interval,
+    source_ordinate_delta: Interval,
+}
+
 /// Whole-range paired residual proof for one finite skew-cylinder sheet.
 ///
 /// Private fields bind the procedural carrier, source-ordered pcurves, chart
@@ -398,6 +412,7 @@ pub struct PairedSkewCylinderBranchResidualCertificate {
     sheet: SkewCylinderSheet,
     chart_windows: [ParamRange; 2],
     boundary_graded_cells: bool,
+    directed_chart_integrals: [SkewCylinderBranchDirectedChartIntegral; 2],
 }
 
 impl PairedSkewCylinderBranchResidualCertificate {
@@ -440,6 +455,7 @@ impl PairedSkewCylinderBranchResidualCertificate {
     pub const fn swapped(mut self) -> Self {
         self.traces.swap(0, 1);
         self.residual_bounds.swap(0, 1);
+        self.directed_chart_integrals.swap(0, 1);
         self
     }
 }
@@ -542,6 +558,7 @@ fn certify_validated_branch(
         sheet: algebra.sheet,
         chart_windows: [ranges[0][0], ranges[1][0]],
         boundary_graded_cells: algebra.carrier_range != ranges[0][0],
+        directed_chart_integrals: proof.directed_chart_integrals,
     })
 }
 
@@ -557,6 +574,7 @@ struct SheetProof {
     max_y: f64,
     max_z: f64,
     max_intermediate: f64,
+    directed_chart_integrals: [SkewCylinderBranchDirectedChartIntegral; 2],
 }
 
 fn validate_inputs(
@@ -807,11 +825,19 @@ fn prove_branch_range(
     let mut exact_y_positive = true;
     let mut exact_y_negative = true;
     let mut exact_x_positive = true;
+    let zero_integral = SkewCylinderBranchDirectedChartIntegral {
+        stored: Interval::point(0.0),
+        source: Interval::point(0.0),
+        stored_ordinate_delta: Interval::point(0.0),
+        source_ordinate_delta: Interval::point(0.0),
+    };
+    let mut directed_chart_integrals = [zero_integral; 2];
     let boundary_graded = algebra.carrier_range != ranges[0][0];
 
     for index in 0..SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS {
         let lo = subrange::proof_cell_boundary(algebra.carrier_range, index, boundary_graded);
         let hi = subrange::proof_cell_boundary(algebra.carrier_range, index + 1, boundary_graded);
+        let parameter = Interval::new(lo, hi);
         let cosine = trig_interval(lo, hi, false);
         let sine = trig_interval(lo, hi, true);
         let roots = cell_root_enclosures(algebra, coefficient_proof, cosine, sine).ok_or_else(
@@ -821,6 +847,27 @@ fn prove_branch_range(
                 )
             },
         )?;
+        let cell_integrals = cells::certify_directed_chart_integral_cell(
+            algebra,
+            coefficient_proof,
+            roots,
+            parameter,
+            cosine,
+            sine,
+            None,
+        )?;
+        for (aggregate, cell) in directed_chart_integrals.iter_mut().zip(cell_integrals) {
+            aggregate.stored = finite_interval(aggregate.stored + cell.stored)
+                .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+            aggregate.source = finite_interval(aggregate.source + cell.source)
+                .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+            aggregate.stored_ordinate_delta =
+                finite_interval(aggregate.stored_ordinate_delta + cell.stored_ordinate_delta)
+                    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+            aggregate.source_ordinate_delta =
+                finite_interval(aggregate.source_ordinate_delta + cell.source_ordinate_delta)
+                    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+        }
         let v = roots.stored_v;
         if v.lo() <= ranges[0][1].lo || v.hi() >= ranges[0][1].hi {
             return Err(unsupported(
@@ -997,6 +1044,17 @@ fn prove_branch_range(
             "skew Cylinder/Cylinder source/evaluator longitude escapes its common strict chart window",
         )
     })?;
+    let longitude_offset_interval = Interval::point(longitude_offset);
+    directed_chart_integrals[1].stored = finite_interval(
+        directed_chart_integrals[1].stored
+            + longitude_offset_interval * directed_chart_integrals[1].stored_ordinate_delta,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    directed_chart_integrals[1].source = finite_interval(
+        directed_chart_integrals[1].source
+            + longitude_offset_interval * directed_chart_integrals[1].source_ordinate_delta,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
     Ok(SheetProof {
         carrier_box: Aabb3 {
             min: carrier_min,
@@ -1020,6 +1078,7 @@ fn prove_branch_range(
         max_y,
         max_z,
         max_intermediate,
+        directed_chart_integrals,
     })
 }
 

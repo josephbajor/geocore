@@ -1,16 +1,19 @@
 use super::assemble::AnalyticShellAssemblyError;
 use super::*;
-use crate::check::{CheckLevel, CheckOutcome, check_body_report};
+use crate::check::{CheckLevel, CheckOutcome, VerificationGapKind, check_body_report};
 use crate::entity::{
-    Body, Edge, EntityRef, Face, Fin, Loop, ParamMap1d, PcurveChart, Region, Sense, Shell, Vertex,
+    Body, Edge, EntityRef, Face, Fin, FinPcurve, Loop, ParamMap1d, PcurveChart, PcurveEndpointKind,
+    PcurveSeam, Region, SeamSide, Sense, Shell, SurfaceParameter, Vertex,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::store::Store;
-use crate::tolerance::ToleranceOrigin;
-use crate::transaction::{FullCommitRequirement, MutationKind};
+use crate::tolerance::{EntityTolerance, ToleranceOrigin};
+use crate::transaction::{FullCommitRequirement, MutationKind, Transaction};
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::tolerance::LINEAR_RESOLUTION;
+use kgeom::curve::Line;
 use kgeom::curve2d::Curve2d;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
@@ -159,6 +162,71 @@ fn scaffold_input_with_certificate(
     )
 }
 
+fn with_persistent_incidence_scaffold(
+    test: impl FnOnce(
+        &mut Transaction<'_>,
+        &AnalyticShellOutput,
+        PersistentSkewCylinderOpenSpanCertificate,
+    ),
+) {
+    let (input, certificate) = scaffold_input();
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(&input, 1.0e-12)
+        .unwrap();
+    test(&mut transaction, &output, certificate);
+    transaction.rollback().unwrap();
+}
+
+fn persistent_use(
+    store: &Store,
+    output: &AnalyticShellOutput,
+    source_slot: usize,
+) -> (
+    crate::entity::EdgeId,
+    crate::entity::FaceId,
+    crate::entity::LoopId,
+    crate::entity::FinId,
+) {
+    let edge_id = output.edges()[0].1;
+    let edge = store.get(edge_id).unwrap();
+    let descriptor = store
+        .curve(edge.curve().unwrap())
+        .unwrap()
+        .as_persistent_skew_cylinder_open_span()
+        .unwrap();
+    let source = descriptor.source_surfaces()[source_slot];
+    let fin_id = edge
+        .fins()
+        .iter()
+        .copied()
+        .find(|fin| {
+            let loop_id = store.get(*fin).unwrap().parent();
+            let face_id = store.get(loop_id).unwrap().face();
+            store.get(face_id).unwrap().surface() == source
+        })
+        .unwrap();
+    let loop_id = store.get(fin_id).unwrap().parent();
+    let face_id = store.get(loop_id).unwrap().face();
+    (edge_id, face_id, loop_id, fin_id)
+}
+
+fn assert_persistent_incidence(
+    store: &Store,
+    face: crate::entity::FaceId,
+    loop_: crate::entity::LoopId,
+    fin: crate::entity::FinId,
+    expected: WholeFinIncidence,
+) {
+    let edge = store.get(store.get(fin).unwrap().edge()).unwrap();
+    let effective = edge.tolerance().unwrap().value();
+    assert_eq!(
+        certify_whole_fin_incidence(store, face, loop_, fin, effective),
+        expected
+    );
+}
+
 #[test]
 fn persistent_skew_scaffold_is_fast_valid_bound_and_journaled() {
     let (input, certificate) = scaffold_input();
@@ -228,6 +296,12 @@ fn persistent_skew_scaffold_is_fast_valid_bound_and_journaled() {
     assert_eq!(full.outcome(), CheckOutcome::Indeterminate, "{full:#?}");
     assert!(full.faults.is_empty(), "{full:#?}");
     assert!(!full.gaps.is_empty());
+    assert!(
+        full.gaps
+            .iter()
+            .all(|gap| gap.kind != VerificationGapKind::PcurveSurfaceIncidence),
+        "{full:#?}"
+    );
 
     let edge_ids = output
         .edges()
@@ -267,6 +341,294 @@ fn persistent_skew_scaffold_is_fast_valid_bound_and_journaled() {
             .iter()
             .any(|mutation| mutation.entity == *edge && mutation.kind == MutationKind::Created)
     }));
+}
+
+#[test]
+fn persistent_skew_whole_fin_incidence_certifies_both_sources_and_all_fins() {
+    with_persistent_incidence_scaffold(|transaction, output, _| {
+        let mut per_source = [0_usize; 2];
+        for &(_, edge_id) in output.edges() {
+            let edge = transaction.store().get(edge_id).unwrap();
+            let descriptor = transaction
+                .store()
+                .curve(edge.curve().unwrap())
+                .unwrap()
+                .as_persistent_skew_cylinder_open_span()
+                .copied()
+                .unwrap();
+            for &fin_id in edge.fins() {
+                let loop_id = transaction.store().get(fin_id).unwrap().parent();
+                let face_id = transaction.store().get(loop_id).unwrap().face();
+                let surface = transaction.store().get(face_id).unwrap().surface();
+                let source_slot = descriptor
+                    .source_surfaces()
+                    .iter()
+                    .position(|candidate| *candidate == surface)
+                    .unwrap();
+                per_source[source_slot] += 1;
+                assert_persistent_incidence(
+                    transaction.store(),
+                    face_id,
+                    loop_id,
+                    fin_id,
+                    WholeFinIncidence::Certified,
+                );
+            }
+        }
+        assert_eq!(per_source, [2, 2]);
+
+        let (_, face, loop_, fin) = persistent_use(transaction.store(), output, 1);
+        let old = transaction.store().get(fin).unwrap().pcurve().unwrap();
+        transaction.assembly().get_mut(fin).unwrap().pcurve =
+            Some(old.with_chart(PcurveChart::shifted([-7, 0])));
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Certified,
+        );
+    });
+}
+
+#[test]
+fn persistent_skew_whole_fin_incidence_rejects_edge_endpoint_and_tolerance_tampers() {
+    with_persistent_incidence_scaffold(|transaction, output, certificate| {
+        let (edge_id, face, loop_, fin) = persistent_use(transaction.store(), output, 0);
+        let original = transaction.store().get(edge_id).unwrap().clone();
+
+        transaction.assembly().get_mut(edge_id).unwrap().bounds = Some((0.0_f64.next_up(), 1.0));
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+        *transaction.assembly().get_mut(edge_id).unwrap() = original.clone();
+
+        let line = transaction
+            .assembly()
+            .insert_curve(CurveGeom::Line(
+                Line::new(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
+        transaction.assembly().get_mut(edge_id).unwrap().curve = Some(line);
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+        *transaction.assembly().get_mut(edge_id).unwrap() = original.clone();
+
+        let vertices = original.vertices();
+        transaction.assembly().get_mut(edge_id).unwrap().vertices = [vertices[0], vertices[0]];
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+        *transaction.assembly().get_mut(edge_id).unwrap() = original.clone();
+
+        let vertex = vertices[0].unwrap();
+        let point = transaction.store().get(vertex).unwrap().point();
+        let original_point = *transaction.store().get(point).unwrap();
+        *transaction.assembly().get_mut(point).unwrap() = Point3::new(
+            original_point.x.next_up(),
+            original_point.y,
+            original_point.z,
+        );
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+        *transaction.assembly().get_mut(point).unwrap() = original_point;
+
+        transaction.assembly().get_mut(edge_id).unwrap().tolerance = None;
+        assert_eq!(
+            certify_whole_fin_incidence(
+                transaction.store(),
+                face,
+                loop_,
+                fin,
+                certificate.required_edge_tolerance().max(LINEAR_RESOLUTION),
+            ),
+            WholeFinIncidence::Indeterminate
+        );
+        *transaction.assembly().get_mut(edge_id).unwrap() = original.clone();
+
+        let required = certificate.required_edge_tolerance().max(LINEAR_RESOLUTION);
+        assert!(required > LINEAR_RESOLUTION);
+        transaction.assembly().get_mut(edge_id).unwrap().tolerance = Some(
+            EntityTolerance::operation(
+                LINEAR_RESOLUTION + (required - LINEAR_RESOLUTION) * 0.5,
+                "persistent-skew-incidence-test",
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            certify_whole_fin_incidence(transaction.store(), face, loop_, fin, required),
+            WholeFinIncidence::Indeterminate
+        );
+        *transaction.assembly().get_mut(edge_id).unwrap() = original;
+
+        transaction.assembly().remove(vertex).unwrap();
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+    });
+}
+
+#[test]
+fn persistent_skew_whole_fin_incidence_rejects_source_and_pcurve_tampers() {
+    with_persistent_incidence_scaffold(|transaction, output, certificate| {
+        let (_, face, loop_, fin) = persistent_use(transaction.store(), output, 1);
+        let source = transaction.store().get(face).unwrap().surface();
+        let old_use = transaction.store().get(fin).unwrap().pcurve().unwrap();
+
+        let alias = transaction
+            .assembly()
+            .insert_surface(SurfaceGeom::Cylinder(certificate.carrier().cylinders()[1]))
+            .unwrap();
+        transaction.assembly().get_mut(face).unwrap().surface = alias;
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+        transaction.assembly().get_mut(face).unwrap().surface = source;
+
+        let live_source = transaction.store().surface(source).unwrap().clone();
+        assert!(
+            transaction
+                .assembly()
+                .replace_surface(
+                    source,
+                    SurfaceGeom::Cylinder(certificate.carrier().cylinders()[0]),
+                )
+                .is_err()
+        );
+        assert_eq!(transaction.store().surface(source).unwrap(), &live_source);
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Certified,
+        );
+
+        let live_pcurve = transaction.store().pcurve(old_use.curve()).unwrap().clone();
+        assert!(
+            transaction
+                .assembly()
+                .replace_pcurve(old_use.curve(), Curve2dGeom::from(certificate.pcurves()[0]),)
+                .is_err()
+        );
+        assert_eq!(
+            transaction.store().pcurve(old_use.curve()).unwrap(),
+            &live_pcurve
+        );
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Certified,
+        );
+
+        let descriptor = transaction
+            .store()
+            .curve(
+                transaction
+                    .store()
+                    .get(transaction.store().get(fin).unwrap().edge())
+                    .unwrap()
+                    .curve()
+                    .unwrap(),
+            )
+            .unwrap()
+            .as_persistent_skew_cylinder_open_span()
+            .copied()
+            .unwrap();
+        let wrong_handle = FinPcurve::new(
+            descriptor.pcurves()[0],
+            old_use.range(),
+            old_use.edge_to_pcurve(),
+        )
+        .unwrap()
+        .with_chart(old_use.chart());
+        transaction.assembly().get_mut(fin).unwrap().pcurve = Some(wrong_handle);
+        assert_persistent_incidence(
+            transaction.store(),
+            face,
+            loop_,
+            fin,
+            WholeFinIncidence::Indeterminate,
+        );
+        transaction.assembly().get_mut(fin).unwrap().pcurve = Some(old_use);
+
+        let malformed = [
+            FinPcurve::new(
+                old_use.curve(),
+                ParamRange::new(0.0, 0.5),
+                old_use.edge_to_pcurve(),
+            )
+            .unwrap()
+            .with_chart(old_use.chart()),
+            FinPcurve::new(
+                old_use.curve(),
+                old_use.range(),
+                ParamMap1d::affine(1.0, 0.25).unwrap(),
+            )
+            .unwrap()
+            .with_chart(old_use.chart()),
+            old_use.with_endpoint_kinds([
+                PcurveEndpointKind::SurfaceSingularity,
+                PcurveEndpointKind::Regular,
+            ]),
+            old_use.with_chart(PcurveChart::shifted([0, 1])),
+            old_use.with_chart(PcurveChart::shifted([i32::MAX, 0])),
+            old_use.with_closure_winding([0, 0]),
+            old_use.with_seam(PcurveSeam::new(SurfaceParameter::U, SeamSide::Lower)),
+        ];
+        for candidate in malformed {
+            transaction.assembly().get_mut(fin).unwrap().pcurve = Some(candidate);
+            assert_persistent_incidence(
+                transaction.store(),
+                face,
+                loop_,
+                fin,
+                WholeFinIncidence::Indeterminate,
+            );
+        }
+        transaction.assembly().get_mut(fin).unwrap().pcurve = Some(old_use);
+
+        let residual = certificate.residual_bounds()[1];
+        assert!(residual > 0.0);
+        assert_eq!(
+            certify_whole_fin_incidence(
+                transaction.store(),
+                face,
+                loop_,
+                fin,
+                residual.next_down(),
+            ),
+            WholeFinIncidence::Indeterminate
+        );
+    });
 }
 
 #[test]

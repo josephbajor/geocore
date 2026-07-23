@@ -12,6 +12,10 @@ use crate::entity::{
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::graph_work::GraphQueryWork;
 use crate::store::Store;
+
+#[path = "incidence/persistent_skew.rs"]
+mod persistent_skew;
+
 use kcore::error::Result as KernelResult;
 use kcore::math;
 use kcore::operation::OperationPolicyError;
@@ -22,6 +26,11 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Degeneracy, Dir, Surface};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 use kgraph::{EvalLimits, SurfaceDerivativeOrder};
+pub(crate) use persistent_skew::{
+    PersistentSkewIncidence, PersistentSkewPcurvePrecheck,
+    certify_pcurve as certify_persistent_skew_pcurve_incidence,
+    precheck_pcurve as precheck_persistent_skew_pcurve_incidence,
+};
 
 const INCIDENCE_SAMPLES: usize = 5;
 
@@ -618,6 +627,13 @@ pub(crate) fn certify_edge_surface_incidence(
         return Ok(IncidenceCertification::Indeterminate);
     }
     let edge = store.get(edge_id)?;
+    match persistent_skew::certify_edge(store, edge, surface_id, tolerance) {
+        PersistentSkewIncidence::Certified => return Ok(IncidenceCertification::Certified),
+        PersistentSkewIncidence::Indeterminate => {
+            return Ok(IncidenceCertification::Indeterminate);
+        }
+        PersistentSkewIncidence::NotApplicable => {}
+    }
     let Some(curve_id) = edge.curve else {
         return Ok(IncidenceCertification::Indeterminate);
     };
@@ -666,6 +682,13 @@ pub(crate) fn certify_pcurve_incidence(
         return Ok(IncidenceCertification::Indeterminate);
     }
     let edge = store.get(edge_id)?;
+    match persistent_skew::certify_pcurve(store, edge, surface_id, pcurve_use, tolerance) {
+        PersistentSkewIncidence::Certified => return Ok(IncidenceCertification::Certified),
+        PersistentSkewIncidence::Indeterminate => {
+            return Ok(IncidenceCertification::Indeterminate);
+        }
+        PersistentSkewIncidence::NotApplicable => {}
+    }
     let Some(curve_id) = edge.curve else {
         return Ok(IncidenceCertification::Indeterminate);
     };
