@@ -19,6 +19,13 @@ use kgeom::vec::{Vec2, Vec3};
 
 use super::*;
 
+#[path = "skew_cylinder_branch_persistent_family_reissue.rs"]
+mod reissue;
+pub use reissue::{
+    PersistentSkewCylinderFiniteWindowFamilyReissue,
+    reissue_persistent_skew_cylinder_finite_window_family,
+};
+
 /// Schema version for strict-positive finite-window skew-cylinder families.
 pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_VERSION: u16 = 1;
 

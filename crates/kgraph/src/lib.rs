@@ -103,6 +103,7 @@ pub use skew_cylinder_branch::{
     PersistentSkewCylinderFiniteWindowEndpointProof,
     PersistentSkewCylinderFiniteWindowFamilyCertificate,
     PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    PersistentSkewCylinderFiniteWindowFamilyReissue,
     PersistentSkewCylinderFiniteWindowMemberCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput,
     PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
@@ -132,5 +133,5 @@ pub use skew_cylinder_branch::{
     certify_persistent_skew_cylinder_open_span_in_family,
     certify_persistent_skew_cylinder_span_relationship, classify_skew_cylinder_axial_bound,
     classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
-    exact_skew_cylinder_discriminant,
+    exact_skew_cylinder_discriminant, reissue_persistent_skew_cylinder_finite_window_family,
 };

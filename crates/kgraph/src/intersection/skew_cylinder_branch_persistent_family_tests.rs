@@ -1,5 +1,6 @@
 use super::*;
 
+use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::vec::{Point3, Vec3};
 
@@ -9,6 +10,7 @@ struct FamilyFixture {
     admission: SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     topology: SkewCylinderFiniteWindowTopologyCertificate,
     members: Vec<PersistentSkewCylinderFiniteWindowMemberInput>,
+    tolerance: f64,
 }
 
 fn perpendicular_pair(offset: f64) -> [Cylinder; 2] {
@@ -87,18 +89,20 @@ fn strict_positive(
 }
 
 fn family_fixture() -> FamilyFixture {
-    let cylinders = perpendicular_pair(0.0);
-    let ranges = formula_ranges();
+    family_fixture_for(perpendicular_pair(0.0), formula_ranges(), TEST_TOLERANCE)
+}
+
+fn family_fixture_for(
+    cylinders: [Cylinder; 2],
+    ranges: [[ParamRange; 2]; 2],
+    tolerance: f64,
+) -> FamilyFixture {
     let topology = finite_topology(cylinders, ranges, [0, 1]);
     let members = derived_open_members(&topology)
         .into_iter()
         .map(|span| {
             let residual = certify_paired_skew_cylinder_branch_subrange_residuals(
-                cylinders,
-                ranges,
-                span.range,
-                span.sheet,
-                TEST_TOLERANCE,
+                cylinders, ranges, span.range, span.sheet, tolerance,
             )
             .unwrap();
             let roots = span.root_longitude_intervals(ranges[0][0]).unwrap();
@@ -120,6 +124,7 @@ fn family_fixture() -> FamilyFixture {
         admission: strict_positive(cylinders),
         topology,
         members,
+        tolerance,
     }
 }
 
@@ -130,7 +135,7 @@ fn certify_fixture(
         fixture.admission,
         &fixture.topology,
         &fixture.members,
-        TEST_TOLERANCE,
+        fixture.tolerance,
     )
 }
 
@@ -265,4 +270,119 @@ fn membership_replay_rejects_another_members_evidence() {
         ),
         Err(IntersectionCertificateError::InvalidTraceFamily)
     );
+}
+
+#[test]
+fn complete_family_and_selected_composite_reissue_under_rigid_frames() {
+    let fixture = family_fixture();
+    let family = certify_fixture(&fixture).unwrap();
+    let input = fixture.members[0];
+    let canonical_endpoints = input.root_corridors.map(|corridor| {
+        let root = corridor.root_parameter();
+        input
+            .residual
+            .carrier()
+            .eval(0.5 * root.lo() + 0.5 * root.hi())
+    });
+
+    for placement in [
+        Frame::world().with_origin(Point3::new(3.0, -2.0, 1.0)),
+        Frame::new(
+            Point3::new(-1.25, 2.5, 0.75),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap(),
+    ] {
+        let transformed = family
+            .formula_cylinders()
+            .map(|cylinder| rigid_cylinder(cylinder, placement));
+        let reissue =
+            reissue_persistent_skew_cylinder_finite_window_family(family, transformed).unwrap();
+        assert_eq!(reissue.source_family(), family);
+        assert_eq!(reissue.certificate().formula_cylinders(), transformed);
+
+        for orientation in [
+            PersistentSkewCylinderOpenSpanOrientation::Forward,
+            PersistentSkewCylinderOpenSpanOrientation::Reversed,
+        ] {
+            let source = certify_persistent_skew_cylinder_open_span_in_family(
+                input.residual,
+                input.root_corridors,
+                canonical_endpoints,
+                orientation,
+                family.membership(0).unwrap(),
+            )
+            .unwrap();
+            let transformed_logical_endpoints = source
+                .endpoint_points()
+                .map(|point| placement.point_at(point.x, point.y, point.z));
+            let copied = reissue
+                .reissue_member(source, transformed_logical_endpoints)
+                .unwrap();
+            assert_eq!(copied.orientation(), orientation);
+            assert_eq!(copied.endpoint_points(), transformed_logical_endpoints);
+            assert_eq!(
+                copied.finite_window_family_membership().unwrap().family(),
+                reissue.certificate()
+            );
+            assert_eq!(
+                copied.residual_certificate().carrier().cylinders(),
+                transformed
+            );
+        }
+    }
+}
+
+#[test]
+fn reissue_refuses_a_member_from_another_complete_family() {
+    let fixture = family_fixture();
+    let family = certify_fixture(&fixture).unwrap();
+    let reissue =
+        reissue_persistent_skew_cylinder_finite_window_family(family, family.formula_cylinders())
+            .unwrap();
+    let other = family_fixture_for(
+        perpendicular_pair(0.0),
+        formula_ranges(),
+        2.0 * TEST_TOLERANCE,
+    );
+    let other_family = certify_fixture(&other).unwrap();
+    let input = other.members[0];
+    let endpoints = input.root_corridors.map(|corridor| {
+        let root = corridor.root_parameter();
+        input
+            .residual
+            .carrier()
+            .eval(0.5 * root.lo() + 0.5 * root.hi())
+    });
+    let source = certify_persistent_skew_cylinder_open_span_in_family(
+        input.residual,
+        input.root_corridors,
+        endpoints,
+        PersistentSkewCylinderOpenSpanOrientation::Forward,
+        other_family.membership(0).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        reissue.reissue_member(source, endpoints),
+        Err(IntersectionCertificateError::InvalidTraceFamily)
+    );
+}
+
+fn rigid_cylinder(cylinder: Cylinder, placement: Frame) -> Cylinder {
+    let frame = cylinder.frame();
+    let map_vector = |vector: Vec3| {
+        placement.x() * vector.x + placement.y() * vector.y + placement.z() * vector.z
+    };
+    Cylinder::new(
+        Frame::new(
+            placement.point_at(frame.origin().x, frame.origin().y, frame.origin().z),
+            map_vector(frame.z()),
+            map_vector(frame.x()),
+        )
+        .unwrap(),
+        cylinder.radius(),
+    )
+    .unwrap()
 }

@@ -1176,16 +1176,7 @@ fn certify_cap_slab(
     for &(cap, tag, bound) in &cap_tags {
         if !tagged_bound_matches_window(tag, bound, source_slot, source_windows[source_slot][1])
             || !certified_parallel(cap.plane.frame().z(), cylinder.frame().z())
-        {
-            return Ok(None);
-        }
-        let expected_bound = bound;
-        let expected_origin = cylinder.frame().point_at(0.0, 0.0, expected_bound);
-        if exact_plane_side(
-            cylinder.frame().z(),
-            cap.plane.frame().origin(),
-            expected_origin,
-        ) != Some(PredicateOrientation::Zero)
+            || !certified_axial_plane_alignment(cylinder, cap.plane, bound)
         {
             return Ok(None);
         }
@@ -1276,6 +1267,62 @@ fn tagged_persistent_vertices(
         }
     }
     Ok(output.try_into().ok())
+}
+
+/// Certify the semantic axial-plane relation after rigid-map roundoff.
+///
+/// Exact equality remains the first path. A rigid point/vector map followed
+/// by `Frame` normalization uses a fixed chain of binary64 products, sums,
+/// square roots, and divisions. The factor below conservatively encloses that
+/// chain plus this replay's point construction; it scales only with the live
+/// operands and is independent of session/model tolerance. Endpoint tags,
+/// bit-identical live vertices, cap incidence, and parallel support remain
+/// separate mandatory authority.
+fn certified_axial_plane_alignment(
+    cylinder: kgeom::surface::Cylinder,
+    plane: kgeom::surface::Plane,
+    bound: f64,
+) -> bool {
+    const RIGID_FRAME_ROUNDOFF_OPERATIONS: f64 = 256.0;
+
+    if !bound.is_finite() {
+        return false;
+    }
+    let axis = cylinder.frame().z();
+    let cylinder_origin = cylinder.frame().origin();
+    let cap_origin = plane.frame().origin();
+    let expected = cylinder.frame().point_at(0.0, 0.0, bound);
+    if exact_plane_side(axis, cap_origin, expected) == Some(PredicateOrientation::Zero) {
+        return true;
+    }
+    let residual = [axis.x, axis.y, axis.z]
+        .into_iter()
+        .zip([
+            cap_origin.x - expected.x,
+            cap_origin.y - expected.y,
+            cap_origin.z - expected.z,
+        ])
+        .fold(Interval::point(0.0), |sum, (component, delta)| {
+            sum + Interval::point(component) * Interval::point(delta)
+        });
+    let scale = 1.0
+        + bound.abs()
+        + [axis.x, axis.y, axis.z]
+            .into_iter()
+            .zip([
+                (cap_origin.x, cylinder_origin.x),
+                (cap_origin.y, cylinder_origin.y),
+                (cap_origin.z, cylinder_origin.z),
+            ])
+            .map(|(component, (cap, source))| {
+                component.abs() * (cap.abs() + source.abs() + component.abs() * bound.abs())
+            })
+            .sum::<f64>();
+    let roundoff = RIGID_FRAME_ROUNDOFF_OPERATIONS * f64::EPSILON * scale.max(f64::MIN_POSITIVE);
+    finite_interval(residual)
+        && roundoff.is_finite()
+        && roundoff <= LINEAR_RESOLUTION
+        && interval_abs_upper(residual) <= roundoff
 }
 
 fn exact_plane_side(normal: Vec3, point: Point3, origin: Point3) -> Option<PredicateOrientation> {

@@ -68,10 +68,12 @@ pub use persistent_family::{
     PersistentSkewCylinderAxialRootEventInput, PersistentSkewCylinderFiniteWindowEndpointProof,
     PersistentSkewCylinderFiniteWindowFamilyCertificate,
     PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    PersistentSkewCylinderFiniteWindowFamilyReissue,
     PersistentSkewCylinderFiniteWindowMemberCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput,
     PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
     PersistentSkewCylinderRootInsideSide, certify_persistent_skew_cylinder_finite_window_family,
+    reissue_persistent_skew_cylinder_finite_window_family,
 };
 
 #[path = "skew_cylinder_axial_bound.rs"]

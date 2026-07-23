@@ -1350,7 +1350,9 @@ impl PartEdit<'_> {
     /// reissues their whole-range certificates. Operation-generated verified
     /// analytic/NURBS and transmitted descriptors are admitted under their
     /// graph-validated direct and bounded offset-source contracts when the
-    /// lower layer can rerun their public original-source certifier.
+    /// lower layer can rerun their public original-source certifier. Family-
+    /// bound persistent skew-cylinder spans are admitted only when their live
+    /// cylinders and pcurves still match the complete finite-window proof.
     pub fn copy_body_rigid(
         &mut self,
         request: CopyBodyRequest,
@@ -1493,6 +1495,9 @@ fn rigid_copy_curve_is_reissuable(
             )?,
         );
     }
+    if let Some(intersection) = descriptor.as_persistent_skew_cylinder_open_span() {
+        return persistent_skew_cylinder_sources_are_rigid_copy_supported(store, intersection);
+    }
     let Some(intersection) = descriptor.as_intersection() else {
         return Ok(descriptor.as_verified_nurbs_intersection().is_some()
             || descriptor.as_transmitted_intersection().is_some());
@@ -1520,6 +1525,33 @@ fn rigid_copy_curve_is_reissuable(
             )
         }
     })
+}
+
+fn persistent_skew_cylinder_sources_are_rigid_copy_supported(
+    store: &ktopo::store::Store,
+    descriptor: &kgraph::VerifiedSkewCylinderOpenSpanCurveDescriptor,
+) -> kcore::error::Result<bool> {
+    let certificate = descriptor.certificate();
+    let Some(membership) = certificate.finite_window_family_membership() else {
+        return Ok(false);
+    };
+    let expected_cylinders = membership.family().source_cylinders();
+    let expected_pcurves = certificate.pcurves();
+    let source_surfaces = descriptor.source_surfaces();
+    let source_pcurves = descriptor.pcurves();
+    for index in 0..2 {
+        if store.get(source_surfaces[index])?.as_cylinder().copied()
+            != Some(expected_cylinders[index])
+            || store
+                .get(source_pcurves[index])?
+                .as_persistent_skew_cylinder_open_span()
+                .copied()
+                != Some(expected_pcurves[index])
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // Keep this facade preflight synchronized with ktopo's private body-copy

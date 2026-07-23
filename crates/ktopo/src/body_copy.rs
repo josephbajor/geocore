@@ -39,6 +39,9 @@ use kgraph::{
 };
 use std::collections::HashMap;
 
+#[path = "body_copy/persistent_skew.rs"]
+mod persistent_skew;
+
 /// Failure to copy a complete body under a rigid placement.
 ///
 /// Existing topology, input, and store failures remain kernel errors. Graph
@@ -160,6 +163,7 @@ struct Copier<'a> {
     curves: HashMap<CurveId, CurveId>,
     surfaces: HashMap<SurfaceId, SurfaceId>,
     pcurves: HashMap<Curve2dId, Curve2dId>,
+    persistent_skew_families: Vec<kgraph::PersistentSkewCylinderFiniteWindowFamilyReissue>,
     shells: HashMap<ShellId, ShellId>,
     shell_order: Vec<ShellId>,
     loops: HashMap<LoopId, LoopId>,
@@ -183,6 +187,7 @@ pub(crate) fn copy_body_rigid(
         curves: HashMap::new(),
         surfaces: HashMap::new(),
         pcurves: HashMap::new(),
+        persistent_skew_families: Vec::new(),
         shells: HashMap::new(),
         shell_order: Vec::new(),
         loops: HashMap::new(),
@@ -391,6 +396,9 @@ impl Copier<'_> {
                 intersection.certificate(),
             );
         }
+        if let CurveGeom::PersistentSkewCylinderOpenSpan(intersection) = &descriptor {
+            return self.copy_persistent_skew_cylinder_open_span(source, intersection);
+        }
         let transformed = match descriptor {
             CurveGeom::Line(line) => CurveGeom::Line(Line::new(
                 self.checked_point(line.origin())?,
@@ -419,6 +427,7 @@ impl Copier<'_> {
             CurveGeom::TransmittedIntersection(_) | CurveGeom::TransmittedNurbsIntersection(_) => {
                 unreachable!("handled above")
             }
+            CurveGeom::PersistentSkewCylinderOpenSpan(_) => unreachable!("handled above"),
             _ => {
                 return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "rigid body copy does not support this curve descriptor",
@@ -1169,7 +1178,13 @@ impl Copier<'_> {
         if let Some(&curve) = self.pcurves.get(&source) {
             return Ok(curve);
         }
-        let curve = self.store.insert_pcurve(self.store.get(source)?.clone())?;
+        let descriptor = self.store.get(source)?.clone();
+        if descriptor.as_persistent_skew_cylinder_open_span().is_some() {
+            return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
+                reason: "persistent skew-cylinder pcurves require composite certificate reissuance",
+            }));
+        }
+        let curve = self.store.insert_pcurve(descriptor)?;
         self.pcurves.insert(source, curve);
         self.derived(EntityRef::Curve2d(curve), EntityRef::Curve2d(source));
         Ok(curve)

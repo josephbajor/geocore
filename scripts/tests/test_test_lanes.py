@@ -89,7 +89,7 @@ class ClassificationTests(unittest.TestCase):
                 self.inventory.standard_targets
             )
         )
-        self.assertEqual(len(self.inventory.fast_smoke_targets), 14)
+        self.assertEqual(len(self.inventory.fast_smoke_targets), 15)
         self.assertEqual(
             len(self.inventory.standard_targets), EXPECTED_STANDARD_TARGET_COUNT
         )
@@ -107,7 +107,7 @@ class ClassificationTests(unittest.TestCase):
     def test_listing_is_stable_and_names_both_groups(self) -> None:
         first = format_inventory(self.inventory)
         self.assertEqual(first, format_inventory(self.inventory))
-        self.assertIn("fast smoke integration targets (14):", first)
+        self.assertIn("fast smoke integration targets (15):", first)
         self.assertIn("standard kxt targets retained (8):", first)
         self.assertIn("kxt::read", first)
         self.assertIn(

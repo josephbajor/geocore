@@ -2,6 +2,7 @@ use super::*;
 use crate::entity::{BodyId, RegionKind};
 use crate::make::block;
 use kgeom::frame::Frame;
+use kgeom::surface::{Cylinder, Plane};
 
 fn session_with_limit(allowed: u64) -> kcore::operation::SessionPolicy {
     let budget = BudgetPlan::new([LimitSpec::new(
@@ -203,6 +204,39 @@ fn slab_tags_and_bounds_are_exact_and_source_specific() {
         window,
     ));
     assert!(!tagged_bound_matches_window(other_upper, 3.0, 0, window));
+}
+
+#[test]
+fn axial_plane_alignment_accepts_rigid_roundoff_but_rejects_authored_drift() {
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let bound = 2.0_f64;
+    let exact = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, bound)));
+    let one_ulp = Plane::new(Frame::world().with_origin(Point3::new(
+        0.0,
+        0.0,
+        f64::from_bits(bound.to_bits() + 1),
+    )));
+    let outside = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, bound + 1.0e-10)));
+    let large_cylinder = Cylinder::new(
+        Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0e8)),
+        1.0,
+    )
+    .unwrap();
+    let large_expected = 1.0e8 + bound;
+    let oversized_corridor = Plane::new(Frame::world().with_origin(Point3::new(
+        0.0,
+        0.0,
+        f64::from_bits(large_expected.to_bits() + 1),
+    )));
+
+    assert!(certified_axial_plane_alignment(cylinder, exact, bound));
+    assert!(certified_axial_plane_alignment(cylinder, one_ulp, bound));
+    assert!(!certified_axial_plane_alignment(cylinder, outside, bound));
+    assert!(!certified_axial_plane_alignment(
+        large_cylinder,
+        oversized_corridor,
+        bound,
+    ));
 }
 
 #[test]
