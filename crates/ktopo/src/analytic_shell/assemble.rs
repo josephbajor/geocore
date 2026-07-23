@@ -492,6 +492,10 @@ impl Transaction<'_> {
                 AnalyticEdgeDeclaration::Bounded(edge) => {
                     if let Some(source) = edge.source() {
                         self.record_derived_from(result, source);
+                    } else if let Some(sources) = edge.derived_sources() {
+                        for source in sources {
+                            self.record_derived_from(result, source);
+                        }
                     }
                 }
                 AnalyticEdgeDeclaration::Closed(edge) => {

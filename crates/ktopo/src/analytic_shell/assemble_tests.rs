@@ -559,6 +559,114 @@ fn endpoint_free_edge_multi_source_derivation_preserves_caller_source_order() {
 }
 
 #[test]
+fn bounded_edge_multi_source_derivation_preserves_caller_source_order() {
+    fn assemble(reversed: bool) -> Vec<LineageEvent> {
+        let mut store = Store::new();
+        let source_body = make::cylinder(&mut store, &Frame::world(), 1.0, 1.0).unwrap();
+        let source_faces = store.faces_of_body(source_body).unwrap();
+        let ordered = if reversed {
+            [source_faces[1], source_faces[0]]
+        } else {
+            [source_faces[0], source_faces[1]]
+        };
+        let sources = [EntityRef::Face(ordered[0]), EntityRef::Face(ordered[1])];
+        let mut input = half_cylinder_input();
+        input.edges[0] = input.edges[0].with_derived_sources(sources);
+
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&input, 1.0e-12)
+            .unwrap();
+        let result = EntityRef::Edge(
+            output
+                .edges()
+                .iter()
+                .find_map(|(key, edge)| (key == &input.edges[0].key()).then_some(*edge))
+                .unwrap(),
+        );
+        let journal = transaction.commit_checked(&[output.body()]).unwrap();
+        assert_eq!(
+            journal.lineage(),
+            [
+                LineageEvent::DerivedFrom {
+                    derived: result,
+                    source: sources[0],
+                },
+                LineageEvent::DerivedFrom {
+                    derived: result,
+                    source: sources[1],
+                },
+            ]
+        );
+        journal.lineage().to_vec()
+    }
+
+    let forward = assemble(false);
+    assert_eq!(forward, assemble(false));
+    assert_ne!(forward, assemble(true));
+}
+
+#[test]
+fn invalid_bounded_edge_multi_source_derivation_refuses_before_any_allocation() {
+    fn assert_refused(
+        store: &mut Store,
+        input: &super::AnalyticShellInput,
+        expected: impl FnOnce(&AnalyticShellPlanError) -> bool,
+    ) {
+        let before = counts(store);
+        let mut transaction = store.transaction().unwrap();
+        let error = transaction
+            .assemble_analytic_shell(input, 1.0e-12)
+            .unwrap_err();
+        let AnalyticShellAssemblyError::Preflight(error) = error else {
+            panic!("expected allocation-free preflight refusal")
+        };
+        assert!(expected(&error), "unexpected preflight error: {error:?}");
+        assert_eq!(counts(transaction.store()), before);
+        transaction.rollback().unwrap();
+    }
+
+    let mut store = Store::new();
+    let source_body = make::cylinder(&mut store, &Frame::world(), 1.0, 1.0).unwrap();
+    let source_faces = store.faces_of_body(source_body).unwrap();
+    let sources = [
+        EntityRef::Face(source_faces[0]),
+        EntityRef::Face(source_faces[1]),
+    ];
+
+    let mut conflict = half_cylinder_input();
+    conflict.edges[0] = conflict.edges[0]
+        .with_source(sources[0])
+        .with_derived_sources(sources);
+    assert_refused(&mut store, &conflict, |error| {
+        matches!(error, AnalyticShellPlanError::ConflictingEdgeLineage(_))
+    });
+
+    let mut duplicate = half_cylinder_input();
+    duplicate.edges[0] = duplicate.edges[0].with_derived_sources([sources[0], sources[0]]);
+    assert_refused(&mut store, &duplicate, |error| {
+        matches!(error, AnalyticShellPlanError::InvalidEdgeDerivedLineage(_))
+    });
+
+    let stale_face = {
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&full_cylinder_input(), 1.0e-12)
+            .unwrap();
+        let face = output.faces()[0].1;
+        transaction.rollback().unwrap();
+        EntityRef::Face(face)
+    };
+    let mut stale = half_cylinder_input();
+    stale.edges[0] = stale.edges[0].with_derived_sources([sources[0], stale_face]);
+    assert_refused(
+        &mut store,
+        &stale,
+        |error| matches!(error, AnalyticShellPlanError::StaleLineage(source) if *source == stale_face),
+    );
+}
+
+#[test]
 fn invalid_endpoint_free_edge_multi_source_derivation_refuses_before_any_allocation() {
     fn assert_refused(
         store: &mut Store,
@@ -830,6 +938,25 @@ fn invalid_binary_edge_split_metadata_refuses_before_allocation() {
         assert_eq!(counts(transaction.store()), before);
         transaction.rollback().unwrap();
     }
+
+    let mut bounded_cross_declaration_conflict = half_cylinder_input();
+    bounded_cross_declaration_conflict.edges[0] = bounded_cross_declaration_conflict.edges[0]
+        .with_split_lineage(source_edge, AnalyticEdgeSplitPiece::First);
+    bounded_cross_declaration_conflict.edges[1] = bounded_cross_declaration_conflict.edges[1]
+        .with_split_lineage(source_edge, AnalyticEdgeSplitPiece::Second);
+    let conflict_key = bounded_cross_declaration_conflict.edges[2].key();
+    bounded_cross_declaration_conflict.edges[2] = bounded_cross_declaration_conflict.edges[2]
+        .with_derived_sources([source_edge, source_face]);
+    let before = counts(&store);
+    let mut transaction = store.transaction().unwrap();
+    assert!(matches!(
+        transaction.assemble_analytic_shell(&bounded_cross_declaration_conflict, 1.0e-12),
+        Err(AnalyticShellAssemblyError::Preflight(
+            AnalyticShellPlanError::ConflictingEdgeLineage(key)
+        )) if key == conflict_key
+    ));
+    assert_eq!(counts(transaction.store()), before);
+    transaction.rollback().unwrap();
 
     let mut conflicting = half_cylinder_input();
     conflicting.edges[0] = conflicting.edges[0]
