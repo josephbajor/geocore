@@ -45,6 +45,11 @@ use kgraph::{
 #[path = "bounded_skew_lobe_shell_proof/window_witness.rs"]
 mod window_witness;
 use window_witness::complete_family_window_witness;
+#[path = "bounded_skew_lobe_shell_proof/property_witness.rs"]
+mod property_witness;
+pub(crate) use property_witness::{
+    BoundedSkewLobePropertyWitness, certify_bounded_skew_lobe_property_witness,
+};
 
 /// Cumulative deterministic work for the bounded-skew lobe theorem.
 pub(crate) const BOUNDED_SKEW_LOBE_SHELL_WORK: StageId =

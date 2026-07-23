@@ -4,13 +4,18 @@
 //! never promotes a tessellated approximation into geometric authority.  The
 //! admitted representation slice is deliberately finite: Full-valid solid
 //! bodies whose faces are planes or right circular cylinders and whose trims
-//! are exact `Line2d`/`Circle2d` pcurves (circles are currently planar only).
-//! Every returned bound is an outward [`Interval`](kcore::interval::Interval)
-//! enclosure. Unsupported valid representations fail closed as typed
-//! refusals. The record is atomic: failure to certify any advertised field
-//! refuses the complete query rather than publishing partial properties.
+//! are exact `Line2d`/`Circle2d` pcurves (circles are currently planar only),
+//! plus the sealed bounded-skew lobe family whose nonlinear Cylinder trims
+//! reissue fixed interval cells. Every returned bound is an outward
+//! [`Interval`](kcore::interval::Interval) enclosure. Unsupported valid
+//! representations fail closed as typed refusals. The record is atomic:
+//! failure to certify any advertised field refuses the complete query rather
+//! than publishing partial properties.
 
 mod inertia;
+// R2: keep fixed-cell replay and nonlinear flux algebra out of this already
+// mature orchestration module; only accounting and dispatch remain here.
+mod skew_cylinder;
 
 use crate::check::{
     CheckBudgetProfile, CheckLevel, CheckOutcome, CheckReport, check_body_report_in_scope,
@@ -22,6 +27,9 @@ use crate::loop_proof::bounded_pcurve_integral::BoundedPcurveSpan;
 use crate::loop_proof::{
     certify_piecewise_periodic_line_spans, is_one_vertex_full_period_circle_edge,
     periodic_line_loop_proof_work, prepare_bounded_analytic_loop,
+};
+use crate::shell_proof::bounded_skew_lobe_shell_proof::{
+    BoundedSkewLobePropertyWitness, certify_bounded_skew_lobe_property_witness,
 };
 use crate::store::Store;
 use kcore::error::{Error, Result};
@@ -44,13 +52,26 @@ const fn known_stage(value: &'static str) -> StageId {
 pub const BODY_PROPERTIES_ANALYTIC_WORK: StageId =
     known_stage("ktopo.interrogate.body-properties-analytic-work");
 
-const DEFAULT_ANALYTIC_WORK: u64 = 1_048_576;
 // Eleven fixed forms per span: area, volume, three first moments, and six
 // symmetric second moments. Multipliers reflect polynomial/harmonic algebra.
 const PLANE_LINE_WORK: u64 = 176;
 const PLANE_CIRCLE_WORK: u64 = 528;
 const CYLINDER_LINE_WORK: u64 = 1_408;
 const CYLINDER_CIRCLE_WORK: u64 = 1_408;
+const CYLINDER_PERSISTENT_SKEW_WORK: u64 =
+    (kgraph::SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS as u64 + 2) * CYLINDER_LINE_WORK;
+const BOUNDED_SKEW_LOBE_PROPERTY_WITNESS_WORK: u64 = 3_233;
+// Exact structural ceiling of one admitted four-face lobe: four persistent
+// uses, four Cylinder lines, two Plane lines, two Plane circles, four faces,
+// four loops, and one N=53 complete-family witness replay.
+const DEFAULT_ANALYTIC_WORK: u64 = 4 * CYLINDER_PERSISTENT_SKEW_WORK
+    + 4 * CYLINDER_LINE_WORK
+    + 2 * PLANE_LINE_WORK
+    + 2 * PLANE_CIRCLE_WORK
+    + 1
+    + 4 * 16
+    + 4 * 8
+    + BOUNDED_SKEW_LOBE_PROPERTY_WITNESS_WORK;
 
 /// Aggregate v1 policy for Full validation followed by analytic properties.
 #[derive(Debug, Clone, Copy, Default)]
@@ -306,6 +327,7 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
     let mut loops = 0_u64;
     let mut span_work = 0_u64;
     let mut periodic_proof_work = 0_u64;
+    let mut has_persistent_skew = false;
     for face_id in &faces {
         let face = store.get(*face_id)?;
         loops = loops
@@ -320,20 +342,12 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
         let surface = store.get(face.surface)?;
         for &loop_id in &face.loops {
             let loop_ = store.get(loop_id)?;
-            if matches!(surface, SurfaceGeom::Cylinder(_)) && loop_.fins.len() >= 2 {
-                periodic_proof_work = periodic_proof_work
-                    .checked_add(periodic_line_loop_proof_work(loop_.fins.len()).ok_or(
-                        Error::InvalidGeometry {
-                            reason: "body-properties periodic proof work overflow",
-                        },
-                    )?)
-                    .ok_or(Error::InvalidGeometry {
-                        reason: "body-properties periodic proof work overflow",
-                    })?;
-            }
+            let mut all_line_pcurves = true;
             for &fin_id in &loop_.fins {
                 let fin = store.get(fin_id)?;
-                let cost = match fin.pcurve.and_then(|use_| store.get(use_.curve()).ok()) {
+                let pcurve = fin.pcurve.and_then(|use_| store.get(use_.curve()).ok());
+                all_line_pcurves &= matches!(pcurve, Some(Curve2dGeom::Line(_)));
+                let cost = match pcurve {
                     Some(Curve2dGeom::Line(_)) => match surface {
                         SurfaceGeom::Plane(_) => PLANE_LINE_WORK,
                         SurfaceGeom::Cylinder(_) => CYLINDER_LINE_WORK,
@@ -344,13 +358,40 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
                         SurfaceGeom::Cylinder(_) => CYLINDER_CIRCLE_WORK,
                         _ => 0,
                     },
+                    Some(Curve2dGeom::PersistentSkewCylinderOpenSpan(_)) => {
+                        has_persistent_skew = true;
+                        match surface {
+                            SurfaceGeom::Cylinder(_) => CYLINDER_PERSISTENT_SKEW_WORK,
+                            _ => 0,
+                        }
+                    }
                     _ => 0,
                 };
                 span_work = span_work.checked_add(cost).ok_or(Error::InvalidGeometry {
                     reason: "body-properties analytic work overflow",
                 })?;
             }
+            if matches!(surface, SurfaceGeom::Cylinder(_))
+                && loop_.fins.len() >= 2
+                && all_line_pcurves
+            {
+                periodic_proof_work = periodic_proof_work
+                    .checked_add(periodic_line_loop_proof_work(loop_.fins.len()).ok_or(
+                        Error::InvalidGeometry {
+                            reason: "body-properties periodic proof work overflow",
+                        },
+                    )?)
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "body-properties periodic proof work overflow",
+                    })?;
+            }
         }
+    }
+    if has_persistent_skew {
+        // Persistent trims are admitted only through the fixed four-face lobe
+        // theorem. Charge its conservative structural ceiling before replay;
+        // unsupported persistent bodies pay the same ceiling and fail closed.
+        return Ok(DEFAULT_ANALYTIC_WORK);
     }
     let face_count = u64::try_from(faces.len()).map_err(|_| Error::InvalidGeometry {
         reason: "body-properties face count overflow",
@@ -482,46 +523,16 @@ fn integrate_body(
     if faces.is_empty() {
         return Err(BodyPropertiesRefusal::NonPositiveVolumeEnclosure);
     }
-    for &face_id in &faces {
-        let face = store
-            .get(face_id)
-            .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
-        if face.tolerance.is_some() {
-            return Err(BodyPropertiesRefusal::TolerantTopology);
-        }
-    }
-    for edge in store
-        .edges_of_body(body)
-        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
-    {
-        if store
-            .get(edge)
-            .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
-            .tolerance
-            .is_some()
-        {
-            return Err(BodyPropertiesRefusal::TolerantTopology);
-        }
-    }
-    for vertex in store
-        .vertices_of_body(body)
-        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
-    {
-        if store
-            .get(vertex)
-            .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
-            .tolerance
-            .is_some()
-        {
-            return Err(BodyPropertiesRefusal::TolerantTopology);
-        }
+    let lobe_witness = bounded_skew_lobe_witness(store, &faces)?;
+    if lobe_witness.is_none() {
+        refuse_tolerant_topology(store, body, &faces)?;
     }
 
     let anchor = canonical_anchor(store, &faces)?;
     let mut total = Flux::zero();
     let mut surface_area = Interval::point(0.0);
     for face_id in faces {
-        let face = integrate_face(store, face_id, anchor)?;
+        let face = integrate_face(store, face_id, anchor, lobe_witness)?;
         total = total.add(face.flux);
         surface_area = surface_area + face.surface_area;
         if !total.finite() || !finite_interval(surface_area) {
@@ -569,6 +580,62 @@ fn integrate_body(
     })
 }
 
+fn bounded_skew_lobe_witness(
+    store: &Store,
+    faces: &[FaceId],
+) -> core::result::Result<Option<BoundedSkewLobePropertyWitness>, BodyPropertiesRefusal> {
+    let face = store
+        .get(faces[0])
+        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
+    let witness = certify_bounded_skew_lobe_property_witness(store, face.shell)
+        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
+    Ok(witness.filter(|witness| witness.owns_exact_faces(faces)))
+}
+
+fn refuse_tolerant_topology(
+    store: &Store,
+    body: BodyId,
+    faces: &[FaceId],
+) -> core::result::Result<(), BodyPropertiesRefusal> {
+    for &face_id in faces {
+        if store
+            .get(face_id)
+            .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
+            .tolerance
+            .is_some()
+        {
+            return Err(BodyPropertiesRefusal::TolerantTopology);
+        }
+    }
+    for edge in store
+        .edges_of_body(body)
+        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
+    {
+        if store
+            .get(edge)
+            .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
+            .tolerance
+            .is_some()
+        {
+            return Err(BodyPropertiesRefusal::TolerantTopology);
+        }
+    }
+    for vertex in store
+        .vertices_of_body(body)
+        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
+    {
+        if store
+            .get(vertex)
+            .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?
+            .tolerance
+            .is_some()
+        {
+            return Err(BodyPropertiesRefusal::TolerantTopology);
+        }
+    }
+    Ok(())
+}
+
 fn canonical_anchor(
     store: &Store,
     faces: &[FaceId],
@@ -608,6 +675,7 @@ fn integrate_face(
     store: &Store,
     face_id: FaceId,
     anchor: Point3,
+    lobe_witness: Option<BoundedSkewLobePropertyWitness>,
 ) -> core::result::Result<FaceIntegral, BodyPropertiesRefusal> {
     let face = store
         .get(face_id)
@@ -617,6 +685,25 @@ fn integrate_face(
         .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
     let mut total = SpanIntegral::zero();
     for &loop_id in &face.loops {
+        if let SurfaceGeom::Cylinder(cylinder) = surface
+            && let Some((witness, source_slot)) = lobe_witness.and_then(|witness| {
+                witness
+                    .cylinder_source_slot(face_id, loop_id)
+                    .map(|source_slot| (witness, source_slot))
+            })
+        {
+            let lobe_loop = skew_cylinder::integrate_lobe_cylinder_loop(
+                store,
+                face_id,
+                loop_id,
+                *cylinder,
+                anchor,
+                witness,
+                source_slot,
+            )?;
+            total = total.add(lobe_loop);
+            continue;
+        }
         let spans = prepare_property_loop(store, face_id, loop_id, surface)?;
         for span in spans {
             let next = match surface {
