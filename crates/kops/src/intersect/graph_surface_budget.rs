@@ -3,6 +3,7 @@
 use super::graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_WORK,
+    SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH, SKEW_CYLINDER_OPEN_SPAN_WORK,
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_WORK,
 };
 use super::nurbs_surface_march::NurbsSurfaceMarchBudgetProfile;
@@ -13,6 +14,9 @@ const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
 // Scoped owners such as body Section reuse one ledger across many face pairs.
 // Keep the exact per-pair debit atomic while bounding the family aggregate.
 const MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE: u64 = 4_096;
+// Four second-harmonic axial bounds have at most sixteen simple sheet-owned
+// cuts in aggregate, hence at most sixteen retained non-wrapping components.
+const MAX_SKEW_CYLINDER_OPEN_SPANS_PER_PAIR: u64 = 16;
 const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
 
@@ -66,6 +70,14 @@ impl GraphSurfaceBudgetProfile {
                         ResourceKind::Work,
                         AccountingMode::Cumulative,
                         SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK
+                            * MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE,
+                    ),
+                    LimitSpec::new(
+                        SKEW_CYLINDER_OPEN_SPAN_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH
+                            * MAX_SKEW_CYLINDER_OPEN_SPANS_PER_PAIR
                             * MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE,
                     ),
                     LimitSpec::new(

@@ -9,7 +9,9 @@ use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Vec2, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph, GeometryGraphError,
-    IntersectionCertificateError, SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
+    IntersectionCertificateError, SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderSheet,
+    certify_paired_skew_cylinder_branch_residuals,
+    certify_paired_skew_cylinder_branch_subrange_residuals,
 };
 
 const TAU: f64 = core::f64::consts::TAU;
@@ -150,6 +152,198 @@ fn operation_local_descriptors_are_rejected_before_graph_mutation() {
         Err(GeometryGraphError::InvalidDescriptor { .. })
     ));
     assert!(graph.is_empty());
+}
+
+#[test]
+fn strict_subrange_certifies_directly_when_the_whole_sheet_escapes_both_axial_windows() {
+    let (cylinders, mut ranges) = fixture();
+    ranges[0][1] = ParamRange::new(1.7, 1.9);
+    ranges[1][1] = ParamRange::new(-0.5, 0.5);
+    assert!(matches!(
+        certify_paired_skew_cylinder_branch_residuals(
+            cylinders,
+            ranges,
+            SkewCylinderSheet::Upper,
+            1e-8,
+        ),
+        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+    ));
+
+    let subrange = ParamRange::new(1.25, 1.89);
+    let certificate = certify_paired_skew_cylinder_branch_subrange_residuals(
+        cylinders,
+        ranges,
+        subrange,
+        SkewCylinderSheet::Upper,
+        1e-8,
+    )
+    .unwrap();
+    assert_eq!(certificate.carrier_range(), subrange);
+    assert_eq!(certificate.carrier().param_range(), subrange);
+    assert_eq!(
+        certificate
+            .traces()
+            .map(|trace| trace.pcurve().param_range()),
+        [subrange; 2]
+    );
+    assert_eq!(
+        certificate.traces().map(|trace| trace.pcurve().operand()),
+        [0, 1]
+    );
+    assert_eq!(certificate.traces().map(|trace| trace.surface()), cylinders);
+
+    let carrier_box = certificate.carrier().bounding_box(subrange);
+    assert!(
+        carrier_box.max.x < 0.4,
+        "the bounded proof box must not retain the full-cycle x=1 extremum"
+    );
+    for parameter in [subrange.lo, core::f64::consts::FRAC_PI_2, subrange.hi] {
+        let (sine, cosine) = math::sincos(parameter);
+        let height = (4.0 - sine * sine).sqrt();
+        let point = certificate.carrier().eval(parameter);
+        assert!((point - Vec3::new(cosine, sine, height)).norm() < 2e-14);
+        assert!(carrier_box.contains(point));
+
+        let [first, second] = certificate.traces();
+        assert!((first.pcurve().eval(parameter) - Vec2::new(parameter, height)).norm() < 2e-14);
+        assert!(
+            (second.pcurve().eval(parameter) - Vec2::new(math::atan2(height, sine), cosine)).norm()
+                < 2e-14
+        );
+        for trace in [first, second] {
+            let uv = trace.pcurve().eval(parameter);
+            assert!((trace.surface().eval([uv.x, uv.y]) - point).norm() <= certificate.tolerance());
+            assert!(
+                trace
+                    .pcurve()
+                    .bounding_box(subrange)
+                    .contains(trace.pcurve().eval(parameter))
+            );
+        }
+    }
+
+    let swapped = certificate.swapped();
+    assert_eq!(swapped.carrier(), certificate.carrier());
+    assert_eq!(swapped.carrier_range(), subrange);
+    assert_eq!(
+        swapped.traces(),
+        [certificate.traces()[1], certificate.traces()[0]]
+    );
+    assert_eq!(
+        swapped.residual_bounds(),
+        [
+            certificate.residual_bounds()[1],
+            certificate.residual_bounds()[0]
+        ]
+    );
+}
+
+#[test]
+fn guarded_boundary_root_subrange_avoids_uniform_cell_dependency_leakage() {
+    let (cylinders, mut ranges) = fixture();
+    ranges[0][1] = ParamRange::new(1.8, 2.1);
+    ranges[1][1] = ParamRange::new(-1.25, 0.0);
+    let root_span = ParamRange::new(2.082_769_014_844_373_6, 4.200_416_292_335_213);
+    assert!(matches!(
+        certify_paired_skew_cylinder_branch_subrange_residuals(
+            cylinders,
+            ranges,
+            root_span,
+            SkewCylinderSheet::Upper,
+            1e-8,
+        ),
+        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+    ));
+
+    let mut guarded_lo = root_span.lo;
+    let mut guarded_hi = root_span.hi;
+    for _ in 0..SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS {
+        guarded_lo = guarded_lo.next_up();
+        guarded_hi = guarded_hi.next_down();
+    }
+    let subrange = ParamRange::new(guarded_lo, guarded_hi);
+    assert!(subrange.lo - root_span.lo < 1e-12);
+    assert!(root_span.hi - subrange.hi < 1e-12);
+
+    let certificate = certify_paired_skew_cylinder_branch_subrange_residuals(
+        cylinders,
+        ranges,
+        subrange,
+        SkewCylinderSheet::Upper,
+        1e-8,
+    )
+    .unwrap();
+    assert_eq!(certificate.carrier_range(), subrange);
+    assert_eq!(certificate.carrier().param_range(), subrange);
+    assert_eq!(
+        certificate
+            .traces()
+            .map(|trace| trace.pcurve().param_range()),
+        [subrange; 2]
+    );
+
+    for parameter in [subrange.lo, subrange.hi] {
+        let (sine, cosine) = math::sincos(parameter);
+        let canonical_height = (4.0 - sine * sine).sqrt();
+        assert!(canonical_height >= ranges[0][1].lo);
+        assert!(canonical_height < ranges[0][1].hi);
+        assert!(cosine > ranges[1][1].lo && cosine < ranges[1][1].hi);
+        let point = certificate.carrier().eval(parameter);
+        assert!((point - Vec3::new(cosine, sine, canonical_height)).norm() < 2e-14);
+    }
+}
+
+#[test]
+fn strict_subrange_rejects_invalid_nonfinite_wrapping_and_mismatched_ranges() {
+    let (cylinders, ranges) = fixture();
+    let certify = |ranges, carrier_range| {
+        certify_paired_skew_cylinder_branch_subrange_residuals(
+            cylinders,
+            ranges,
+            carrier_range,
+            SkewCylinderSheet::Upper,
+            1e-8,
+        )
+    };
+
+    assert_eq!(
+        certify(
+            ranges,
+            ParamRange {
+                lo: f64::NAN,
+                hi: 2.0,
+            },
+        ),
+        Err(IntersectionCertificateError::InvalidCarrierRange)
+    );
+    assert_eq!(
+        certify(ranges, ParamRange::new(2.0, 2.0)),
+        Err(IntersectionCertificateError::InvalidCarrierRange)
+    );
+    for range in [
+        ParamRange::new(0.0, 1.0),
+        ParamRange::new(1.0, TAU),
+        ParamRange::new(5.8, TAU + 0.2),
+    ] {
+        assert!(matches!(
+            certify(ranges, range),
+            Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+        ));
+    }
+
+    let mut shifted_authored_range = ranges;
+    shifted_authored_range[0][0] = ParamRange::new(TAU, 2.0 * TAU);
+    assert!(matches!(
+        certify(shifted_authored_range, ParamRange::new(1.25, 1.89)),
+        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+    ));
+
+    let mut nonfinite_authored_range = ranges;
+    nonfinite_authored_range[1][1].hi = f64::INFINITY;
+    assert_eq!(
+        certify(nonfinite_authored_range, ParamRange::new(1.25, 1.89)),
+        Err(IntersectionCertificateError::InvalidCarrierRange)
+    );
 }
 
 fn finite2(value: Vec2) -> bool {

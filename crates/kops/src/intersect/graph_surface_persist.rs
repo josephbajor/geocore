@@ -82,7 +82,8 @@ fn persist_impl(
             IntersectionBranchCertificate::PlaneCylinderCircle(_)
             | IntersectionBranchCertificate::PlaneCylinderRuling(_)
             | IntersectionBranchCertificate::CylinderCylinderRuling(_)
-            | IntersectionBranchCertificate::SkewCylinderTwoSheet(_) => {
+            | IntersectionBranchCertificate::SkewCylinderTwoSheet(_)
+            | IntersectionBranchCertificate::SkewCylinderOpenSpan(_) => {
                 return Err(operation_local_cylinder_refusal());
             }
         };

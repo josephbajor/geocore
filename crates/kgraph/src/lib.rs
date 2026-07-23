@@ -91,4 +91,5 @@ pub use skew_cylinder_branch::{
     PairedSkewCylinderBranchResidualCertificate, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
     SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchCarrier, SkewCylinderBranchPcurve,
     SkewCylinderBranchTrace, SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
+    certify_paired_skew_cylinder_branch_subrange_residuals,
 };

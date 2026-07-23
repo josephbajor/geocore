@@ -1,9 +1,10 @@
-//! Promotion of certified procedural full-cycle skew Cylinder/Cylinder sheets.
+//! Promotion of certified procedural skew Cylinder/Cylinder sheets and spans.
 //!
 //! Discovery, finite-window containment, sheet identity, and paired residual
 //! proof are all retained by the kgraph certificate. This adapter only checks
 //! that the raw operation-local branch names the same immutable carrier before
-//! exposing graph descriptors in caller source order.
+//! exposing graph descriptors in caller source order. Exact full cycles become
+//! closed branches; independently certified strict subranges become open.
 
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, PairedSkewCylinderBranchResidualCertificate,
@@ -31,12 +32,21 @@ pub(super) fn build_verified_skew_cylinder_branch(
         ));
     }
     let traces = certificate.traces();
+    let full_cycle = certificate.carrier_range().width() == core::f64::consts::TAU;
     Ok(VerifiedBranchPayload {
         carrier: CurveDescriptor::SkewCylinderBranch(raw_carrier),
         carrier_range: certificate.carrier_range(),
-        topology: IntersectionBranchTopology::Closed,
+        topology: if full_cycle {
+            IntersectionBranchTopology::Closed
+        } else {
+            IntersectionBranchTopology::Open
+        },
         pcurves: traces.map(|trace| Curve2dDescriptor::SkewCylinderBranch(trace.pcurve())),
         parameter_maps: certificate.parameter_maps(),
-        certificate: IntersectionBranchCertificate::SkewCylinderTwoSheet(Box::new(certificate)),
+        certificate: if full_cycle {
+            IntersectionBranchCertificate::SkewCylinderTwoSheet(Box::new(certificate))
+        } else {
+            IntersectionBranchCertificate::SkewCylinderOpenSpan(Box::new(certificate))
+        },
     })
 }

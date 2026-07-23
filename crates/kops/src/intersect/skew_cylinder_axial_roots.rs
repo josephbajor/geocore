@@ -28,7 +28,6 @@ use super::bounded_trigonometric::{
 };
 use super::parameter::fit_periodic_parameter;
 
-#[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
 const TAU: f64 = core::f64::consts::TAU;
 
 /// Fixed reservation for one complete axial-bound topology query.
@@ -88,13 +87,12 @@ pub(super) struct SkewCylinderHalfAngleRootBracket {
 /// Numeric enclosure of one source root, ordered by increasing canonical
 /// longitude in `[0, 2π)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
 pub(super) struct SkewCylinderAngularRootBracket {
     pub(super) lo: f64,
     pub(super) hi: f64,
 }
 
-#[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
+#[allow(dead_code)] // Legacy lift helpers remain covered by the root-level tests.
 impl SkewCylinderAngularRootBracket {
     /// Deterministic numeric representative of this exact-source bracket.
     pub(super) fn representative(self) -> f64 {
@@ -117,6 +115,24 @@ impl SkewCylinderAngularRootBracket {
     /// Endpoint certified on the increasing-`u` side after the root.
     pub(super) const fn after_side(self) -> f64 {
         self.hi
+    }
+
+    /// Strict representable endpoint on the increasing-`u` side before the
+    /// root corridor. A collapsed exact-source corridor is opened by one
+    /// representable parameter step so a subrange residual proof never uses
+    /// the boundary root itself as an interior point.
+    pub(super) fn strict_before_side(self) -> f64 {
+        if self.lo == 0.0 {
+            TAU.next_down()
+        } else {
+            self.lo.next_down()
+        }
+    }
+
+    /// Strict representable endpoint on the increasing-`u` side after the
+    /// root corridor.
+    pub(super) fn strict_after_side(self) -> f64 {
+        self.hi.next_up()
     }
 
     /// Lift one canonical representative into any exact full-period authored
@@ -163,7 +179,6 @@ pub(super) struct SkewCylinderAxialRoot {
 impl SkewCylinderAxialRoot {
     /// Convert the projective source bracket into increasing canonical
     /// longitude without changing its exact half-angle provenance.
-    #[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
     pub(super) fn angular_bracket(self) -> SkewCylinderAngularRootBracket {
         angular_bracket(self.bracket)
     }
@@ -613,7 +628,6 @@ fn strict_sign(sign: i8) -> Result<StrictSign, SkewCylinderAxialRootFailure> {
     }
 }
 
-#[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
 fn angular_bracket(bracket: SkewCylinderHalfAngleRootBracket) -> SkewCylinderAngularRootBracket {
     let first = canonical_angle(half_angle_to_parameter(bracket.chart, bracket.lo));
     let second = canonical_angle(half_angle_to_parameter(bracket.chart, bracket.hi));
@@ -629,7 +643,6 @@ fn angular_bracket(bracket: SkewCylinderHalfAngleRootBracket) -> SkewCylinderAng
     }
 }
 
-#[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
 fn half_angle_to_parameter(chart: SkewCylinderHalfAngleChart, parameter: f64) -> f64 {
     match chart {
         SkewCylinderHalfAngleChart::Tangent => 2.0 * math::atan2(parameter, 1.0),
@@ -637,7 +650,6 @@ fn half_angle_to_parameter(chart: SkewCylinderHalfAngleChart, parameter: f64) ->
     }
 }
 
-#[allow(dead_code)] // Retained root corridors feed the queued clipped-span certifier.
 fn canonical_angle(parameter: f64) -> f64 {
     let mut parameter = parameter % TAU;
     if parameter < 0.0 {

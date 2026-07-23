@@ -2,22 +2,13 @@
 //!
 //! The carrier parameter is the longitude of the first (canonical) cylinder.
 //! Substitution of that cylinder ruling in the second cylinder's dual frame
-//! gives two roots
-//! `v = (-M(u) ± sqrt(K - L(u)^2)) / A`.  The certifier admits one root only
-//! after a fixed whole-cycle interval proof establishes:
-//!
-//! - exact-predicate nonparallel axes and regular exact-source/evaluator dual divisors;
-//! - strictly positive exact-source and stored radicands in all 256 proof cells;
-//! - strict axial containment of both exact-source and stored trace enclosures;
-//! - a common exact-source/evaluator seam-free opposite longitude half-plane;
-//! - one lift placing both raw longitude enclosures inside the opposite window; and
-//! - an analytic, outward-rounded forward-error bound for both surface traces.
-//!
+//! gives `v = (-M(u) ± sqrt(K - L(u)^2)) / A`. The certifier's 256 retained-
+//! range cells prove regular exact-source/evaluator divisors, positive
+//! radicands, strict axial containment, a shared seam-free opposite chart and
+//! lift, and an outward-rounded paired forward-error bound.
 //! The cells are interval proof domains, not samples.  Root ordering is
-//! structural (`Lower` always uses the negative square root), while interval
-//! enclosures prove the numeric conditioning, windows, boxes, and chart lift.
-//! These values deliberately have no persistent graph contract yet: graph
-//! insertion rejects their descriptor variants before allocating a node.
+//! structural (`Lower` uses the negative square root). These operation-local
+//! values remain invalid for persistent graph insertion.
 
 use core::any::Any;
 
@@ -37,11 +28,15 @@ use crate::{AffineParamMap1d, IntersectionCertificateError, PairedTrace};
 mod jet;
 use jet::Jet;
 
+#[path = "skew_cylinder_branch_subrange.rs"]
+mod subrange;
+pub use subrange::certify_paired_skew_cylinder_branch_subrange_residuals;
+
 #[cfg(test)]
 #[path = "skew_cylinder_branch_tests.rs"]
 mod tests;
 
-/// Fixed whole-cycle interval cells consumed by one sheet certificate.
+/// Fixed retained-range interval cells consumed by one sheet certificate.
 pub const SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS: usize = 256;
 
 /// Deterministic logical work consumed by one sheet certificate.
@@ -231,7 +226,7 @@ impl BranchAlgebra {
     }
 }
 
-/// Certifier-minted procedural carrier for one complete skew-cylinder sheet.
+/// Certifier-minted procedural carrier for one certified skew-cylinder range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkewCylinderBranchCarrier {
     algebra: BranchAlgebra,
@@ -273,7 +268,7 @@ impl Curve for SkewCylinderBranchCarrier {
     }
 }
 
-/// Certifier-minted pcurve of one skew-cylinder sheet on one source cylinder.
+/// Certifier-minted pcurve of one certified sheet range on one source cylinder.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkewCylinderBranchPcurve {
     algebra: BranchAlgebra,
@@ -441,9 +436,17 @@ pub fn certify_paired_skew_cylinder_branch_residuals(
         ));
     }
 
-    let mut algebra = build_algebra(cylinders, ranges[0][0], sheet)
+    let algebra = build_algebra(cylinders, ranges[0][0], sheet)
         .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-    let proof = prove_complete_sheet(algebra, ranges)?;
+    certify_validated_branch(algebra, ranges, tolerance)
+}
+
+fn certify_validated_branch(
+    mut algebra: BranchAlgebra,
+    ranges: [[ParamRange; 2]; 2],
+    tolerance: f64,
+) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
+    let proof = prove_branch_range(algebra, ranges)?;
     algebra.longitude_offset = proof.longitude_offset;
 
     let second_residual = paired_residual_bound(algebra, proof).ok_or(
@@ -458,7 +461,7 @@ pub fn certify_paired_skew_cylinder_branch_residuals(
             tolerance,
         });
     }
-    let axis_norm_lower = interval_norm_lower(cylinders[0].frame().z())
+    let axis_norm_lower = interval_norm_lower(algebra.cylinders[0].frame().z())
         .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
     let separation = proof.sheet_separation_lower * axis_norm_lower;
     let paired_tube_width =
@@ -492,23 +495,23 @@ pub fn certify_paired_skew_cylinder_branch_residuals(
     let identity = AffineParamMap1d::new(1.0, 0.0)?;
     let traces = [
         SkewCylinderBranchTrace {
-            surface: cylinders[0],
+            surface: algebra.cylinders[0],
             pcurve: pcurves[0],
             parameter_map: identity,
         },
         SkewCylinderBranchTrace {
-            surface: cylinders[1],
+            surface: algebra.cylinders[1],
             pcurve: pcurves[1],
             parameter_map: identity,
         },
     ];
     Ok(PairedSkewCylinderBranchResidualCertificate {
         carrier,
-        carrier_range: ranges[0][0],
+        carrier_range: algebra.carrier_range,
         traces,
         residual_bounds: [0.0, second_residual],
         tolerance,
-        sheet,
+        sheet: algebra.sheet,
     })
 }
 
@@ -732,7 +735,7 @@ fn cell_root_enclosures(
     })
 }
 
-fn prove_complete_sheet(
+fn prove_branch_range(
     algebra: BranchAlgebra,
     ranges: [[ParamRange; 2]; 2],
 ) -> Result<SheetProof, IntersectionCertificateError> {
@@ -774,23 +777,17 @@ fn prove_complete_sheet(
     let mut exact_y_positive = true;
     let mut exact_y_negative = true;
     let mut exact_x_positive = true;
-    let width = algebra.carrier_range.width();
+    let boundary_graded = algebra.carrier_range != ranges[0][0];
 
     for index in 0..SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS {
-        let lo = algebra.carrier_range.lo
-            + width * index as f64 / SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS as f64;
-        let hi = if index + 1 == SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS {
-            algebra.carrier_range.hi
-        } else {
-            algebra.carrier_range.lo
-                + width * (index + 1) as f64 / SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS as f64
-        };
+        let lo = subrange::proof_cell_boundary(algebra.carrier_range, index, boundary_graded);
+        let hi = subrange::proof_cell_boundary(algebra.carrier_range, index + 1, boundary_graded);
         let cosine = trig_interval(lo, hi, false);
         let sine = trig_interval(lo, hi, true);
         let roots = cell_root_enclosures(algebra, coefficient_proof, cosine, sine).ok_or_else(
             || {
                 unsupported(
-                    "skew Cylinder/Cylinder source/evaluator radicand lacks a strict whole-cycle numeric margin",
+                    "skew Cylinder/Cylinder source/evaluator radicand lacks a strict whole-range numeric margin",
                 )
             },
         )?;

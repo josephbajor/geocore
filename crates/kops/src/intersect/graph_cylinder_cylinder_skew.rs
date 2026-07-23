@@ -5,12 +5,13 @@
 //! resulting exact quadratic in ruling height has an exact cyclic
 //! second-harmonic discriminant. A strictly negative discriminant proves a
 //! complete miss. A strictly positive discriminant proves the existence of two
-//! infinite-support sheets. Full-cycle publication requires paired residual
+//! infinite-support sheets. Publication requires paired active-range residual
 //! certificates for every retained procedural carrier and both pcurves. Four
-//! exact axial-bound queries additionally admit root-free finite windows with
-//! zero, one, or two whole sheets. Axial cuts, contact roots, and failed exact
-//! classification remain typed indeterminate. A parameterization-local
-//! projection fold may retry the reverse chart, but only a strict-positive
+//! exact axial-bound queries admit root-free whole sheets and simple
+//! non-wrapping open spans with exact source-root endpoint evidence. Contact,
+//! coincident, seam-wrapping, and failed exact classifications remain typed
+//! indeterminate. A parameterization-local projection fold may retry the
+//! reverse chart, but only a strict-positive
 //! reverse proof can supersede Contact; no sampled marcher may claim completion.
 
 use kcore::error::CapabilityId;
@@ -24,6 +25,7 @@ use kgraph::{
     IntersectionCertificateError, PairedSkewCylinderBranchResidualCertificate,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SkewCylinderSheet,
     certify_paired_skew_cylinder_branch_residuals,
+    certify_paired_skew_cylinder_branch_subrange_residuals,
 };
 
 use super::bounded_trigonometric::{
@@ -32,16 +34,26 @@ use super::bounded_trigonometric::{
 };
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
+use super::graph_skew_cylinder_endpoint::{
+    IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
+    SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
+};
 use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult};
 use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
 use super::skew_cylinder_axial_roots::{
-    ExactSkewCylinderDiscriminant, SkewCylinderAxialRootFailure, exact_skew_cylinder_discriminant,
+    ExactSkewCylinderDiscriminant, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
+    SkewCylinderAxialRootFailure, SkewCylinderHalfAngleChart, exact_skew_cylinder_discriminant,
+};
+use super::skew_cylinder_open_spans::{
+    SkewCylinderFiniteSheetTopology, SkewCylinderOpenSpanEndpointProof,
+    SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide,
+    classify_skew_cylinder_open_spans,
 };
 use super::skew_cylinder_sheet_occupancy::{
-    SKEW_CYLINDER_SHEET_OCCUPANCY_EXACT_WORK, SkewCylinderSheetOccupancy,
-    classify_skew_cylinder_sheet_occupancy,
+    SKEW_CYLINDER_AXIAL_BOUNDS_EXACT_WORK, collect_skew_cylinder_axial_bound_topologies,
 };
 
 const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires certified contained full-cycle branch carriers";
@@ -81,7 +93,18 @@ pub const SKEW_CYLINDER_AXIAL_CLIP_WORK: StageId =
     };
 
 /// Atomic work charged before classifying all four finite axial bounds.
-pub const SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK: u64 = SKEW_CYLINDER_SHEET_OCCUPANCY_EXACT_WORK;
+pub const SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK: u64 = SKEW_CYLINDER_AXIAL_BOUNDS_EXACT_WORK;
+
+/// Stable work stage for independently certified bounded skew-sheet spans.
+pub const SKEW_CYLINDER_OPEN_SPAN_WORK: StageId =
+    match StageId::new("kops.intersect.skew-cylinder-open-span-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid skew-cylinder open-span stage"),
+    };
+
+/// Atomic work charged for each retained non-wrapping open span.
+pub const SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH: u64 =
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK;
 
 /// Missing carrier for the two sheets proved by a strict-positive discriminant.
 pub const SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER: CapabilityId =
@@ -143,7 +166,14 @@ pub struct SkewCylinderStrictDiscriminantMiss {
 pub(super) struct CertifiedSkewCylinderIntersections {
     pub(super) raw: SurfaceSurfaceIntersections,
     pub(super) strict_miss: Option<SkewCylinderStrictDiscriminantMiss>,
-    pub(super) two_sheet_certificates: Option<Vec<PairedSkewCylinderBranchResidualCertificate>>,
+    pub(super) branches: Option<Vec<CertifiedSkewCylinderBranch>>,
+}
+
+/// Proof and exact endpoint evidence aligned with one canonicalized raw branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CertifiedSkewCylinderBranch {
+    pub(super) certificate: PairedSkewCylinderBranchResidualCertificate,
+    pub(super) endpoint_proofs: [Option<IntersectionBranchEndpointProof>; 2],
 }
 
 impl SkewCylinderStrictDiscriminantMiss {
@@ -207,7 +237,7 @@ pub(super) fn intersect_certified_skew_cylinders(
             Ok(CertifiedSkewCylinderIntersections {
                 raw: SurfaceSurfaceIntersections::complete_empty(),
                 strict_miss: Some(SkewCylinderStrictDiscriminantMiss::certified()),
-                two_sheet_certificates: None,
+                branches: None,
             })
         }
         DiscriminantAdmission::Strict(StrictSign::Positive) => {
@@ -227,12 +257,12 @@ pub(super) fn intersect_certified_skew_cylinders(
         DiscriminantAdmission::Contact => Ok(CertifiedSkewCylinderIntersections {
             raw: contact_topology_incomplete(scope),
             strict_miss: None,
-            two_sheet_certificates: None,
+            branches: None,
         }),
         DiscriminantAdmission::NumericResolution => Ok(CertifiedSkewCylinderIntersections {
             raw: numeric_resolution(scope, SKEW_CYLINDER_DISCRIMINANT_WORK),
             strict_miss: None,
-            two_sheet_certificates: None,
+            branches: None,
         }),
     }
 }
@@ -266,61 +296,133 @@ fn intersect_strict_positive_two_sheet(
         SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK,
     )?;
     let canonical_to_source = if reversed { [1, 0] } else { [0, 1] };
-    let occupancy =
-        match classify_skew_cylinder_sheet_occupancy(cylinders, ranges, canonical_to_source) {
-            Ok(occupancy) => occupancy,
-            Err(SkewCylinderAxialRootFailure::IdenticallyOnBound) => {
+    let topologies = match collect_skew_cylinder_axial_bound_topologies(
+        cylinders,
+        ranges,
+        canonical_to_source,
+    ) {
+        Ok(occupancy) => occupancy,
+        Err(SkewCylinderAxialRootFailure::IdenticallyOnBound) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: clipped_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+            });
+        }
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: numeric_resolution(scope, SKEW_CYLINDER_AXIAL_CLIP_WORK),
+                strict_miss: None,
+                branches: None,
+            });
+        }
+    };
+    let finite_topology =
+        match classify_skew_cylinder_open_spans(SkewCylinderOpenSpanTopologyInput {
+            topologies: &topologies,
+            ranges,
+            canonical_to_source,
+        }) {
+            Ok(topology) => topology,
+            Err(_) => {
                 return Ok(CertifiedSkewCylinderIntersections {
                     raw: clipped_topology_incomplete(scope),
                     strict_miss: None,
-                    two_sheet_certificates: None,
-                });
-            }
-            Err(_) => {
-                return Ok(CertifiedSkewCylinderIntersections {
-                    raw: numeric_resolution(scope, SKEW_CYLINDER_AXIAL_CLIP_WORK),
-                    strict_miss: None,
-                    two_sheet_certificates: None,
+                    branches: None,
                 });
             }
         };
-    if occupancy.contains(&SkewCylinderSheetOccupancy::Clipped) {
-        return Ok(CertifiedSkewCylinderIntersections {
-            raw: clipped_topology_incomplete(scope),
-            strict_miss: None,
-            two_sheet_certificates: None,
-        });
+    let open_span_count = finite_topology
+        .iter()
+        .map(|topology| match topology {
+            SkewCylinderFiniteSheetTopology::Open(spans) => spans.len(),
+            SkewCylinderFiniteSheetTopology::Outside | SkewCylinderFiniteSheetTopology::Whole => 0,
+        })
+        .sum::<usize>();
+    if open_span_count > 0 {
+        scope.ledger_mut().charge(
+            SKEW_CYLINDER_OPEN_SPAN_WORK,
+            SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH * open_span_count as u64,
+        )?;
     }
 
-    let mut certificates = Vec::with_capacity(2);
-    for (state, result) in occupancy.into_iter().zip(certified.iter()) {
-        if state == SkewCylinderSheetOccupancy::Contained {
-            match result {
-                Ok(certificate) => certificates.push(*certificate),
-                Err(failure) => {
-                    return Ok(single_branch_certificate_failure(failure, scope));
+    let sheets = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper];
+    let mut branches = Vec::with_capacity(2 + open_span_count);
+    for ((sheet, topology), whole_certificate) in sheets
+        .into_iter()
+        .zip(finite_topology)
+        .zip(certified.iter())
+    {
+        match topology {
+            SkewCylinderFiniteSheetTopology::Outside => {}
+            SkewCylinderFiniteSheetTopology::Whole => match whole_certificate {
+                Ok(certificate) => branches.push(CertifiedSkewCylinderBranch {
+                    certificate: *certificate,
+                    endpoint_proofs: [None; 2],
+                }),
+                Err(failure) => return Ok(single_branch_certificate_failure(failure, scope)),
+            },
+            SkewCylinderFiniteSheetTopology::Open(spans) => {
+                for span in spans {
+                    if span.sheet != sheet {
+                        return Ok(CertifiedSkewCylinderIntersections {
+                            raw: numeric_resolution(scope, SKEW_CYLINDER_AXIAL_CLIP_WORK),
+                            strict_miss: None,
+                            branches: None,
+                        });
+                    }
+                    let certificate = match certify_paired_skew_cylinder_branch_subrange_residuals(
+                        cylinders, ranges, span.range, sheet, tolerance,
+                    ) {
+                        Ok(certificate) => certificate,
+                        Err(failure) => {
+                            return Ok(open_span_certificate_failure(&failure, scope));
+                        }
+                    };
+                    branches.push(CertifiedSkewCylinderBranch {
+                        certificate,
+                        endpoint_proofs: [span.start, span.end]
+                            .map(|proof| Some(graph_endpoint_proof(proof))),
+                    });
                 }
             }
         }
     }
-    publish_whole_sheets(certificates, reversed)
+    publish_skew_branches(branches, reversed)
 }
 
 fn publish_whole_sheets(
     certificates: Vec<PairedSkewCylinderBranchResidualCertificate>,
     reversed: bool,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
-    let certificates = if reversed {
+    publish_skew_branches(
         certificates
             .into_iter()
-            .map(PairedSkewCylinderBranchResidualCertificate::swapped)
-            .collect::<Vec<_>>()
-    } else {
-        certificates
-    };
-    let curves = certificates
+            .map(|certificate| CertifiedSkewCylinderBranch {
+                certificate,
+                endpoint_proofs: [None; 2],
+            })
+            .collect(),
+        reversed,
+    )
+}
+
+fn publish_skew_branches(
+    branches: Vec<CertifiedSkewCylinderBranch>,
+    reversed: bool,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    let branches = branches
+        .into_iter()
+        .map(|mut branch| {
+            if reversed {
+                branch.certificate = branch.certificate.swapped();
+            }
+            branch
+        })
+        .collect::<Vec<_>>();
+    let curves = branches
         .iter()
-        .map(raw_two_sheet_curve)
+        .map(|branch| raw_skew_curve(&branch.certificate))
         .collect::<Vec<_>>();
     let raw = if curves.is_empty() {
         SurfaceSurfaceIntersections::complete_empty()
@@ -329,11 +431,48 @@ fn publish_whole_sheets(
             .map_err(IntersectionError::from)
             .map_err(GraphSurfaceIntersectionError::Intersection)?
     };
+    let branches = align_skew_branches(&raw, branches)?;
     Ok(CertifiedSkewCylinderIntersections {
         raw,
         strict_miss: None,
-        two_sheet_certificates: Some(certificates),
+        branches: Some(branches),
     })
+}
+
+fn align_skew_branches(
+    raw: &SurfaceSurfaceIntersections,
+    mut branches: Vec<CertifiedSkewCylinderBranch>,
+) -> GraphSurfaceIntersectionResult<Vec<CertifiedSkewCylinderBranch>> {
+    let mut aligned = Vec::with_capacity(raw.curves.len());
+    for curve in &raw.curves {
+        let SurfaceIntersectionCurve::SkewCylinder(carrier) = curve.curve else {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
+        };
+        let mut matches = branches.iter().enumerate().filter(|(_, branch)| {
+            branch.certificate.carrier() == carrier
+                && branch.certificate.carrier_range() == curve.curve_range
+        });
+        let Some((index, _)) = matches.next() else {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
+        }
+        drop(matches);
+        aligned.push(branches.remove(index));
+    }
+    if !branches.is_empty() {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
+    Ok(aligned)
 }
 
 fn branch_certificate_failure(
@@ -356,7 +495,7 @@ fn branch_certificate_failure(
             numeric_resolution(scope, SKEW_CYLINDER_TWO_SHEET_WORK)
         },
         strict_miss: None,
-        two_sheet_certificates: None,
+        branches: None,
     }
 }
 
@@ -376,11 +515,65 @@ fn single_branch_certificate_failure(
             numeric_resolution(scope, SKEW_CYLINDER_TWO_SHEET_WORK)
         },
         strict_miss: None,
-        two_sheet_certificates: None,
+        branches: None,
     }
 }
 
-fn raw_two_sheet_curve(
+fn open_span_certificate_failure(
+    failure: &IntersectionCertificateError,
+    scope: &mut OperationScope<'_, '_>,
+) -> CertifiedSkewCylinderIntersections {
+    let unsupported = matches!(
+        failure,
+        IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
+            | IntersectionCertificateError::InvalidCarrierRange
+    );
+    CertifiedSkewCylinderIntersections {
+        raw: if unsupported {
+            clipped_topology_incomplete(scope)
+        } else {
+            numeric_resolution(scope, SKEW_CYLINDER_OPEN_SPAN_WORK)
+        },
+        strict_miss: None,
+        branches: None,
+    }
+}
+
+fn graph_endpoint_proof(
+    proof: SkewCylinderOpenSpanEndpointProof,
+) -> IntersectionBranchEndpointProof {
+    let root = proof.root;
+    IntersectionBranchEndpointProof::SkewCylinderAxialRoot(SkewCylinderAxialRootEndpointProof {
+        source_operand: root.provenance.source_operand,
+        boundary: match root.provenance.boundary {
+            SkewCylinderAxialBoundary::Lower => SkewCylinderAxialBoundaryProof::Lower,
+            SkewCylinderAxialBoundary::Upper => SkewCylinderAxialBoundaryProof::Upper,
+        },
+        bound: root.provenance.value,
+        sheet: root.sheet,
+        cyclic_ordinal: root.cyclic_ordinal,
+        half_angle_chart: match root.bracket.chart {
+            SkewCylinderHalfAngleChart::Tangent => SkewCylinderHalfAngleChartProof::Tangent,
+            SkewCylinderHalfAngleChart::Cotangent => SkewCylinderHalfAngleChartProof::Cotangent,
+        },
+        half_angle_bracket: [root.bracket.lo, root.bracket.hi],
+        before: match root.before {
+            SkewCylinderAxialRelation::Below => SkewCylinderAxialRelationProof::Below,
+            SkewCylinderAxialRelation::Above => SkewCylinderAxialRelationProof::Above,
+        },
+        after: match root.after {
+            SkewCylinderAxialRelation::Below => SkewCylinderAxialRelationProof::Below,
+            SkewCylinderAxialRelation::Above => SkewCylinderAxialRelationProof::Above,
+        },
+        inside_side: match proof.inside_side {
+            SkewCylinderRootInsideSide::Before => SkewCylinderRootInsideSideProof::Before,
+            SkewCylinderRootInsideSide::After => SkewCylinderRootInsideSideProof::After,
+        },
+        inside_parameter: proof.carrier_parameter,
+    })
+}
+
+fn raw_skew_curve(
     certificate: &PairedSkewCylinderBranchResidualCertificate,
 ) -> SurfaceSurfaceCurve {
     let carrier = certificate.carrier();

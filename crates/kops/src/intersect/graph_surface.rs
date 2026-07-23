@@ -12,14 +12,15 @@ use super::graph_cylinder_cylinder::{
     intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
 };
 use super::graph_cylinder_cylinder_skew::{
-    CertifiedSkewCylinderIntersections, SkewCylinderStrictDiscriminantMiss,
-    intersect_certified_skew_cylinders,
+    CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections,
+    SkewCylinderStrictDiscriminantMiss, intersect_certified_skew_cylinders,
 };
 use super::graph_cylinder_cylinder_skew_branch::build_verified_skew_cylinder_branch;
 use super::graph_plane_cylinder::{
     build_verified_plane_cylinder_circle_branch, build_verified_plane_cylinder_ruling_branch,
     canonical_line, plane_pcurve,
 };
+use super::graph_skew_cylinder_endpoint::IntersectionBranchEndpointProof;
 pub use super::graph_surface_budget::{
     GraphSurfaceBudgetProfile, NURBS_TRACE_CERTIFICATE_WORK, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
 };
@@ -67,10 +68,10 @@ use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, Curve2dHandle, CurveDescriptor, CurveHandle,
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    NurbsIntersectionTrace, PairedSkewCylinderBranchResidualCertificate, PairedTrace,
-    PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor,
-    SurfaceHandle, TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
-    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+    NurbsIntersectionTrace, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
+    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, TransmittedOffsetPlaneTrace,
+    VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+    certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_verified_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
@@ -335,6 +336,9 @@ pub struct IntersectionBranchEdge {
     pub endpoint_vertices: [usize; 2],
     /// End conditions corresponding to `endpoint_vertices`.
     pub endpoint_events: [IntersectionBranchEndpointEvent; 2],
+    /// Exact source-root evidence for endpoint slots when the owning solver
+    /// provides it. Whole branches and legacy analytic families retain none.
+    pub endpoint_proofs: [Option<IntersectionBranchEndpointProof>; 2],
     /// Local contact character along the branch.
     pub kind: ContactKind,
     /// Whole-interval proof covering both lifted pcurve traces.
@@ -955,7 +959,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     };
     let mut parallel_cylinder_exterior_radial_separation = None;
     let mut skew_cylinder_strict_discriminant_miss = None;
-    let mut skew_cylinder_two_sheet_certificates = None;
+    let mut skew_cylinder_branches = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1027,7 +1031,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 let CertifiedSkewCylinderIntersections {
                     raw,
                     strict_miss,
-                    two_sheet_certificates,
+                    branches,
                 } = intersect_certified_skew_cylinders(
                     cylinders,
                     ranges,
@@ -1035,7 +1039,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     scope,
                 )?;
                 skew_cylinder_strict_discriminant_miss = strict_miss;
-                skew_cylinder_two_sheet_certificates = two_sheet_certificates;
+                skew_cylinder_branches = branches;
                 raw
             };
             (raw, None)
@@ -1203,7 +1207,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         ResolvedGraphProofSources {
             fields,
             offset_plane_traces,
-            skew_cylinder_two_sheet_certificates: skew_cylinder_two_sheet_certificates.as_deref(),
+            skew_cylinder_branches: skew_cylinder_branches.as_deref(),
         },
         [range_a, range_b],
         &raw,
@@ -1840,7 +1844,7 @@ fn build_verified_branch_graph(
     let ResolvedGraphProofSources {
         fields,
         offset_plane_traces,
-        skew_cylinder_two_sheet_certificates,
+        skew_cylinder_branches,
     } = proof_sources;
     let mut vertices = raw
         .points
@@ -1862,6 +1866,7 @@ fn build_verified_branch_graph(
     }
 
     for (branch_index, branch) in raw.curves.iter().enumerate() {
+        let mut endpoint_proofs = [None; 2];
         let VerifiedBranchPayload {
             carrier,
             carrier_range,
@@ -1950,15 +1955,15 @@ fn build_verified_branch_graph(
                     ResolvedGraphSurfaceField::Cylinder { .. },
                     ResolvedGraphSurfaceField::Cylinder { .. },
                 ],
-            ) => build_verified_skew_cylinder_branch(
-                *raw_carrier,
-                branch,
-                skew_cylinder_two_sheet_certificates
-                    .and_then(|certificates| certificates.get(branch_index).copied())
+            ) => build_verified_skew_cylinder_branch(*raw_carrier, branch, {
+                let certified = skew_cylinder_branches
+                    .and_then(|branches| branches.get(branch_index))
                     .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
                         IntersectionCertificateError::InvalidTraceFamily,
-                    ))?,
-            )?,
+                    ))?;
+                endpoint_proofs = certified.endpoint_proofs;
+                certified.certificate
+            })?,
             (
                 SurfaceIntersectionCurve::Circle(raw_circle),
                 [
@@ -2041,10 +2046,27 @@ fn build_verified_branch_graph(
                 pcurves[0].as_curve().eval(parameter_maps[0].map(parameter)),
                 pcurves[1].as_curve().eval(parameter_maps[1].map(parameter)),
             ];
-            let boundary_surfaces = [
-                on_window_boundary(surface_parameters[0], surface_ranges[0], tolerance),
-                on_window_boundary(surface_parameters[1], surface_ranges[1], tolerance),
-            ];
+            let boundary_surfaces = match endpoint_proofs[endpoint] {
+                Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)) => {
+                    let sheet = match &carrier {
+                        CurveDescriptor::SkewCylinderBranch(carrier) => carrier.sheet(),
+                        _ => {
+                            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ));
+                        }
+                    };
+                    IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)
+                        .validated_boundary_surfaces(parameter, sheet, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?
+                }
+                None => [
+                    on_window_boundary(surface_parameters[0], surface_ranges[0], tolerance),
+                    on_window_boundary(surface_parameters[1], surface_ranges[1], tolerance),
+                ],
+            };
             let endpoint_event = match topology {
                 IntersectionBranchTopology::Open => {
                     IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
@@ -2089,6 +2111,7 @@ fn build_verified_branch_graph(
             parameter_maps,
             endpoint_vertices,
             endpoint_events,
+            endpoint_proofs,
             kind: branch.kind,
             certificate,
         });
@@ -2114,7 +2137,7 @@ pub(super) struct VerifiedBranchPayload {
 struct ResolvedGraphProofSources<'a> {
     fields: [ResolvedGraphSurfaceField<'a>; 2],
     offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
-    skew_cylinder_two_sheet_certificates: Option<&'a [PairedSkewCylinderBranchResidualCertificate]>,
+    skew_cylinder_branches: Option<&'a [CertifiedSkewCylinderBranch]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

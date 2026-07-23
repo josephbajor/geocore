@@ -35,6 +35,7 @@ mod graph_cylinder_cylinder;
 mod graph_cylinder_cylinder_skew;
 mod graph_cylinder_cylinder_skew_branch;
 mod graph_plane_cylinder;
+mod graph_skew_cylinder_endpoint;
 mod graph_surface;
 mod graph_surface_budget;
 mod graph_surface_persist;
@@ -67,6 +68,7 @@ mod plane_sphere;
 mod plane_torus;
 mod result;
 mod skew_cylinder_axial_roots;
+mod skew_cylinder_open_spans;
 mod skew_cylinder_sheet_occupancy;
 mod sphere_nurbs_surface;
 mod sphere_sphere;
@@ -116,9 +118,15 @@ pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY, SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
     SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY, SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
-    SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+    SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH,
+    SKEW_CYLINDER_OPEN_SPAN_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
     SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderStrictDiscriminantMiss,
+};
+pub use graph_skew_cylinder_endpoint::{
+    IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
+    SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
