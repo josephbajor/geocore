@@ -328,6 +328,32 @@ pub(crate) fn plan_axial_interval_sweep(
     operation: RegularizedBooleanOperation,
     preorder: &CertifiedAxialEndpointPreorder,
 ) -> AxialIntervalPlan {
+    plan_axial_interval_cells(preorder, |left_inside, right_inside| {
+        regularized_truth(operation, left_inside, right_inside)
+    })
+}
+
+/// Select the regularized portion of one certified source interval outside
+/// its peer, independently of the caller's ordered Boolean operands.
+///
+/// This is the interval authority for commutative operations that need to
+/// recognize which physical operand contributes a protruding tail. It avoids
+/// fabricating a swapped Boolean request or reconstructing endpoint order
+/// from coordinates.
+pub(crate) fn plan_axial_interval_difference(
+    preorder: &CertifiedAxialEndpointPreorder,
+    minuend: AxialIntervalOperand,
+) -> AxialIntervalPlan {
+    plan_axial_interval_cells(preorder, |left_inside, right_inside| match minuend {
+        AxialIntervalOperand::Left => left_inside && !right_inside,
+        AxialIntervalOperand::Right => right_inside && !left_inside,
+    })
+}
+
+fn plan_axial_interval_cells(
+    preorder: &CertifiedAxialEndpointPreorder,
+    selected_truth: impl Fn(bool, bool) -> bool,
+) -> AxialIntervalPlan {
     let cell_count = preorder.class_count.saturating_sub(1) as usize;
     let mut selected = [false; 3];
     let mut cell_contributors = [AxialOperandContributors::empty(); 3];
@@ -343,7 +369,7 @@ pub(crate) fn plan_axial_interval_sweep(
         if right_inside {
             cell_contributors[cell].insert(AxialIntervalOperand::Right);
         }
-        selected[cell] = regularized_truth(operation, left_inside, right_inside);
+        selected[cell] = selected_truth(left_inside, right_inside);
     }
 
     let mut spans = Vec::with_capacity(2);
@@ -430,6 +456,10 @@ mod tests {
 
     fn plan(ranks: [u8; 4], operation: RegularizedBooleanOperation) -> AxialIntervalPlan {
         plan_axial_interval_sweep(operation, &preorder(ranks))
+    }
+
+    fn difference(ranks: [u8; 4], minuend: AxialIntervalOperand) -> AxialIntervalPlan {
+        plan_axial_interval_difference(&preorder(ranks), minuend)
     }
 
     fn contributors(endpoints: &[AxialEndpointContributor]) -> AxialEndpointContributors {
@@ -585,6 +615,44 @@ mod tests {
         assert_spans(equal, Unite, &[equal_span]);
         assert_spans(equal, Intersect, &[equal_span]);
         assert_spans(equal, Subtract, &[]);
+    }
+
+    #[test]
+    fn physical_operand_difference_selects_either_protruding_tail_without_remapping() {
+        let crossing = [0, 2, 1, 3];
+        assert_eq!(
+            difference(crossing, AxialIntervalOperand::Left).spans(),
+            &[span(&[LEFT_START], &[RIGHT_START], &LEFT_ONLY)]
+        );
+        assert_eq!(
+            difference(crossing, AxialIntervalOperand::Right).spans(),
+            &[span(&[LEFT_END], &[RIGHT_END], &RIGHT_ONLY)]
+        );
+
+        let left_contains = [0, 3, 1, 2];
+        assert_eq!(
+            difference(left_contains, AxialIntervalOperand::Left).spans(),
+            &[
+                span(&[LEFT_START], &[RIGHT_START], &LEFT_ONLY),
+                span(&[RIGHT_END], &[LEFT_END], &LEFT_ONLY),
+            ]
+        );
+        assert!(
+            difference(left_contains, AxialIntervalOperand::Right)
+                .spans()
+                .is_empty()
+        );
+
+        let shared_high = [0, 2, 1, 2];
+        assert_eq!(
+            difference(shared_high, AxialIntervalOperand::Left).spans(),
+            &[span(&[LEFT_START], &[RIGHT_START], &LEFT_ONLY)]
+        );
+        assert!(
+            difference(shared_high, AxialIntervalOperand::Right)
+                .spans()
+                .is_empty()
+        );
     }
 
     fn remap_contributors(
@@ -767,6 +835,29 @@ mod tests {
                         span.side_operands(),
                         expected_contributors,
                         "ranks={ranks:?} operation={operation:?}"
+                    );
+                }
+            }
+            for minuend in OPERANDS {
+                let plan = difference(ranks, minuend);
+                for cell in 0..class_count.saturating_sub(1) {
+                    let left_low = ranks[0].min(ranks[1]);
+                    let left_high = ranks[0].max(ranks[1]);
+                    let right_low = ranks[2].min(ranks[3]);
+                    let right_high = ranks[2].max(ranks[3]);
+                    let left_inside = left_low <= cell && cell < left_high;
+                    let right_inside = right_low <= cell && cell < right_high;
+                    let expected = match minuend {
+                        AxialIntervalOperand::Left => left_inside && !right_inside,
+                        AxialIntervalOperand::Right => right_inside && !left_inside,
+                    };
+                    let planned = plan.spans().iter().any(|span| {
+                        boundary_rank(span.low(), ranks) <= cell
+                            && cell < boundary_rank(span.high(), ranks)
+                    });
+                    assert_eq!(
+                        planned, expected,
+                        "ranks={ranks:?} cell={cell} minuend={minuend:?}"
                     );
                 }
             }
