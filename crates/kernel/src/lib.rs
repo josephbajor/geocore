@@ -348,8 +348,9 @@ pub use section::{
     SectionPeriodicCycleOrientation, SectionPeriodicEmbeddingGap,
     SectionPeriodicFaceEmbeddingEvidence, SectionPeriodicFragmentEmbedding,
     SectionProjectiveParameterInterval, SectionRing, SectionRulingFragmentEnd,
-    SectionRulingTrimProvenance, SectionSite, SectionSourceParameterKey, SectionUvCircle,
-    SectionUvCurve, SectionUvLine, SectionUvParameterInterval, SectionVertex,
+    SectionRulingTrimProvenance, SectionSite, SectionSkewCylinderStrictDiscriminantMiss,
+    SectionSourceParameterKey, SectionUvCircle, SectionUvCurve, SectionUvLine,
+    SectionUvParameterInterval, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

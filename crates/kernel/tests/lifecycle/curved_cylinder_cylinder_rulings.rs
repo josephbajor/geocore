@@ -36,6 +36,7 @@ enum RadialRelation {
     Internal,
     Coincident,
     Skew,
+    SkewMiss,
 }
 
 struct Fixture {
@@ -150,6 +151,10 @@ fn relation_fixture(
         RadialRelation::Internal => (2.0, 0.5, [0.25, 0.0]),
         RadialRelation::Coincident => (1.0, 1.0, [0.0, 0.0]),
         RadialRelation::Skew => (1.0, 1.0, [0.75, 0.0]),
+        // The axes have cosine 4/5 and exact closest separation 4 along the
+        // shared y direction. Since 4 > 1+2, the infinite supports are
+        // independently disjoint; the non-right angle exercises A != 1.
+        RadialRelation::SkewMiss => (1.0, 2.0, [0.0, 4.0]),
     };
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
@@ -173,6 +178,9 @@ fn relation_fixture(
         let second_frame = match relation {
             RadialRelation::Skew => {
                 Frame::new(second_origin, frame.y() + frame.z(), frame.x()).unwrap()
+            }
+            RadialRelation::SkewMiss => {
+                Frame::new(second_origin, frame.x() * 0.6 + frame.z() * 0.8, frame.y()).unwrap()
             }
             _ => match direction {
                 AxisDirection::Parallel => frame.with_origin(second_origin),
@@ -644,6 +652,54 @@ fn one_ulp_exterior_radial_witness_survives_unrelated_section_gaps() {
             ),
             fixture.before,
             "one-ULP Section mutated a source for {direction:?}"
+        );
+    }
+}
+
+#[test]
+fn exact_skew_discriminant_miss_is_complete_read_only_and_swap_stable() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let fixture =
+            relation_fixture(placement, AxisDirection::Parallel, RadialRelation::SkewMiss);
+        let forward = relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let replay = relation_section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let swapped = relation_section(&fixture, fixture.second.clone(), fixture.first.clone());
+        assert_eq!(forward, replay, "serial skew-miss replay changed");
+
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        for candidate in [&forward, &swapped] {
+            assert_eq!(candidate.completion(), SectionCompletion::Complete);
+            assert!(candidate.gaps().is_empty());
+            assert!(candidate.branches().is_empty());
+            assert!(candidate.curve_fragments().is_empty());
+            assert!(cylinder_cylinder_branch_indices(&part, candidate).is_empty());
+            let [miss] = candidate.skew_cylinder_strict_discriminant_misses() else {
+                panic!("missing or duplicate propagated skew-discriminant witness");
+            };
+            assert_eq!(
+                miss.faces(),
+                &[
+                    cylinder_face(&part, candidate.bodies()[0].clone()),
+                    cylinder_face(&part, candidate.bodies()[1].clone()),
+                ]
+            );
+            assert!(
+                candidate
+                    .cylinder_cylinder_exterior_radial_separations()
+                    .is_empty(),
+                "a skew miss acquired parallel radial evidence"
+            );
+        }
+        drop(part);
+        assert_eq!(
+            source_signature(
+                &fixture.session,
+                &fixture.part_id,
+                &fixture.first,
+                &fixture.second,
+            ),
+            fixture.before,
+            "skew-miss Section mutated a source body"
         );
     }
 }

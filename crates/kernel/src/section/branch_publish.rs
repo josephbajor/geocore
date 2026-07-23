@@ -130,9 +130,9 @@ pub(super) fn collect_certified_curved_branches(
                     }
                     // Cylinder/Cylinder queries that were independently
                     // rejected by conservative source-face envelopes are
-                    // still offered to the analytic layer so exterior radial
-                    // provenance can be retained. Refusal cannot invalidate
-                    // that earlier complete-domain exclusion proof.
+                    // still offered to the analytic layer so exact global
+                    // separation provenance can be retained. Refusal cannot
+                    // invalidate that earlier complete-domain exclusion proof.
                     if broad_phase_empty {
                         continue;
                     }
@@ -174,22 +174,35 @@ pub(super) fn collect_certified_curved_branches(
             if intersections.raw.is_proven_empty() {
                 // `Ok` is the proof boundary: the graph-aware solver owns the
                 // complete-domain exclusion theorem for its admitted surface
-                // pair. In particular, its closed Cylinder/Cylinder admission
-                // is the only authority for an exterior radial miss; Section
-                // neither reconstructs nor tolerance-tests that relation.
+                // pair. Its closed Cylinder/Cylinder admissions own both
+                // parallel exterior separation and strict-negative skew
+                // discriminant misses; Section neither reconstructs nor
+                // tolerance-tests those relations.
                 // Require the verified graph payload to agree before
                 // publishing the result as a gap-free empty pair.
+                let parallel_miss = intersections
+                    .parallel_cylinder_exterior_radial_separation()
+                    .is_some();
+                let skew_miss = intersections
+                    .skew_cylinder_strict_discriminant_miss()
+                    .is_some();
+                let certified_empty = match pair_kind {
+                    CertifiedCurvedPair::PlaneCylinder => !parallel_miss && !skew_miss,
+                    CertifiedCurvedPair::CylinderCylinder => parallel_miss ^ skew_miss,
+                };
                 if intersections.branch_graph.vertices.is_empty()
                     && intersections.branch_graph.edges.is_empty()
+                    && certified_empty
                 {
-                    if pair_kind == CertifiedCurvedPair::CylinderCylinder
-                        && intersections
-                            .parallel_cylinder_exterior_radial_separation()
-                            .is_some()
-                    {
+                    if parallel_miss {
                         acc.cylinder_cylinder_exterior_radial_separations.push(
-                            SectionCylinderCylinderExteriorRadialSeparation { faces: facades },
+                            SectionCylinderCylinderExteriorRadialSeparation {
+                                faces: facades.clone(),
+                            },
                         );
+                    } else if skew_miss {
+                        acc.skew_cylinder_strict_discriminant_misses
+                            .push(SectionSkewCylinderStrictDiscriminantMiss { faces: facades });
                     }
                     continue;
                 }

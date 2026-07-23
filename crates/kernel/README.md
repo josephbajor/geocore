@@ -21,8 +21,10 @@ The current facade supports:
   strict-secant nested-height parallel cylinders, public Section returns two
   rulings plus two cap arcs in one topology-owned closed component across world
   and oblique frames, replay, and operand swap; the operation-local graph proof
-  also admits exact antiparallel axes, while tangent, miss, coincident, and skew
-  pairs remain typed gaps;
+  also admits exact antiparallel axes and exact nonparallel strict-negative
+  discriminant misses with facade-level source-face provenance, while parallel
+  internal/tangent/coincident relations and intersecting skew pairs remain
+  typed gaps;
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
   remainder bands, zero-cut truth-selected whole-source union/subtraction
@@ -66,8 +68,10 @@ above. Exact external tangency returns two independent source copies. Through
 positive axial overlap, exact internal tangency also returns contained-radius
 intersection/difference bands, covered-window source copies, and a compact
 one-tail Unite shoulder or canonical two-tail 7F/6E/2V shoulder chain;
-containing-minus-contained remains a typed pinched-topology gap. Skew
-Cylinder/Cylinder SSI is the next curved-intersection frontier.
+containing-minus-contained remains a typed pinched-topology gap. Exact
+dual-frame skew Cylinder/Cylinder SSI now certifies strict full-cycle misses
+with swap-stable 128/127 work evidence; finite-window two-sheet carriers and
+paired pcurves are the next curved-intersection frontier.
 
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic

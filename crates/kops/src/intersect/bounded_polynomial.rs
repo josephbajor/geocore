@@ -244,7 +244,7 @@ impl ExactPolynomial {
             .expect("a polynomial always has a coefficient")
     }
 
-    fn evaluate(&self, parameter: f64) -> Result<ExactScalar, RootIsolationFailure> {
+    pub(super) fn evaluate(&self, parameter: f64) -> Result<ExactScalar, RootIsolationFailure> {
         if !parameter.is_finite() {
             return Err(RootIsolationFailure::NonFiniteInput);
         }
@@ -255,7 +255,11 @@ impl ExactPolynomial {
         Ok(value)
     }
 
-    fn side_sign(&self, parameter: f64, side: EndpointSide) -> Result<i8, RootIsolationFailure> {
+    pub(super) fn side_sign(
+        &self,
+        parameter: f64,
+        side: EndpointSide,
+    ) -> Result<i8, RootIsolationFailure> {
         let mut derivative = self.clone();
         for order in 0..=self.degree() {
             let sign = derivative.evaluate(parameter)?.sign();
@@ -446,7 +450,7 @@ pub(super) enum RootIsolation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EndpointSide {
+pub(super) enum EndpointSide {
     Left,
     Right,
 }

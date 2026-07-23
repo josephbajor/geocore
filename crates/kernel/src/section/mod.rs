@@ -7,7 +7,7 @@
 //! plane, every edge a bounded straight line. It also exposes verified
 //! Plane/Cylinder circle and ruling-line carriers plus strict parallel
 //! Cylinder/Cylinder ruling carriers and proof-certified exterior radial
-//! misses. Complete-period circles are clipped
+//! misses, and exact nonparallel strict-discriminant misses. Complete-period circles are clipped
 //! against topology-owned polygon/ring trims and retained as intact carriers
 //! or certified bounded arcs. Ruling lines are clipped to the same topology-
 //! owned trims and retained as bounded affine fragments. Operation-
@@ -910,6 +910,25 @@ impl SectionCylinderCylinderExteriorRadialSeparation {
     }
 }
 
+/// Non-forgeable facade evidence that one exact nonparallel
+/// Cylinder/Cylinder source-face pair has a strictly negative ruling
+/// discriminant over the complete canonical cycle.
+///
+/// This read-only provenance is copied only from the graph-aware analytic
+/// solver's strict full-cycle miss witness. It remains available even when
+/// unrelated source-face pairs leave the overall graph indeterminate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionSkewCylinderStrictDiscriminantMiss {
+    faces: [FaceId; 2],
+}
+
+impl SectionSkewCylinderStrictDiscriminantMiss {
+    /// Cylinder source faces, in section operand order.
+    pub fn faces(&self) -> &[FaceId; 2] {
+        &self.faces
+    }
+}
+
 /// Whether the returned section graph is proven to be the complete
 /// boundary/boundary intersection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -935,6 +954,8 @@ pub struct BodySectionGraph {
     pub(crate) periodic_face_embeddings: Vec<SectionPeriodicFaceEmbeddingEvidence>,
     pub(crate) cylinder_cylinder_exterior_radial_separations:
         Vec<SectionCylinderCylinderExteriorRadialSeparation>,
+    pub(crate) skew_cylinder_strict_discriminant_misses:
+        Vec<SectionSkewCylinderStrictDiscriminantMiss>,
     pub(crate) loops: Vec<SectionLoop>,
     pub(crate) rings: Vec<SectionRing>,
     pub(crate) gaps: Vec<SectionGap>,
@@ -995,6 +1016,14 @@ impl BodySectionGraph {
         &self.cylinder_cylinder_exterior_radial_separations
     }
 
+    /// Exact full-cycle strict-negative discriminant misses for nonparallel
+    /// Cylinder/Cylinder source-face pairs.
+    pub fn skew_cylinder_strict_discriminant_misses(
+        &self,
+    ) -> &[SectionSkewCylinderStrictDiscriminantMiss] {
+        &self.skew_cylinder_strict_discriminant_misses
+    }
+
     /// Stitched chains in deterministic discovery order.
     pub fn loops(&self) -> &[SectionLoop] {
         &self.loops
@@ -1016,7 +1045,7 @@ impl BodySectionGraph {
     }
 }
 
-pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, and strict parallel Cylinder/Cylinder rulings or exterior radial misses in this slice";
+pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, strict parallel Cylinder/Cylinder rulings or exterior radial misses, and exact nonparallel strict-discriminant misses in this slice";
 pub(crate) const GAP_LINE_EDGES_ONLY: &str =
     "body sectioning is certified only for faces bounded by straight line edges";
 pub(crate) const GAP_BOUNDED_EDGES_ONLY: &str =
@@ -1055,9 +1084,10 @@ impl Part<'_> {
     /// The graph is read-only interrogation evidence: no topology is
     /// created or modified. Wrong-part, stale, and identical operand
     /// identities are rejected before the scope starts. Faces outside the
-    /// certified planar, Plane/Cylinder, and strict parallel
-    /// Cylinder/Cylinder slices (including proof-certified exterior radial
-    /// misses), coincident or tangent face pairs, and any
+    /// certified planar, Plane/Cylinder, strict parallel Cylinder/Cylinder,
+    /// and exact nonparallel strict-discriminant-miss slices (including
+    /// proof-certified exterior radial misses), coincident or tangent face
+    /// pairs, and any
     /// ordering that conservative intervals cannot certify yield
     /// [`SectionCompletion::Indeterminate`] with structured [`SectionGap`]
     /// reasons instead of a guessed graph.
@@ -1352,6 +1382,7 @@ struct SectionAccumulator {
     disk_fragments: Vec<disk_publish::CertifiedDiskCapFragment>,
     cylinder_cylinder_exterior_radial_separations:
         Vec<SectionCylinderCylinderExteriorRadialSeparation>,
+    skew_cylinder_strict_discriminant_misses: Vec<SectionSkewCylinderStrictDiscriminantMiss>,
     gaps: Vec<SectionGap>,
 }
 
@@ -2453,6 +2484,7 @@ fn assemble_graph(
         ruling_fragments,
         disk_fragments,
         cylinder_cylinder_exterior_radial_separations,
+        skew_cylinder_strict_discriminant_misses,
         mut gaps,
     } = acc;
     let stitched = stitch::stitch_segments(&segments);
@@ -2564,6 +2596,7 @@ fn assemble_graph(
         curve_components,
         periodic_face_embeddings,
         cylinder_cylinder_exterior_radial_separations,
+        skew_cylinder_strict_discriminant_misses,
         loops,
         rings,
         gaps,

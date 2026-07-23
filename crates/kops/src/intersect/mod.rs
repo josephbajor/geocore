@@ -1,6 +1,7 @@
 //! Geometric intersection algorithms and parameter-rich result contracts.
 
 mod bounded_polynomial;
+mod bounded_trigonometric;
 mod candidate;
 mod circle_circle;
 mod circle_cone;
@@ -31,8 +32,10 @@ mod error;
 mod geometry_class;
 mod graph_branch_certificate;
 mod graph_cylinder_cylinder;
+mod graph_cylinder_cylinder_skew;
 mod graph_plane_cylinder;
 mod graph_surface;
+mod graph_surface_budget;
 mod line_circle;
 mod line_cone;
 mod line_cylinder;
@@ -103,6 +106,12 @@ pub use error::{
 pub use graph_cylinder_cylinder::{
     ParallelCylinderExteriorRadialSeparation, ParallelCylinderInternalTangency,
     ParallelCylinderRadialRelation, classify_parallel_cylinder_radial_relation,
+};
+pub use graph_cylinder_cylinder_skew::{
+    SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY, SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
+    SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
+    SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SkewCylinderStrictDiscriminantMiss,
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,

@@ -9,11 +9,17 @@ use super::error::IntersectionError;
 pub use super::graph_branch_certificate::IntersectionBranchCertificate;
 use super::graph_cylinder_cylinder::{
     ParallelCylinderExteriorRadialSeparation, build_verified_cylinder_cylinder_ruling_branch,
-    intersect_certified_parallel_cylinders,
+    intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
+};
+use super::graph_cylinder_cylinder_skew::{
+    SkewCylinderStrictDiscriminantMiss, intersect_certified_skew_cylinders,
 };
 use super::graph_plane_cylinder::{
     build_verified_plane_cylinder_circle_branch, build_verified_plane_cylinder_ruling_branch,
     canonical_line, plane_pcurve,
+};
+pub use super::graph_surface_budget::{
+    GraphSurfaceBudgetProfile, NURBS_TRACE_CERTIFICATE_WORK, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
 };
 use super::nurbs_nurbs_surface::{
     intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope,
@@ -30,7 +36,6 @@ use super::nurbs_nurbs_surface::{
 };
 use super::nurbs_surface_march::{
     ContextMarchError, MarchOutput, MarchTrace, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
-    NurbsSurfaceMarchBudgetProfile,
 };
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
 use super::plane_nurbs_surface::intersect_bounded_plane_nurbs_surface_with_traces_in_scope;
@@ -45,9 +50,8 @@ use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::{
-    AccountingMode, BudgetPlan, DiagnosticKind, LimitSnapshot, LimitSpec, OperationContext,
-    OperationOutcome, OperationPolicyError, OperationScope, ResourceKind, SequentialWorkLedger,
-    SessionPolicy, StageId,
+    AccountingMode, DiagnosticKind, LimitSnapshot, OperationContext, OperationOutcome,
+    OperationPolicyError, OperationScope, ResourceKind, SequentialWorkLedger, SessionPolicy,
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve};
@@ -79,73 +83,8 @@ use kgraph::{
     verified_sphere_nurbs_intersection_certificate_cost,
 };
 
-const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
-const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
-const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
 const MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH: usize = 4;
 const MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH: usize = 4;
-
-/// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
-pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
-    match StageId::new("kops.intersect.spherical-circle-proof-subdivisions") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid spherical-circle proof stage"),
-    };
-
-/// Stable resource stage for fixed-depth whole-range analytic/NURBS proofs.
-pub const NURBS_TRACE_CERTIFICATE_WORK: StageId =
-    match StageId::new("kops.intersect.nurbs-trace-certificate-work") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid NURBS trace-certificate stage"),
-    };
-
-/// Version-1 composed budget for graph-owned surface intersection.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GraphSurfaceBudgetProfile;
-
-impl GraphSurfaceBudgetProfile {
-    /// Graph evaluation, scoped NURBS-surface marching, and bounded
-    /// whole-range branch proofs.
-    pub fn v1_defaults() -> BudgetPlan {
-        let evaluation = EvalBudgetProfile::v1_defaults();
-        let marcher = NurbsSurfaceMarchBudgetProfile::v1_defaults();
-        BudgetPlan::new(
-            evaluation
-                .limits()
-                .iter()
-                .copied()
-                .chain(marcher.limits().iter().copied())
-                .chain([
-                    LimitSpec::new(
-                        SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
-                        ResourceKind::Work,
-                        AccountingMode::Cumulative,
-                        kgraph::SPHERICAL_CIRCLE_PROOF_SEGMENTS as u64
-                            * MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY,
-                    ),
-                    LimitSpec::new(
-                        NURBS_TRACE_CERTIFICATE_WORK,
-                        ResourceKind::Work,
-                        AccountingMode::Cumulative,
-                        MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY,
-                    ),
-                    LimitSpec::new(
-                        NURBS_TRACE_CERTIFICATE_WORK,
-                        ResourceKind::Items,
-                        AccountingMode::HighWater,
-                        MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY,
-                    ),
-                    LimitSpec::new(
-                        NURBS_TRACE_CERTIFICATE_WORK,
-                        ResourceKind::Depth,
-                        AccountingMode::HighWater,
-                        kgraph::TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
-                    ),
-                ]),
-        )
-        .expect("built-in graph surface-intersection budget is valid")
-    }
-}
 
 const fn error_code(value: &'static str) -> ErrorCode {
     match ErrorCode::new(value) {
@@ -418,6 +357,7 @@ pub struct GraphSurfaceSurfaceIntersections {
     /// Verified operation-local branch graph derived from `raw`.
     pub branch_graph: IntersectionBranchGraph,
     parallel_cylinder_exterior_radial_separation: Option<ParallelCylinderExteriorRadialSeparation>,
+    skew_cylinder_strict_discriminant_miss: Option<SkewCylinderStrictDiscriminantMiss>,
 }
 
 impl GraphSurfaceSurfaceIntersections {
@@ -432,6 +372,18 @@ impl GraphSurfaceSurfaceIntersections {
         &self,
     ) -> Option<ParallelCylinderExteriorRadialSeparation> {
         self.parallel_cylinder_exterior_radial_separation
+    }
+
+    /// Exact proof that a nonparallel Cylinder/Cylinder pair has a strictly
+    /// negative ruling discriminant over one complete canonical cycle.
+    ///
+    /// `Some` is produced only for the exact cyclic complete-empty admission.
+    /// Parallel relations, strict-positive two-sheet families, contact roots,
+    /// and failed exact classification carry no such evidence.
+    pub const fn skew_cylinder_strict_discriminant_miss(
+        &self,
+    ) -> Option<SkewCylinderStrictDiscriminantMiss> {
+        self.skew_cylinder_strict_discriminant_miss
     }
 }
 
@@ -999,6 +951,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         _ => return Err(unsupported()),
     };
     let mut parallel_cylinder_exterior_radial_separation = None;
+    let mut skew_cylinder_strict_discriminant_miss = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1059,12 +1012,18 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 surface: cylinder_b,
             },
         ] => {
-            let (raw, separation) = intersect_certified_parallel_cylinders(
-                [cylinder_a, cylinder_b],
-                [range_a, range_b],
-                tolerances,
-            )?;
-            parallel_cylinder_exterior_radial_separation = separation;
+            let cylinders = [cylinder_a, cylinder_b];
+            let ranges = [range_a, range_b];
+            let raw = if require_exact_parallel_cylinder_axes(cylinders).is_ok() {
+                let (raw, separation) =
+                    intersect_certified_parallel_cylinders(cylinders, ranges, tolerances)?;
+                parallel_cylinder_exterior_radial_separation = separation;
+                raw
+            } else {
+                let (raw, miss) = intersect_certified_skew_cylinders(cylinders, ranges, scope)?;
+                skew_cylinder_strict_discriminant_miss = miss;
+                raw
+            };
             (raw, None)
         }
         [
@@ -1241,6 +1200,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         raw,
         branch_graph,
         parallel_cylinder_exterior_radial_separation,
+        skew_cylinder_strict_discriminant_miss,
     })
 }
 
