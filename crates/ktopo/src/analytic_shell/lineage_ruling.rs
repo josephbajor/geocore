@@ -4,11 +4,16 @@
 //! dyadic `plane_normal . cylinder_axis == 0`.  A rigid all-nonzero frame can
 //! lose that representation equality even when the result plane is copied
 //! verbatim from a topology-owned extrusion face.  This module admits only
-//! that one typed refusal and replaces only its family witness: two distinct,
-//! whole-fin source-face lines must share the signed cylinder axis.  Strict
-//! secancy and both complete-range residual obligations remain geometric.
+//! that one typed refusal and replaces only its family witness. The witness
+//! can be either two distinct whole-fin source-face lines sharing the signed
+//! cylinder axis or a complete topology-owned circular cylinder cap whose
+//! source axis is semantically perpendicular to the opposing cylinder axis.
+//! Strict secancy and both complete-range residual obligations remain
+//! geometric.
 
-use crate::entity::{EdgeId, EntityRef, FaceId};
+mod circular_cap;
+
+use crate::entity::{EdgeId, EntityRef, FaceId, FinId};
 use crate::geom::{CurveGeom, SurfaceGeom};
 use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::store::Store;
@@ -27,16 +32,43 @@ use kgraph::{
 const EXACT_PLANE_AXIS_ZERO_REASON: &str =
     "Plane/Cylinder ruling requires an exact plane-normal/cylinder-axis zero";
 
+/// Topology-owned authority for the missing exact Plane/Cylinder ruling-family
+/// relation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SourceLineagePlaneCylinderRulingFamilyWitness {
+    /// Two distinct whole-fin source lines share the opposing cylinder's
+    /// signed axis.
+    ParallelSourceLines {
+        /// Distinct source edges in deterministic face traversal order.
+        edges: [EdgeId; 2],
+        /// Conservative complete-fin residual bounds against signed-axis
+        /// lines.
+        axis_residual_bounds: [f64; 2],
+    },
+    /// A complete planar cap ring is manifold-paired with a source Cylinder
+    /// whose axis is semantically perpendicular to the opposing cylinder.
+    CircularCylinderCap {
+        /// Endpoint-free cap ring edge.
+        cap_edge: EdgeId,
+        /// The ring's fin on the planar source face.
+        cap_fin: FinId,
+        /// The paired ring fin on the source Cylinder face.
+        source_cylinder_fin: FinId,
+        /// The source Cylinder face owning the paired fin.
+        source_cylinder_face: FaceId,
+    },
+}
+
 /// Whole-range Plane/Cylinder ruling proof whose family witness comes from
-/// topology-owned, complete-fin source lines rather than a rounded frame dot.
+/// topology-owned complete-fin source topology rather than a rounded frame
+/// dot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SourceLineagePlaneCylinderRulingResidualCertificate {
     carrier: Line,
     carrier_range: ParamRange,
     traces: [PlaneCylinderRulingTrace; 2],
     source_plane_face: FaceId,
-    source_axis_edges: [EdgeId; 2],
-    source_axis_residual_bounds: [f64; 2],
+    source_family_witness: SourceLineagePlaneCylinderRulingFamilyWitness,
     residual_bounds: [f64; 2],
     tolerance: f64,
 }
@@ -62,15 +94,9 @@ impl SourceLineagePlaneCylinderRulingResidualCertificate {
         self.source_plane_face
     }
 
-    /// Two distinct whole-fin source edges sharing the signed cylinder axis.
-    pub const fn source_axis_edges(self) -> [EdgeId; 2] {
-        self.source_axis_edges
-    }
-
-    /// Conservative whole-fin residual bounds against exact signed-axis
-    /// lines for the two source witness edges.
-    pub const fn source_axis_residual_bounds(self) -> [f64; 2] {
-        self.source_axis_residual_bounds
+    /// Topology-owned source-family authority used by this proof.
+    pub const fn source_family_witness(self) -> SourceLineagePlaneCylinderRulingFamilyWitness {
+        self.source_family_witness
     }
 
     /// Conservative whole-range residual bounds in face-use order.
@@ -142,7 +168,7 @@ pub(super) fn certify_source_lineage_ruling_residuals(
         ));
     }
 
-    let (source_plane_face, source_axis_edges, source_axis_residual_bounds) =
+    let (source_plane_face, source_family_witness) =
         source_axis_witness(store, plane_source, plane, cylinder, tolerance)?;
 
     let Some(discriminant) = ruling_discriminant(plane, cylinder) else {
@@ -194,8 +220,7 @@ pub(super) fn certify_source_lineage_ruling_residuals(
         carrier_range,
         traces,
         source_plane_face,
-        source_axis_edges,
-        source_axis_residual_bounds,
+        source_family_witness,
         residual_bounds,
         tolerance,
     }))
@@ -207,7 +232,7 @@ fn source_axis_witness(
     result_plane: Plane,
     cylinder: Cylinder,
     tolerance: f64,
-) -> Option<(FaceId, [EdgeId; 2], [f64; 2])> {
+) -> Option<(FaceId, SourceLineagePlaneCylinderRulingFamilyWitness)> {
     let EntityRef::Face(face_id) = source? else {
         return None;
     };
@@ -219,6 +244,45 @@ fn source_axis_witness(
         return None;
     }
 
+    if let Some((edges, axis_residual_bounds)) =
+        source_line_axis_witness(store, face_id, cylinder, tolerance)
+    {
+        return Some((
+            face_id,
+            SourceLineagePlaneCylinderRulingFamilyWitness::ParallelSourceLines {
+                edges,
+                axis_residual_bounds,
+            },
+        ));
+    }
+
+    circular_cap::certify_circular_cap_source(
+        store,
+        face_id,
+        result_plane,
+        cylinder.frame().z(),
+        tolerance,
+    )
+    .map(|witness| {
+        (
+            face_id,
+            SourceLineagePlaneCylinderRulingFamilyWitness::CircularCylinderCap {
+                cap_edge: witness.cap_edge,
+                cap_fin: witness.cap_fin,
+                source_cylinder_fin: witness.source_cylinder_fin,
+                source_cylinder_face: witness.source_cylinder_face,
+            },
+        )
+    })
+}
+
+fn source_line_axis_witness(
+    store: &Store,
+    face_id: FaceId,
+    cylinder: Cylinder,
+    tolerance: f64,
+) -> Option<([EdgeId; 2], [f64; 2])> {
+    let face = store.get(face_id).ok()?;
     let axis = cylinder.frame().z();
     let mut lines = Vec::<(EdgeId, Line, f64)>::new();
     for &loop_id in &face.loops {
@@ -255,7 +319,6 @@ fn source_axis_witness(
         for second in (first + 1)..lines.len() {
             if distinct_parallel_lines(lines[first].1, lines[second].1, axis, tolerance) {
                 return Some((
-                    face_id,
                     [lines[first].0, lines[second].0],
                     [lines[first].2, lines[second].2],
                 ));
@@ -585,6 +648,23 @@ mod tests {
         placement: Frame,
     }
 
+    struct ObliqueCapRulingFixture {
+        store: Store,
+        source_face: FaceId,
+        source_loop: crate::entity::LoopId,
+        cap_edge: EdgeId,
+        cap_fin: FinId,
+        source_cylinder_fin: FinId,
+        source_cylinder_face: FaceId,
+        source_cylinder: Cylinder,
+        plane: Plane,
+        cylinder: Cylinder,
+        carrier: Line,
+        range: ParamRange,
+        traces: [PlaneCylinderRulingTrace; 2],
+        placement: Frame,
+    }
+
     fn oblique_ruling_fixture() -> ObliqueRulingFixture {
         let placement = Frame::new(
             Point3::new(3.0, -2.0, 1.25),
@@ -661,6 +741,124 @@ mod tests {
         }
     }
 
+    fn oblique_cap_ruling_fixture() -> ObliqueCapRulingFixture {
+        let placement = Frame::new(
+            Point3::new(2.5, -1.75, 0.625),
+            Vec3::new(0.48, 0.64, 0.6),
+            Vec3::new(0.8, -0.6, 0.0),
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let body = crate::make::cylinder(&mut store, &placement, 1.0, 0.1).unwrap();
+        let source_face = store
+            .faces_of_body(body)
+            .unwrap()
+            .into_iter()
+            .find(|face_id| {
+                matches!(
+                    store.get(store.get(*face_id).unwrap().surface).unwrap(),
+                    SurfaceGeom::Plane(_)
+                )
+            })
+            .unwrap();
+        let source_face_data = store.get(source_face).unwrap();
+        let [source_loop] = source_face_data.loops.as_slice() else {
+            panic!("cylinder cap must own one ring loop");
+        };
+        let source_loop = *source_loop;
+        let [cap_fin] = store.get(source_loop).unwrap().fins.as_slice() else {
+            panic!("cylinder cap ring loop must own one fin");
+        };
+        let cap_fin = *cap_fin;
+        let cap_fin_data = store.get(cap_fin).unwrap();
+        let cap_edge = cap_fin_data.edge;
+        let edge = store.get(cap_edge).unwrap();
+        let [first_fin, second_fin] = edge.fins.as_slice() else {
+            panic!("cylinder cap ring must have two manifold fins");
+        };
+        let source_cylinder_fin = if *first_fin == cap_fin {
+            *second_fin
+        } else if *second_fin == cap_fin {
+            *first_fin
+        } else {
+            panic!("cap fin must be owned by its ring edge");
+        };
+        let source_cylinder_loop = store.get(source_cylinder_fin).unwrap().parent;
+        let source_cylinder_face = store.get(source_cylinder_loop).unwrap().face;
+        let SurfaceGeom::Cylinder(source_cylinder) = store
+            .get(store.get(source_cylinder_face).unwrap().surface)
+            .unwrap()
+        else {
+            panic!("paired ring fin must belong to the cylinder side");
+        };
+        let source_cylinder = *source_cylinder;
+        let SurfaceGeom::Plane(plane) = store.get(source_face_data.surface).unwrap() else {
+            unreachable!();
+        };
+        let plane = *plane;
+
+        let opposing_frame = Frame::new(
+            plane.frame().origin() - placement.x(),
+            placement.x(),
+            placement.y(),
+        )
+        .unwrap();
+        let cylinder = Cylinder::new(opposing_frame, 0.5).unwrap();
+        assert_eq!(cylinder.frame().z(), source_cylinder.frame().x());
+        let carrier_origin = cylinder.frame().origin() + cylinder.frame().x() * cylinder.radius();
+        let carrier = Line::new(carrier_origin, cylinder.frame().z()).unwrap();
+        let range = ParamRange::new(0.0, 2.0);
+
+        let plane_local = plane.frame().to_local(carrier_origin);
+        let plane_direction = Vec2::new(
+            carrier.dir().dot(plane.frame().x()),
+            carrier.dir().dot(plane.frame().y()),
+        );
+        let plane_pcurve =
+            Line2d::new(Point2::new(plane_local.x, plane_local.y), plane_direction).unwrap();
+        let plane_map = AffineParamMap1d::new(plane_direction.norm(), 0.0).unwrap();
+
+        let cylinder_local = cylinder.frame().to_local(carrier_origin);
+        let cylinder_pcurve = Line2d::new(
+            Point2::new(
+                math::atan2(cylinder_local.y, cylinder_local.x),
+                cylinder_local.z,
+            ),
+            Vec2::new(0.0, 1.0),
+        )
+        .unwrap();
+        let cylinder_map = AffineParamMap1d::new(
+            carrier.dir().dot(cylinder.frame().z()),
+            (carrier.origin() - cylinder.frame().origin()).dot(cylinder.frame().z()),
+        )
+        .unwrap();
+        let traces = [
+            PlaneCylinderRulingTrace::Plane(PlaneRulingTrace::new(plane, plane_pcurve, plane_map)),
+            PlaneCylinderRulingTrace::Cylinder(CylinderRulingTrace::new(
+                cylinder,
+                cylinder_pcurve,
+                cylinder_map,
+            )),
+        ];
+
+        ObliqueCapRulingFixture {
+            store,
+            source_face,
+            source_loop,
+            cap_edge,
+            cap_fin,
+            source_cylinder_fin,
+            source_cylinder_face,
+            source_cylinder,
+            plane,
+            cylinder,
+            carrier,
+            range,
+            traces,
+            placement,
+        }
+    }
+
     #[test]
     fn exact_zero_refusal_uses_two_whole_fin_source_axis_residual_witnesses() {
         let fixture = oblique_ruling_fixture();
@@ -684,13 +882,16 @@ mod tests {
             panic!("topology-owned oblique source ruling was not certified");
         };
         assert_eq!(certificate.source_plane_face(), fixture.source_face);
-        assert_ne!(
-            certificate.source_axis_edges()[0],
-            certificate.source_axis_edges()[1]
-        );
+        let SourceLineagePlaneCylinderRulingFamilyWitness::ParallelSourceLines {
+            edges,
+            axis_residual_bounds,
+        } = certificate.source_family_witness()
+        else {
+            panic!("polygon side must retain the parallel-line family witness");
+        };
+        assert_ne!(edges[0], edges[1]);
         assert!(
-            certificate
-                .source_axis_residual_bounds()
+            axis_residual_bounds
                 .into_iter()
                 .all(|bound| bound <= TOLERANCE)
         );
@@ -699,6 +900,149 @@ mod tests {
                 .residual_bounds()
                 .into_iter()
                 .all(|bound| bound <= TOLERANCE)
+        );
+    }
+
+    #[test]
+    fn oblique_circular_cap_uses_deterministic_whole_fin_source_witness_under_trace_swap() {
+        let fixture = oblique_cap_ruling_fixture();
+        for traces in [fixture.traces, [fixture.traces[1], fixture.traces[0]]] {
+            let error = kgraph::certify_paired_plane_cylinder_ruling_residuals(
+                fixture.carrier,
+                fixture.range,
+                traces,
+                TOLERANCE,
+            )
+            .unwrap_err();
+            assert!(is_exact_plane_axis_zero_refusal(&error), "{error:?}");
+
+            let Some(Ok(certificate)) = certify_source_lineage_ruling_residuals(
+                &fixture.store,
+                fixture.carrier,
+                fixture.range,
+                traces,
+                Some(EntityRef::Face(fixture.source_face)),
+                TOLERANCE,
+            ) else {
+                panic!("topology-owned oblique circular cap was not certified");
+            };
+            assert_eq!(certificate.source_plane_face(), fixture.source_face);
+            assert_eq!(
+                certificate.source_family_witness(),
+                SourceLineagePlaneCylinderRulingFamilyWitness::CircularCylinderCap {
+                    cap_edge: fixture.cap_edge,
+                    cap_fin: fixture.cap_fin,
+                    source_cylinder_fin: fixture.source_cylinder_fin,
+                    source_cylinder_face: fixture.source_cylinder_face,
+                }
+            );
+            assert!(
+                certificate
+                    .residual_bounds()
+                    .into_iter()
+                    .all(|bound| bound <= TOLERANCE)
+            );
+        }
+    }
+
+    #[test]
+    fn circular_cap_source_witness_refuses_topology_and_metadata_tampers() {
+        let fixture = oblique_cap_ruling_fixture();
+        let mut cases = Vec::<(&str, Store)>::new();
+
+        let mut duplicate_cap_fin = fixture.store.clone();
+        duplicate_cap_fin
+            .get_mut(fixture.source_loop)
+            .unwrap()
+            .fins
+            .push(fixture.cap_fin);
+        cases.push(("duplicate cap-fin ownership", duplicate_cap_fin));
+
+        let mut missing_cap_winding = fixture.store.clone();
+        let cap_use = missing_cap_winding
+            .get(fixture.cap_fin)
+            .unwrap()
+            .pcurve
+            .unwrap();
+        missing_cap_winding.get_mut(fixture.cap_fin).unwrap().pcurve = Some(
+            crate::entity::FinPcurve::new(
+                cap_use.curve(),
+                cap_use.range(),
+                cap_use.edge_to_pcurve(),
+            )
+            .unwrap(),
+        );
+        cases.push(("missing cap closure winding", missing_cap_winding));
+
+        let mut bounded_ring = fixture.store.clone();
+        bounded_ring.get_mut(fixture.cap_edge).unwrap().bounds =
+            Some((0.0, core::f64::consts::TAU));
+        cases.push(("bounded endpoint-free ring", bounded_ring));
+
+        let mut duplicate_side_face = fixture.store.clone();
+        let shell = duplicate_side_face
+            .get(fixture.source_cylinder_face)
+            .unwrap()
+            .shell;
+        duplicate_side_face
+            .get_mut(shell)
+            .unwrap()
+            .faces
+            .push(fixture.source_cylinder_face);
+        cases.push(("duplicate side-face ownership", duplicate_side_face));
+
+        let mut broken_side_pcurve = fixture.store.clone();
+        let side_use = broken_side_pcurve
+            .get(fixture.source_cylinder_fin)
+            .unwrap()
+            .pcurve
+            .unwrap();
+        broken_side_pcurve
+            .get_mut(fixture.source_cylinder_fin)
+            .unwrap()
+            .pcurve = Some(
+            crate::entity::FinPcurve::new(
+                side_use.curve(),
+                side_use.range(),
+                side_use.edge_to_pcurve(),
+            )
+            .unwrap(),
+        );
+        cases.push(("missing side closure winding", broken_side_pcurve));
+
+        for (case, store) in cases {
+            assert!(
+                source_axis_witness(
+                    &store,
+                    Some(EntityRef::Face(fixture.source_face)),
+                    fixture.plane,
+                    fixture.cylinder,
+                    TOLERANCE,
+                )
+                .is_none(),
+                "{case} must fail closed"
+            );
+        }
+
+        let tilted_axis =
+            fixture.source_cylinder.frame().x() + fixture.source_cylinder.frame().z() * 1.0e-4;
+        let tilted_frame = Frame::new(
+            fixture.cylinder.frame().origin(),
+            tilted_axis,
+            fixture.placement.y(),
+        )
+        .unwrap();
+        let tilted_cylinder = Cylinder::new(tilted_frame, fixture.cylinder.radius()).unwrap();
+        assert!(
+            source_axis_witness(
+                &fixture.store,
+                Some(EntityRef::Face(fixture.source_face)),
+                fixture.plane,
+                tilted_cylinder,
+                TOLERANCE,
+            )
+            .is_none(),
+            "a nonperpendicular opposing axis must fail closed"
         );
     }
 

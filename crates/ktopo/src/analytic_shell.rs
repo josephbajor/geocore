@@ -41,7 +41,10 @@ use kgraph::{
 mod assemble;
 pub use assemble::{AnalyticShellAssemblyError, AnalyticShellOutput};
 mod lineage_ruling;
-pub use lineage_ruling::SourceLineagePlaneCylinderRulingResidualCertificate;
+pub use lineage_ruling::{
+    SourceLineagePlaneCylinderRulingFamilyWitness,
+    SourceLineagePlaneCylinderRulingResidualCertificate,
+};
 mod skew_cylinder;
 
 #[cfg(test)]
@@ -763,7 +766,7 @@ pub enum AnalyticEdgeProof {
     /// A finite transverse cylinder ruling lifted through Plane/Cylinder pcurves.
     PlaneCylinderRuling(PairedPlaneCylinderRulingResidualCertificate),
     /// A finite transverse cylinder ruling whose plane-family witness comes
-    /// from two whole-fin signed-axis lines on the lineaged source face.
+    /// from whole-fin topology on the lineaged source face.
     SourceLineagePlaneCylinderRuling(SourceLineagePlaneCylinderRulingResidualCertificate),
     /// A finite strict-secant ruling lifted through two cylindrical pcurves.
     CylinderCylinderRuling(PairedCylinderCylinderRulingResidualCertificate),
