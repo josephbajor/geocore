@@ -222,6 +222,44 @@ pub(super) fn collect_certified_curved_branches(
                 });
                 continue;
             }
+            let has_skew_two_sheet = intersections
+                .branch_graph
+                .edges
+                .iter()
+                .any(|edge| edge.certificate.as_skew_cylinder_two_sheet().is_some());
+            if has_skew_two_sheet {
+                let all_branches_are_skew = intersections
+                    .branch_graph
+                    .edges
+                    .iter()
+                    .all(|edge| edge.certificate.as_skew_cylinder_two_sheet().is_some());
+                // Both source faces are checked even after one refusal so
+                // operation accounting is independent of operand order and
+                // of which face carries the first malformed window.
+                let source_bands = [
+                    periodic_embedding::certify_source_annulus_window(
+                        store,
+                        part_id,
+                        &facades[0],
+                        linear,
+                        scope,
+                    )?,
+                    periodic_embedding::certify_source_annulus_window(
+                        store,
+                        part_id,
+                        &facades[1],
+                        linear,
+                        scope,
+                    )?,
+                ];
+                if !all_branches_are_skew || !source_bands.into_iter().all(|band| band) {
+                    acc.gaps.push(SectionGap {
+                        reason: GAP_SKEW_CYLINDER_WHOLE_BAND_UNPROVEN,
+                        faces: facades.to_vec(),
+                    });
+                    continue;
+                }
+            }
             for edge in &intersections.branch_graph.edges {
                 match pair_kind {
                     CertifiedCurvedPair::PlaneCylinder => append_plane_cylinder_branch(

@@ -1,8 +1,9 @@
-//! Section publication for graph-certified Cylinder/Cylinder rulings.
+//! Section publication for graph-certified Cylinder/Cylinder branches.
 //!
-//! This module only adapts graph-owned carrier and pcurve evidence. Bounded
-//! face membership, source-root identity, proof-range expansion, and fragment
-//! stitching remain owned by the existing ruling publication pipeline.
+//! Rulings retain topology-owned clipping and root identity. A certified skew
+//! sheet publishes directly as one whole closed fragment only after graph
+//! source-window containment and dispatcher-owned whole-band topology proof;
+//! no unsupported nonlinear clipping result is invented.
 //!
 //! Orientation uses metric projections against the stored cylinder axes. A
 //! [`Frame`] axis is semantically unit length but its stored components are
@@ -52,6 +53,15 @@ pub(super) fn append_branch(
             return Ok(());
         }
     };
+    if matches!(branch.carrier, SectionCarrier::SkewCylinderBranch(_)) {
+        if !append_whole_closed_branch(branch, acc) {
+            acc.gaps.push(SectionGap {
+                reason: GAP_CLOSED_STITCH,
+                faces: facades.to_vec(),
+            });
+        }
+        return Ok(());
+    }
     let [
         SectionUvCurve::Line(first_trace),
         SectionUvCurve::Line(second_trace),
@@ -82,6 +92,33 @@ pub(super) fn append_branch(
         scope,
         acc,
     )
+}
+
+/// Publish one source-window-contained sheet as a whole closed fragment.
+///
+/// Source adaptation is completed before any accumulator mutation so branch,
+/// stitch input, and facade evidence remain index-aligned.
+fn append_whole_closed_branch(branch: SectionBranch, acc: &mut SectionAccumulator) -> bool {
+    let branch_index = acc.branches.len();
+    let Some(source) =
+        closed_stitch::ClosedBranchSource::from_section_branch(branch_index, &branch)
+    else {
+        return false;
+    };
+    let fragment = closed_stitch::ClosedCurveFragment {
+        source: source.fragment(0),
+        orientation: closed_stitch::ClosedFragmentOrientation::AlongCarrier,
+        span: closed_stitch::ClosedFragmentSpan::Whole,
+    };
+    let evidence = ClosedFragmentEvidence {
+        branch: branch_index,
+        ordinal: 0,
+        span: ClosedFragmentEvidenceSpan::Whole,
+    };
+    acc.branches.push(branch);
+    acc.closed_fragments.push(fragment);
+    acc.closed_fragment_evidence.push(evidence);
+    true
 }
 
 /// Prove cap-ring pairs with one exact root in the graph-certified semantic
@@ -196,6 +233,9 @@ fn adapt_branch(
     if edge.kind != ContactKind::Transverse {
         return CylinderCylinderBranchAdaptation::Unsupported;
     }
+    if let Some(certificate) = edge.certificate.as_skew_cylinder_two_sheet() {
+        return adapt_skew_two_sheet_branch(faces, edge, vertices, surfaces, senses, certificate);
+    }
     let Some(certificate) = edge.certificate.as_cylinder_cylinder_ruling() else {
         return CylinderCylinderBranchAdaptation::Unsupported;
     };
@@ -290,12 +330,126 @@ fn adapt_branch(
     }))
 }
 
-/// Decide whether the graph-canonical ruling must be reversed to follow
-/// Section's `n_A x n_B` convention.
+fn adapt_skew_two_sheet_branch(
+    faces: &[FaceId; 2],
+    edge: &IntersectionBranchEdge,
+    vertices: &[kops::intersect::IntersectionBranchVertex],
+    surfaces: [&SurfaceGeom; 2],
+    senses: [Sense; 2],
+    certificate: kgraph::PairedSkewCylinderBranchResidualCertificate,
+) -> CylinderCylinderBranchAdaptation {
+    let Some(carrier) = edge.carrier.as_skew_cylinder_branch().copied() else {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    };
+    let Some(first_pcurve) = edge.pcurves[0].as_skew_cylinder_branch().copied() else {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    };
+    let Some(second_pcurve) = edge.pcurves[1].as_skew_cylinder_branch().copied() else {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    };
+    let source_pcurves = [first_pcurve, second_pcurve];
+    let traces = certificate.traces();
+    if edge.topology != IntersectionBranchTopology::Closed
+        || edge.endpoint_vertices[0] != edge.endpoint_vertices[1]
+        || edge.carrier_range != certificate.carrier_range()
+        || carrier != certificate.carrier()
+        || source_pcurves != traces.map(|trace| trace.pcurve())
+        || edge.parameter_maps != certificate.parameter_maps()
+    {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    }
+    let Some(vertex) = vertices.get(edge.endpoint_vertices[0]).copied() else {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    };
+    let IntersectionBranchVertexEvent::PeriodSeam {
+        surfaces: seam_boundaries,
+    } = vertex.event
+    else {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    };
+    let range = edge.carrier_range;
+    let graph_carrier = SectionSkewCylinderBranchCarrier::new(carrier, range, false);
+    let graph_seam = graph_carrier.eval_derivs(range.lo, 1);
+    let Some(flipped) = finite_point_and_tangent(graph_seam.d[0], graph_seam.d[1])
+        .then(|| {
+            canonical_flip(
+                surfaces[0],
+                senses[0],
+                surfaces[1],
+                senses[1],
+                graph_seam.d[0],
+                graph_seam.d[1],
+            )
+        })
+        .flatten()
+    else {
+        return CylinderCylinderBranchAdaptation::OrientationIndeterminate;
+    };
+
+    let carrier = SectionSkewCylinderBranchCarrier::new(carrier, range, flipped);
+    let pcurves =
+        source_pcurves.map(|pcurve| SectionSkewCylinderBranchPcurve::new(pcurve, range, flipped));
+    let seam = carrier.eval_derivs(range.lo, 1);
+    if !finite_point_and_tangent(seam.d[0], seam.d[1])
+        || canonical_flip(
+            surfaces[0],
+            senses[0],
+            surfaces[1],
+            senses[1],
+            seam.d[0],
+            seam.d[1],
+        ) != Some(false)
+    {
+        return CylinderCylinderBranchAdaptation::OrientationIndeterminate;
+    }
+    let seam_uv = pcurves.map(|pcurve| pcurve.eval(range.lo));
+    if !seam_uv
+        .iter()
+        .flat_map(|uv| [uv.x, uv.y])
+        .all(f64::is_finite)
+    {
+        return CylinderCylinderBranchAdaptation::Unsupported;
+    }
+    CylinderCylinderBranchAdaptation::Adapted(Box::new(SectionBranch {
+        faces: faces.clone(),
+        carrier: SectionCarrier::SkewCylinderBranch(carrier),
+        range,
+        topology: SectionBranchTopology::Closed,
+        pcurves: pcurves.map(SectionUvCurve::SkewCylinderBranch),
+        fragment_sites: vec![SectionFragmentSite {
+            point: seam.d[0],
+            surface_parameters: seam_uv.map(|uv| [uv.x, uv.y]),
+            surface_window_boundaries: seam_boundaries,
+        }],
+        endpoint_sites: [0, 0],
+        evidence: SectionBranchEvidence {
+            residual_bounds: certificate.residual_bounds(),
+            tolerance: certificate.tolerance(),
+        },
+        ruling_recertification: None,
+        ruling_parameter_flipped: false,
+    }))
+}
+
+fn finite_point_and_tangent(point: Point3, tangent: Vec3) -> bool {
+    point
+        .to_array()
+        .into_iter()
+        .chain(tangent.to_array())
+        .all(f64::is_finite)
+}
+
+/// Decide whether a graph carrier must be reversed to follow Section's
+/// `n_A x n_B` convention.
 ///
 /// Both cylinder normals are evaluated as outward-rounded, unnormalized
 /// radial vectors at the carrier origin. A strict sign is required; tangent
 /// or arithmetically ambiguous candidates remain structured gaps.
+///
+/// For a skew sheet, the paired certificate's strict-positive radicand and
+/// transverse closed-sheet invariant make this continuous orientation sign
+/// nonzero over the complete cycle. Its sign is therefore constant, so one
+/// strictly certified seam sign orients the whole loop.
 fn canonical_flip(
     surface_a: &SurfaceGeom,
     sense_a: Sense,

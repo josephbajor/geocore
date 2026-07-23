@@ -559,6 +559,7 @@ struct SourceRing {
     pcurve: SectionUvLine,
     use_: FinPcurve,
     winding: i32,
+    height: f64,
 }
 
 #[derive(Clone)]
@@ -853,7 +854,6 @@ fn certify_source_rings(
         return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
     };
     let mut rings = Vec::new();
-    let mut ring_heights = Vec::new();
     for loop_id in [*lower, *upper] {
         let loop_ = store
             .get(loop_id)
@@ -881,6 +881,8 @@ fn certify_source_rings(
         };
         if edge.vertices() != [None, None]
             || edge.bounds().is_some()
+            || edge.tolerance().is_some()
+            || edge.fins().len() != 2
             || !edge.fins().contains(fin)
             || !matches!(store.get(curve), Ok(CurveGeom::Circle(_)))
             || use_.seam().is_some()
@@ -925,12 +927,12 @@ fn certify_source_rings(
             },
             use_,
             winding: topology_winding,
+            height: boundary.origin().y,
         });
-        ring_heights.push(boundary.origin().y);
     }
     if rings[0].winding.signum() == rings[1].winding.signum()
-        || !ring_heights.iter().all(|height| height.is_finite())
-        || ring_heights[0] == ring_heights[1]
+        || !rings.iter().all(|ring| ring.height.is_finite())
+        || rings[0].height == rings[1].height
     {
         return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
     }
@@ -938,6 +940,50 @@ fn certify_source_rings(
         unreachable!("the source face supplied exactly two rings")
     };
     Ok([first, second])
+}
+
+/// Prove that one cylinder face is exactly the untrimmed full-period annulus
+/// described by its conservative face domain.
+///
+/// Two work units are charged before inspecting topology, so malformed and
+/// admitted faces consume the same operation-local source-ring ceiling.
+pub(super) fn certify_source_annulus_window(
+    store: &Store,
+    part: &PartId,
+    face: &FaceId,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> KernelResult<bool> {
+    scope
+        .ledger_mut()
+        .charge(SECTION_WORK, 2)
+        .map_err(Error::from)?;
+    let Ok(rings) = certify_source_rings(store, part, face, linear) else {
+        return Ok(false);
+    };
+    let Ok(raw) = store.get(face.raw()) else {
+        return Ok(false);
+    };
+    let Some(domain) = raw.domain() else {
+        return Ok(false);
+    };
+    if !matches!(store.get(raw.surface()), Ok(SurfaceGeom::Cylinder(_)))
+        || !domain.u.is_finite()
+        || !domain.v.is_finite()
+        || domain.u.width() != PERIOD
+    {
+        return Ok(false);
+    }
+    let [low, high] = if rings[0].height < rings[1].height {
+        [&rings[0], &rings[1]]
+    } else {
+        [&rings[1], &rings[0]]
+    };
+    let expected_low_winding = if raw.sense().is_forward() { 1 } else { -1 };
+    Ok(low.height == domain.v.lo
+        && high.height == domain.v.hi
+        && low.winding == expected_low_winding
+        && high.winding == -expected_low_winding)
 }
 
 fn certify_face_paths(

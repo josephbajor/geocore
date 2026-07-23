@@ -1019,6 +1019,83 @@ fn perpendicular_skew_positive_pair_promotes_two_closed_branches_rigidly_and_in_
 }
 
 #[test]
+fn primitive_base_origins_retry_contact_in_the_reverse_two_sheet_parameterization() {
+    let construction_frame = Frame::world();
+    let first = Cylinder::new(
+        construction_frame.with_origin(Point3::new(0.0, 0.0, -2.25)),
+        1.0,
+    )
+    .unwrap();
+    let second = Cylinder::new(
+        Frame::new(
+            Point3::new(-1.25, 0.0, 0.0),
+            construction_frame.x(),
+            construction_frame.y(),
+        )
+        .unwrap(),
+        2.0,
+    )
+    .unwrap();
+    let windows = [
+        cylinder_window(range(0.0, 4.5)),
+        cylinder_window(range(0.0, 2.5)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let forward = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let replay = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        second_handle,
+        windows[1],
+        first_handle,
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(forward, replay);
+    assert_perpendicular_two_sheet_result(
+        &forward,
+        [first_handle, second_handle],
+        [first, second],
+        construction_frame,
+    );
+    assert_perpendicular_two_sheet_result(
+        &reversed,
+        [second_handle, first_handle],
+        [second, first],
+        construction_frame,
+    );
+    assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    for (forward_edge, reversed_edge) in forward
+        .branch_graph
+        .edges
+        .iter()
+        .zip(&reversed.branch_graph.edges)
+    {
+        assert_eq!(forward_edge.carrier, reversed_edge.carrier);
+        assert_eq!(forward_edge.pcurves[0], reversed_edge.pcurves[1]);
+        assert_eq!(forward_edge.pcurves[1], reversed_edge.pcurves[0]);
+    }
+}
+
+#[test]
 fn non_right_skew_positive_pair_matches_independent_oracle_and_is_swap_stable() {
     let frame = Frame::world();
     let [first, second] = non_right_angle_axis_pair(frame, 0.0, 2.0);

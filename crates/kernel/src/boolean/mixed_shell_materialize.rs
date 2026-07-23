@@ -444,6 +444,9 @@ fn section_carrier(
             .and_then(|frame| Circle::new(frame, radius))
             .map(AnalyticShellCurve::Circle)
             .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry),
+        SectionCarrier::SkewCylinderBranch(_) => {
+            Err(MixedShellMaterializationError::UnsupportedSourceCurve)
+        }
     }
 }
 
@@ -1312,6 +1315,9 @@ fn section_pcurve(
             let map = AffineParamMap1d::new(circle.parameter_scale(), circle.parameter_offset())
                 .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
             (curve, map)
+        }
+        SectionUvCurve::SkewCylinderBranch(_) => {
+            return Err(MixedShellMaterializationError::UnsupportedPcurve);
         }
     };
     let shift = i32::try_from(*cylinder_period_shift)

@@ -7,8 +7,10 @@
 //! complete miss. A strictly positive discriminant proves the existence of two
 //! infinite-support sheets. Full-cycle publication then requires paired
 //! residual certificates for the procedural carrier and both pcurves. Contact
-//! roots and failed exact classification remain typed indeterminate; no
-//! sampled marcher is allowed to claim completion.
+//! roots unresolved in both ruling charts and failed exact classification
+//! remain typed indeterminate. A parameterization-local projection fold may
+//! retry the reverse chart, but only a strict-positive reverse proof can
+//! supersede Contact; no sampled marcher is allowed to claim completion.
 
 use kcore::error::CapabilityId;
 use kcore::operation::{DiagnosticCode, DiagnosticKind, OperationScope, StageId};
@@ -160,12 +162,28 @@ pub(super) fn intersect_certified_skew_cylinders(
         SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK,
     )?;
 
-    let mut admission = classify_one_parameterization(cylinders);
-    let mut parameterization_reversed = false;
-    if admission == DiscriminantAdmission::NumericResolution {
-        admission = classify_one_parameterization([cylinders[1], cylinders[0]]);
-        parameterization_reversed = true;
-    }
+    let first_admission = classify_one_parameterization(cylinders);
+    let (admission, parameterization_reversed) = match first_admission {
+        DiscriminantAdmission::Strict(_) => (first_admission, false),
+        DiscriminantAdmission::NumericResolution => (
+            classify_one_parameterization([cylinders[1], cylinders[0]]),
+            true,
+        ),
+        DiscriminantAdmission::Contact => {
+            let reversed = classify_one_parameterization([cylinders[1], cylinders[0]]);
+            // A projection fold may look like Contact in one ruling chart
+            // while the reverse chart proves two regular sheets. Conversely,
+            // a contradictory reverse miss cannot supersede retained contact.
+            match reversed {
+                DiscriminantAdmission::Strict(StrictSign::Positive) => (reversed, true),
+                DiscriminantAdmission::Strict(StrictSign::Negative)
+                | DiscriminantAdmission::Contact
+                | DiscriminantAdmission::NumericResolution => {
+                    (DiscriminantAdmission::Contact, false)
+                }
+            }
+        }
+    };
 
     match admission {
         DiscriminantAdmission::Strict(StrictSign::Negative) => {

@@ -27,8 +27,8 @@ use ktopo::geom::CurveGeom;
 
 use super::*;
 use crate::classify::{ClassifyPointInBodyRequest, PointBodyVerdict};
-use crate::operation::{BlockRequest, ExtrudeProfileRequest};
-use crate::{CylinderRequest, Kernel, PartEdit, PartId, Session};
+use crate::operation::{BlockRequest, CheckBodyRequest, ExtrudeProfileRequest};
+use crate::{CheckLevel, CheckOutcome, CylinderRequest, Kernel, PartEdit, PartId, Session};
 
 mod ruling;
 
@@ -49,6 +49,7 @@ const STABLE_GAP_REASONS: &[&str] = &[
     GAP_PAIR_UNRESOLVED,
     GAP_INCOMPATIBLE_EDGE_PARAMETERS,
     GAP_CURVED_TRIM_UNRESOLVED,
+    GAP_SKEW_CYLINDER_WHOLE_BAND_UNPROVEN,
     GAP_MIXED_FRAGMENT_STITCH,
     GAP_CLOSED_STITCH,
     curved_clip::ClosedConicClipGap::UnsupportedTrim.reason(),
@@ -1106,6 +1107,133 @@ fn block_slab_and_cylinder() -> (Session, PartId, BodyId, BodyId) {
     (session, part_id, block, cylinder)
 }
 
+fn contained_skew_cylinders(edit: &mut PartEdit<'_>, first_height: f64) -> (BodyId, BodyId) {
+    let first = edit
+        .create_cylinder(CylinderRequest::new(
+            Frame::world().with_origin(Point3::new(0.0, 0.0, -2.25)),
+            1.0,
+            first_height,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let second_frame = Frame::new(
+        Point3::new(-1.25, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let second = edit
+        .create_cylinder(CylinderRequest::new(second_frame, 2.0, 2.5))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    (first, second)
+}
+
+#[test]
+fn skew_whole_sheets_require_topology_to_match_both_axial_domain_bounds() {
+    let mut admitted_session = Kernel::new().create_session();
+    let admitted_part = admitted_session.create_part();
+    let (admitted_first, admitted_second) = {
+        let mut edit = admitted_session.edit_part(admitted_part.clone()).unwrap();
+        contained_skew_cylinders(&mut edit, 4.5)
+    };
+    let admitted = section_graph(
+        &admitted_session,
+        &admitted_part,
+        &admitted_first,
+        &admitted_second,
+    );
+    assert_eq!(admitted.completion(), SectionCompletion::Complete);
+    assert_eq!(admitted.branches().len(), 2);
+    assert_eq!(admitted.curve_fragments().len(), 2);
+    assert!(
+        admitted
+            .curve_fragments()
+            .iter()
+            .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole))
+    );
+    assert_eq!(admitted.rings().len(), 2);
+    assert!(admitted.gaps().is_empty());
+
+    let mut refused_session = Kernel::new().create_session();
+    let refused_part = refused_session.create_part();
+    let (refused_first, refused_second) = {
+        let mut edit = refused_session.edit_part(refused_part.clone()).unwrap();
+        let bodies = contained_skew_cylinders(&mut edit, 2.25);
+        let store = edit.store_mut_for_test();
+        let side = store
+            .faces_of_body(bodies.0.raw())
+            .unwrap()
+            .into_iter()
+            .find(|face| {
+                matches!(
+                    store.surface(store.get(*face).unwrap().surface()).unwrap(),
+                    SurfaceGeom::Cylinder(_)
+                )
+            })
+            .unwrap();
+        // Preserve the exact ring topology at v=[0, 2.25], but widen only
+        // the conservative analytic work box. The SSI proof may then cover
+        // two sheets; Section must not promote that box into trim truth.
+        let mut transaction = store.transaction().unwrap();
+        transaction.assembly().get_mut(side).unwrap().domain = Some(
+            ktopo::entity::FaceDomain::from_bounds(0.0, core::f64::consts::TAU, 0.0, 4.5).unwrap(),
+        );
+        transaction.commit_checked_body(bodies.0.raw()).unwrap();
+        bodies
+    };
+    let check = refused_session
+        .part(refused_part.clone())
+        .unwrap()
+        .check_body(CheckBodyRequest::new(
+            refused_first.clone(),
+            CheckLevel::Full,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(check.outcome(), CheckOutcome::Valid);
+    assert!(check.gaps().is_empty());
+    let refused = section_graph(
+        &refused_session,
+        &refused_part,
+        &refused_first,
+        &refused_second,
+    );
+    let replay = section_graph(
+        &refused_session,
+        &refused_part,
+        &refused_first,
+        &refused_second,
+    );
+    let swapped = section_graph(
+        &refused_session,
+        &refused_part,
+        &refused_second,
+        &refused_first,
+    );
+    assert_eq!(refused, replay);
+    for candidate in [&refused, &swapped] {
+        assert_eq!(candidate.completion(), SectionCompletion::Indeterminate);
+        assert!(candidate.branches().is_empty());
+        assert!(candidate.curve_endpoints().is_empty());
+        assert!(candidate.curve_fragments().is_empty());
+        assert!(candidate.curve_components().is_empty());
+        assert!(candidate.rings().is_empty());
+        assert_eq!(candidate.gaps().len(), 1, "{candidate:#?}");
+        assert_eq!(
+            candidate.gaps()[0].reason(),
+            GAP_SKEW_CYLINDER_WHOLE_BAND_UNPROVEN
+        );
+        assert_eq!(candidate.gaps()[0].faces().len(), 2);
+        assert_stable_gap_reasons(candidate);
+    }
+}
+
 #[test]
 fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
     let (session, part_id, block, cylinder) = block_slab_and_cylinder();
@@ -1161,7 +1289,9 @@ fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
                 x_direction,
                 radius,
             } => (center, normal, x_direction, radius),
-            SectionCarrier::Line { .. } => panic!("closed branch must retain a circle carrier"),
+            SectionCarrier::Line { .. } | SectionCarrier::SkewCylinderBranch(_) => {
+                panic!("closed branch must retain a circle carrier")
+            }
         };
         heights.push(center.z);
         assert_eq!(radius, 0.75);
@@ -1601,7 +1731,9 @@ fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
                 x_direction,
                 ..
             } => (center, normal, x_direction),
-            SectionCarrier::Line { .. } => panic!("closed ring must retain a circle carrier"),
+            SectionCarrier::Line { .. } | SectionCarrier::SkewCylinderBranch(_) => {
+                panic!("closed ring must retain a circle carrier")
+            }
         };
         let swapped_branch = swapped
             .branches()
@@ -1610,7 +1742,7 @@ fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
                 SectionCarrier::Circle {
                     center: candidate, ..
                 } => candidate.dist(center) <= POINT_MATCH_TOL,
-                SectionCarrier::Line { .. } => false,
+                SectionCarrier::Line { .. } | SectionCarrier::SkewCylinderBranch(_) => false,
             })
             .expect("swapped graph must retain the same geometric ring");
         let (swapped_normal, swapped_x) = match swapped_branch.carrier() {
@@ -1619,7 +1751,9 @@ fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
                 x_direction,
                 ..
             } => (normal, x_direction),
-            SectionCarrier::Line { .. } => panic!("closed ring must retain a circle carrier"),
+            SectionCarrier::Line { .. } | SectionCarrier::SkewCylinderBranch(_) => {
+                panic!("closed ring must retain a circle carrier")
+            }
         };
         assert!((normal + swapped_normal).norm() <= POINT_MATCH_TOL);
         assert!((x_direction - swapped_x).norm() <= POINT_MATCH_TOL);
@@ -1684,7 +1818,9 @@ fn rigidly_oriented_slab_through_cylinder_keeps_two_exact_rings() {
         .iter()
         .map(|ring| match graph.branches()[ring.branch()].carrier() {
             SectionCarrier::Circle { center, .. } => (center - base).dot(cylinder_frame.z()),
-            SectionCarrier::Line { .. } => panic!("closed ring must retain a circle carrier"),
+            SectionCarrier::Line { .. } | SectionCarrier::SkewCylinderBranch(_) => {
+                panic!("closed ring must retain a circle carrier")
+            }
         })
         .collect::<Vec<_>>();
     axial_parameters.sort_by(f64::total_cmp);

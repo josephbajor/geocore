@@ -5,7 +5,8 @@ use super::*;
 use kernel::{
     BodySectionGraph, ClassifyPointOnFaceRequest, PointFaceVerdict, SectionBranch,
     SectionBranchTopology, SectionCarrier, SectionCurveEndpointTopology, SectionCurveFragmentSpan,
-    SectionSite, SectionUvCurve, SurfaceEvaluationRequest,
+    SectionPeriodicEmbeddingGap, SectionSite, SectionSkewCylinderBranchCarrier,
+    SectionSkewCylinderBranchPcurve, SectionUvCurve, SurfaceEvaluationRequest,
 };
 
 const RADIUS: f64 = 1.0;
@@ -13,6 +14,9 @@ const AXIS_OFFSET: f64 = 0.5;
 const ROOT_Y: f64 = 0.866_025_403_784_438_6;
 const LONG_HALF_HEIGHT: f64 = 2.0;
 const SHORT_HALF_HEIGHT: f64 = 1.0;
+const SKEW_FIRST_HALF_HEIGHT: f64 = 2.25;
+const SKEW_SECOND_HALF_HEIGHT: f64 = 1.25;
+const SKEW_SECOND_RADIUS: f64 = 2.0;
 const TOLERANCE: f64 = 1.0e-9;
 
 #[derive(Debug, Clone, Copy)]
@@ -114,6 +118,57 @@ fn fixture(placement: Placement) -> Fixture {
                 frame.with_origin(frame.point_at(AXIS_OFFSET, 0.0, -SHORT_HALF_HEIGHT)),
                 RADIUS,
                 2.0 * SHORT_HALF_HEIGHT,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    let before = source_signature(&session, &part_id, &first, &second);
+    assert_eq!(before, ([3, 2, 0], [3, 2, 0], 2));
+    Fixture {
+        session,
+        part_id,
+        first,
+        second,
+        frame,
+        before,
+    }
+}
+
+fn skew_two_sheet_fixture(placement: Placement, narrow_first_height: bool) -> Fixture {
+    let frame = shared_frame(placement);
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let first_height = if narrow_first_height {
+            SKEW_FIRST_HALF_HEIGHT
+        } else {
+            2.0 * SKEW_FIRST_HALF_HEIGHT
+        };
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, -SKEW_FIRST_HALF_HEIGHT)),
+                RADIUS,
+                first_height,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_frame = Frame::new(
+            frame.point_at(-SKEW_SECOND_HALF_HEIGHT, 0.0, 0.0),
+            frame.x(),
+            frame.y(),
+        )
+        .unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(
+                second_frame,
+                SKEW_SECOND_RADIUS,
+                2.0 * SKEW_SECOND_HALF_HEIGHT,
             ))
             .unwrap()
             .into_result()
@@ -494,6 +549,359 @@ fn assert_closed_component_and_loci(
     assert_eq!(lateral_roots.len(), 2);
     assert!((lateral_roots[0] + ROOT_Y).abs() <= TOLERANCE);
     assert!((lateral_roots[1] - ROOT_Y).abs() <= TOLERANCE);
+}
+
+fn skew_carrier(branch: &SectionBranch) -> SectionSkewCylinderBranchCarrier {
+    let SectionCarrier::SkewCylinderBranch(carrier) = branch.carrier() else {
+        panic!("contained skew sheet escaped its certified procedural carrier")
+    };
+    carrier
+}
+
+fn skew_pcurve(branch: &SectionBranch, operand: usize) -> SectionSkewCylinderBranchPcurve {
+    let SectionUvCurve::SkewCylinderBranch(pcurve) = branch.pcurves()[operand] else {
+        panic!("contained skew sheet escaped its certified procedural pcurve")
+    };
+    pcurve
+}
+
+fn assert_contained_skew_branch(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    branch_index: usize,
+    frame: Frame,
+    operands_swapped: bool,
+) -> i8 {
+    let branch = &graph.branches()[branch_index];
+    let carrier = skew_carrier(branch);
+    assert_eq!(branch.topology(), SectionBranchTopology::Closed);
+    assert_eq!(branch.endpoint_sites(), [0, 0]);
+    assert_eq!(branch.fragment_sites().len(), 1);
+    assert_eq!(carrier.range(), branch.range());
+    let range = branch.range();
+    assert!(range.is_finite() && range.lo < range.hi);
+
+    let evidence = branch.evidence();
+    assert!(evidence.tolerance().is_finite() && evidence.tolerance() > 0.0);
+    assert!(
+        evidence
+            .residual_bounds()
+            .into_iter()
+            .all(|bound| bound.is_finite() && bound >= 0.0 && bound <= evidence.tolerance())
+    );
+    let pcurves = [skew_pcurve(branch, 0), skew_pcurve(branch, 1)];
+    for pcurve in pcurves {
+        assert_eq!(pcurve.range(), range);
+        assert_eq!(pcurve.reversed(), carrier.reversed());
+        assert_eq!(pcurve.source().sheet(), carrier.source().sheet());
+    }
+    let seam_site = branch.fragment_sites()[0];
+    assert!(
+        seam_site.point().dist(carrier.eval(range.lo)) <= evidence.tolerance(),
+        "retained seam point disagrees with the Section-oriented carrier"
+    );
+    let seam_parameters = seam_site.surface_parameters();
+    for operand in 0..2 {
+        let expected = pcurves[operand].eval(range.lo);
+        assert!(
+            (seam_parameters[operand][0] - expected.x).abs() <= TOLERANCE
+                && (seam_parameters[operand][1] - expected.y).abs() <= TOLERANCE,
+            "retained seam parameters disagree with the Section-oriented pcurve"
+        );
+    }
+    let expected_boundaries = if operands_swapped {
+        [false, true]
+    } else {
+        [true, false]
+    };
+    assert_eq!(
+        seam_site.surface_window_boundaries(),
+        expected_boundaries,
+        "the graph chart seam must remain attached to its caller-ordered source"
+    );
+
+    let carrier_parameter = |fraction: f64| {
+        if carrier.reversed() {
+            range.hi - range.width() * fraction
+        } else {
+            range.lo + range.width() * fraction
+        }
+    };
+    let seam_local = frame.to_local(carrier.eval(carrier_parameter(0.0)));
+    let sheet_sign = if seam_local.z < 0.0 { -1 } else { 1 };
+    assert!((seam_local.z.abs() - SKEW_SECOND_RADIUS).abs() <= evidence.tolerance());
+
+    for (fraction, sine, cosine, height) in [
+        (0.0, 0.0, 1.0, 2.0),
+        (0.25, 1.0, 0.0, 2.0 * ROOT_Y),
+        (0.5, 0.0, -1.0, 2.0),
+        (0.75, -1.0, 0.0, 2.0 * ROOT_Y),
+        (1.0, 0.0, 1.0, 2.0),
+    ] {
+        let parameter = carrier_parameter(fraction);
+        let derivatives = carrier.eval_derivs(parameter, 1);
+        let point = derivatives.d[0];
+        let expected = frame.origin()
+            + frame.x() * cosine
+            + frame.y() * sine
+            + frame.z() * (f64::from(sheet_sign) * height);
+        assert!(
+            point.dist(expected) <= evidence.tolerance(),
+            "procedural sheet disagrees with the perpendicular-cylinder oracle"
+        );
+        let canonical_tangent = frame.x() * -sine + frame.y() * cosine;
+        let expected_tangent = if carrier.reversed() {
+            -canonical_tangent
+        } else {
+            canonical_tangent
+        };
+        assert!(
+            (derivatives.d[1] - expected_tangent).norm() <= evidence.tolerance(),
+            "Section traversal escaped the independently oriented sheet tangent"
+        );
+        let first_cylinder_normal = frame.x() * cosine + frame.y() * sine;
+        let second_cylinder_normal =
+            (frame.y() * sine + frame.z() * (f64::from(sheet_sign) * height)) / SKEW_SECOND_RADIUS;
+        let outward_cross = if operands_swapped {
+            second_cylinder_normal.cross(first_cylinder_normal)
+        } else {
+            first_cylinder_normal.cross(second_cylinder_normal)
+        };
+        assert!(
+            derivatives.d[1].dot(outward_cross) > TOLERANCE,
+            "Section traversal opposes the first-outward-normal cross second-outward-normal rule"
+        );
+
+        for operand in 0..2 {
+            let uv = pcurves[operand].eval(parameter);
+            let face = part.face(branch.faces()[operand].clone()).unwrap();
+            let lifted = part
+                .evaluate_surface(SurfaceEvaluationRequest::new(
+                    face.surface(),
+                    [uv.x, uv.y],
+                    SurfaceDerivativeOrder::Position,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .position();
+            let roundoff = 128.0 * f64::EPSILON * (1.0 + point.norm().max(lifted.norm()));
+            assert!(
+                point.dist(lifted) <= evidence.residual_bounds()[operand] + roundoff,
+                "procedural pcurve lift escaped its whole-range residual proof"
+            );
+        }
+    }
+
+    let fragments = graph
+        .curve_fragments()
+        .iter()
+        .filter(|fragment| fragment.branch() == branch_index)
+        .collect::<Vec<_>>();
+    assert_eq!(fragments.len(), 1);
+    assert_eq!(fragments[0].source_ordinal(), 0);
+    assert!(matches!(
+        fragments[0].span(),
+        SectionCurveFragmentSpan::Whole
+    ));
+    sheet_sign
+}
+
+fn assert_contained_skew_graph(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    bodies: [BodyId; 2],
+    frame: Frame,
+    operands_swapped: bool,
+) -> [i8; 2] {
+    assert_eq!(graph.bodies(), &bodies);
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
+    assert_eq!(graph.branches().len(), 2);
+    assert!(graph.curve_endpoints().is_empty());
+    assert_eq!(graph.curve_fragments().len(), 2);
+    assert_eq!(graph.curve_components().len(), 2);
+    assert_eq!(graph.rings().len(), 2);
+
+    let signs = [
+        assert_contained_skew_branch(part, graph, 0, frame, operands_swapped),
+        assert_contained_skew_branch(part, graph, 1, frame, operands_swapped),
+    ];
+    assert_eq!(signs, [-1, 1], "sheet order must remain Lower then Upper");
+
+    let mut component_fragments = graph
+        .curve_components()
+        .iter()
+        .flat_map(|component| {
+            assert!(component.closed());
+            assert_eq!(component.fragments().len(), 1);
+            component.fragments().iter().copied()
+        })
+        .collect::<Vec<_>>();
+    component_fragments.sort_unstable();
+    assert_eq!(component_fragments, vec![0, 1]);
+    let mut ring_branches = graph
+        .rings()
+        .iter()
+        .map(|ring| ring.branch())
+        .collect::<Vec<_>>();
+    ring_branches.sort_unstable();
+    assert_eq!(ring_branches, vec![0, 1]);
+
+    assert_eq!(graph.periodic_face_embeddings().len(), 2);
+    let mut embedding_operands = Vec::new();
+    for embedding in graph.periodic_face_embeddings() {
+        embedding_operands.push(embedding.operand());
+        let Some(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve { fragment }) =
+            embedding.gap()
+        else {
+            panic!("nonlinear whole sheet retained unexpected periodic evidence: {embedding:?}")
+        };
+        let branch = &graph.branches()[graph.curve_fragments()[*fragment].branch()];
+        assert_eq!(embedding.face(), branch.faces()[embedding.operand()]);
+    }
+    embedding_operands.sort_unstable();
+    assert_eq!(embedding_operands, vec![0, 1]);
+    signs
+}
+
+#[test]
+fn contained_skew_two_sheet_section_is_complete_read_only_and_transform_stable() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let fixture = skew_two_sheet_fixture(placement, false);
+        let forward = section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let replay = section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let swapped = section(&fixture, fixture.second.clone(), fixture.first.clone());
+        assert_eq!(forward, replay, "serial contained-skew replay changed");
+
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        assert_eq!(
+            assert_contained_skew_graph(
+                &part,
+                &forward,
+                [fixture.first.clone(), fixture.second.clone()],
+                fixture.frame,
+                false,
+            ),
+            [-1, 1]
+        );
+        assert_eq!(
+            assert_contained_skew_graph(
+                &part,
+                &swapped,
+                [fixture.second.clone(), fixture.first.clone()],
+                fixture.frame,
+                true,
+            ),
+            [-1, 1]
+        );
+
+        for branch_index in 0..2 {
+            let original = &forward.branches()[branch_index];
+            let exchanged = &swapped.branches()[branch_index];
+            let original_carrier = skew_carrier(original);
+            let exchanged_carrier = skew_carrier(exchanged);
+            assert_eq!(original_carrier.source(), exchanged_carrier.source());
+            assert_eq!(original_carrier.range(), exchanged_carrier.range());
+            assert_ne!(original_carrier.reversed(), exchanged_carrier.reversed());
+            assert_eq!(
+                original.faces(),
+                &[exchanged.faces()[1].clone(), exchanged.faces()[0].clone()]
+            );
+            assert_eq!(
+                original.evidence().residual_bounds(),
+                [
+                    exchanged.evidence().residual_bounds()[1],
+                    exchanged.evidence().residual_bounds()[0],
+                ]
+            );
+            for operand in 0..2 {
+                let original_pcurve = skew_pcurve(original, operand);
+                let exchanged_pcurve = skew_pcurve(exchanged, 1 - operand);
+                assert_eq!(original_pcurve.source(), exchanged_pcurve.source());
+                assert_eq!(original_pcurve.range(), exchanged_pcurve.range());
+                assert_ne!(original_pcurve.reversed(), exchanged_pcurve.reversed());
+            }
+        }
+        drop(part);
+
+        assert_eq!(
+            source_signature(
+                &fixture.session,
+                &fixture.part_id,
+                &fixture.first,
+                &fixture.second,
+            ),
+            fixture.before,
+            "contained-skew Section mutated a source body"
+        );
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        for body in [fixture.first.clone(), fixture.second.clone()] {
+            let check = part
+                .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert_eq!(check.outcome(), CheckOutcome::Valid);
+            assert!(check.gaps().is_empty());
+        }
+    }
+}
+
+#[test]
+fn narrow_skew_height_refuses_partial_sheet_publication_with_one_graph_gap() {
+    let fixture = skew_two_sheet_fixture(Placement::World, true);
+    let forward = section(&fixture, fixture.first.clone(), fixture.second.clone());
+    let replay = section(&fixture, fixture.first.clone(), fixture.second.clone());
+    let swapped = section(&fixture, fixture.second.clone(), fixture.first.clone());
+    assert_eq!(forward, replay, "serial narrow-skew replay changed");
+
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    for (candidate, bodies) in [
+        (&forward, [fixture.first.clone(), fixture.second.clone()]),
+        (&swapped, [fixture.second.clone(), fixture.first.clone()]),
+    ] {
+        assert_eq!(candidate.bodies(), &bodies);
+        assert_eq!(candidate.completion(), SectionCompletion::Indeterminate);
+        assert!(candidate.vertices().is_empty());
+        assert!(candidate.edges().is_empty());
+        assert!(candidate.branches().is_empty());
+        assert!(candidate.curve_endpoints().is_empty());
+        assert!(candidate.curve_fragments().is_empty());
+        assert!(candidate.curve_components().is_empty());
+        assert!(candidate.rings().is_empty());
+        assert!(candidate.periodic_face_embeddings().is_empty());
+        assert_eq!(candidate.gaps().len(), 1, "{candidate:#?}");
+        assert_eq!(
+            candidate.gaps()[0].reason(),
+            "a candidate face pair returned an indeterminate intersection result"
+        );
+        assert_eq!(candidate.gaps()[0].faces().len(), 2);
+        assert!(
+            candidate.gaps()[0]
+                .faces()
+                .iter()
+                .all(|face| face_is_cylinder(&part, face))
+        );
+    }
+    drop(part);
+    assert_eq!(
+        source_signature(
+            &fixture.session,
+            &fixture.part_id,
+            &fixture.first,
+            &fixture.second,
+        ),
+        fixture.before,
+        "narrow-skew refusal mutated a source body"
+    );
 }
 
 #[test]

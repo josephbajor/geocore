@@ -38,14 +38,18 @@ fn world_ruling_scene() -> (Session, PartId, BodyId, BodyId) {
 fn line_carrier(branch: &SectionBranch) -> (Point3, Vec3) {
     match branch.carrier() {
         SectionCarrier::Line { origin, direction } => (origin, direction),
-        SectionCarrier::Circle { .. } => panic!("ruling branch must expose a line carrier"),
+        SectionCarrier::Circle { .. } | SectionCarrier::SkewCylinderBranch(_) => {
+            panic!("ruling branch must expose a line carrier")
+        }
     }
 }
 
 fn uv_line(curve: SectionUvCurve) -> SectionUvLine {
     match curve {
         SectionUvCurve::Line(line) => line,
-        SectionUvCurve::Circle(_) => panic!("ruling trace must expose a line pcurve"),
+        SectionUvCurve::Circle(_) | SectionUvCurve::SkewCylinderBranch(_) => {
+            panic!("ruling trace must expose a line pcurve")
+        }
     }
 }
 

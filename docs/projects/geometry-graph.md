@@ -253,7 +253,7 @@ interval, and a paired whole-interval residual certificate. Graph validation
 recomputes the certified field and rejects any mismatch before allocation; reverse
 dependencies protect every transitive basis (including offset chains) while the
 proof is live, and stale/altered sources roll the persistence batch back atomically.
-Exact-parallel strict-secant rulings and exact-nonparallel strictly contained two-sheet branches remain operation-local. The latter retain exact-source and stored finite-window/common-chart proofs, paired residuals, closed seam topology, and deterministic Lower/Upper order; contact, clipped, and coincident families stay typed gaps, and persistence refuses every unsupported analytic cylinder family before mutation.
+Exact-parallel strict-secant rulings and exact-nonparallel strictly contained two-sheet graph descriptors remain operation-local. On topology-certified whole source bands, public Section wraps the latter without persistence, retaining exact-source and stored finite-window/common-chart proofs, paired residuals, closed seam topology, deterministic Lower/Upper order, source-ordered nonlinear pcurves, and canonical traversal; conservative windows not aligned with trim topology, contact, clipped, and coincident families stay typed gaps, and persistence refuses every unsupported analytic cylinder family before mutation.
 
 ## Explicit non-goals
 

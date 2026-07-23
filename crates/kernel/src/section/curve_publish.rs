@@ -334,6 +334,7 @@ pub(super) fn carrier_point(carrier: SectionCarrier, parameter: f64) -> Option<P
             let (sin, cos) = kcore::math::sincos(parameter);
             center + x_direction * (radius * cos) + normal.cross(x_direction) * (radius * sin)
         }
+        SectionCarrier::SkewCylinderBranch(carrier) => carrier.eval(parameter),
     };
     [point.x, point.y, point.z]
         .into_iter()

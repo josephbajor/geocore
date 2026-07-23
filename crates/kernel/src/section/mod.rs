@@ -6,10 +6,13 @@
 //! This module computes that graph for the planar slice — every face on a
 //! plane, every edge a bounded straight line. It also exposes verified
 //! Plane/Cylinder circle and ruling-line carriers plus strict parallel
-//! Cylinder/Cylinder ruling carriers and proof-certified exterior radial
-//! misses, and exact nonparallel strict-discriminant misses. Complete-period circles are clipped
-//! against topology-owned polygon/ring trims and retained as intact carriers
-//! or certified bounded arcs. Ruling lines are clipped to the same topology-
+//! Cylinder/Cylinder ruling carriers, proof-certified exterior radial misses,
+//! exact nonparallel strict-discriminant misses, and strictly contained
+//! nonparallel sheets on topology-certified whole cylinder bands. Procedural
+//! sheets retain paired nonlinear pcurves and publish as endpoint-free rings.
+//! Complete-period circles are clipped against topology-owned polygon/ring
+//! trims and retained as intact carriers or certified bounded arcs. Ruling
+//! lines are clipped to the same topology-
 //! owned trims and retained as bounded affine fragments. Operation-
 //! shared source-edge root identities own endpoint joins and publish one
 //! canonical scalar inside each certified isolating interval. Carrier points
@@ -56,6 +59,7 @@ mod ruling_clip;
 mod ruling_public;
 mod ruling_publish;
 mod semantic_ruling;
+mod skew_cylinder_public;
 mod stitch;
 
 pub use periodic_embedding::{
@@ -68,6 +72,7 @@ pub use periodic_embedding::{
 pub(crate) use periodic_embedding::{
     certify_periodic_face_fragment_subset, periodic_face_fragment_subset_work,
 };
+pub use skew_cylinder_public::{SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve};
 
 #[cfg(test)]
 mod tests;
@@ -338,6 +343,9 @@ pub enum SectionBranchTopology {
 }
 
 /// Kernel-facade carrier geometry for a verified section branch.
+// The operation-local procedural variant stays inline to preserve the
+// facade's Copy value semantics.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SectionCarrier {
@@ -359,6 +367,8 @@ pub enum SectionCarrier {
         /// Positive circle radius.
         radius: f64,
     },
+    /// Certified procedural sheet of a skew Cylinder/Cylinder intersection.
+    SkewCylinderBranch(SectionSkewCylinderBranchCarrier),
 }
 
 /// Circular pcurve composed directly with its carrier parameter map.
@@ -399,6 +409,9 @@ impl SectionUvCircle {
 }
 
 /// Kernel-facade parameter-space carrier trace.
+// The operation-local procedural variant stays inline to preserve the
+// facade's Copy value semantics.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SectionUvCurve {
@@ -406,6 +419,8 @@ pub enum SectionUvCurve {
     Line(SectionUvLine),
     /// Parameter-space circle composed with the carrier angle map.
     Circle(SectionUvCircle),
+    /// Certified nonlinear skew-cylinder chart trace.
+    SkewCylinderBranch(SectionSkewCylinderBranchPcurve),
 }
 
 /// Kernel-owned summary of the paired whole-range proof.
@@ -453,14 +468,17 @@ impl SectionFragmentSite {
     }
 }
 
-/// One certified curved analytic circle or ruling-line carrier.
+/// One certified analytic or procedural curved section carrier.
 ///
 /// These branches are deliberately kept separate from [`SectionEdge`], whose
 /// endpoints and sites carry bounded trimmed-face topology. A matching
-/// [`SectionRing`] proves that exact trimming retained a complete-period
-/// circle carrier. A ruling-line branch retains its graph discovery sites;
-/// topology-clipped [`SectionCurveFragment`] values carry the physical ends.
-/// Mixed-family component traversal remains a structured graph gap.
+/// [`SectionRing`] proves that topology-certified whole-band window or exact
+/// trim evidence retained a complete-period carrier. A ruling-line branch
+/// retains its graph discovery sites; topology-clipped
+/// [`SectionCurveFragment`] values carry the physical ends. Strictly contained
+/// skew-cylinder sheets retain graph-certified procedural carriers and
+/// nonlinear pcurves without persistence. Mixed-family component traversal
+/// remains a structured graph gap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionBranch {
     faces: [FaceId; 2],
@@ -488,7 +506,7 @@ impl SectionBranch {
         &self.faces
     }
 
-    /// Exact model-space carrier through kernel-owned value types.
+    /// Certified model-space carrier through kernel-owned value types.
     pub const fn carrier(&self) -> SectionCarrier {
         self.carrier
     }
@@ -503,7 +521,7 @@ impl SectionBranch {
         self.topology
     }
 
-    /// Exact paired pcurves in operand order.
+    /// Certified paired pcurves in operand order.
     pub const fn pcurves(&self) -> &[SectionUvCurve; 2] {
         &self.pcurves
     }
@@ -537,11 +555,11 @@ pub struct SectionLoop {
 /// One endpoint-free closed section component carried by a complete-period
 /// curved branch.
 ///
-/// The referenced branch retains the exact carrier, paired pcurves, source
+/// The referenced branch retains the certified carrier, paired pcurves, source
 /// faces, intentional chart seam, and residual proof. A ring is emitted only
-/// after both exact face trims certify the whole branch and the closed
-/// fragment stitcher accepts it; the chart seam is never promoted to a
-/// physical vertex.
+/// after a topology-certified whole-band window or exact face-trim proof
+/// certifies the whole branch and the closed fragment stitcher accepts it; the
+/// chart seam is never promoted to a physical vertex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SectionRing {
     branch: usize,
@@ -1045,7 +1063,7 @@ impl BodySectionGraph {
     }
 }
 
-pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, strict parallel Cylinder/Cylinder rulings or exterior radial misses, and exact nonparallel strict-discriminant misses in this slice";
+pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, strict parallel Cylinder/Cylinder rulings or exterior radial misses, and exact nonparallel strict-discriminant misses or strictly contained sheets on topology-certified whole bands in this slice";
 pub(crate) const GAP_LINE_EDGES_ONLY: &str =
     "body sectioning is certified only for faces bounded by straight line edges";
 pub(crate) const GAP_BOUNDED_EDGES_ONLY: &str =
@@ -1070,6 +1088,7 @@ pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
     "stitched source-edge parameter enclosures are incompatible";
 pub(crate) const GAP_CURVED_TRIM_UNRESOLVED: &str =
     "two independently bounded curved trims cannot yet be intersected in cyclic parameter space";
+pub(crate) const GAP_SKEW_CYLINDER_WHOLE_BAND_UNPROVEN: &str = "strictly contained skew-cylinder sheets require exact untrimmed full-period source bands matching both axial face-domain bounds";
 pub(crate) const GAP_DISK_CHORD_TRIM_UNRESOLVED: &str =
     "a disk-cap chord is not strictly contained by one opposing planar trim span";
 pub(crate) const GAP_MIXED_FRAGMENT_STITCH: &str =
@@ -1085,9 +1104,9 @@ impl Part<'_> {
     /// created or modified. Wrong-part, stale, and identical operand
     /// identities are rejected before the scope starts. Faces outside the
     /// certified planar, Plane/Cylinder, strict parallel Cylinder/Cylinder,
-    /// and exact nonparallel strict-discriminant-miss slices (including
-    /// proof-certified exterior radial misses), coincident or tangent face
-    /// pairs, and any
+    /// exact nonparallel strict-discriminant-miss, and strictly contained
+    /// nonparallel whole-sheet slices (including proof-certified exterior
+    /// radial misses), coincident or tangent face pairs, and any
     /// ordering that conservative intervals cannot certify yield
     /// [`SectionCompletion::Indeterminate`] with structured [`SectionGap`]
     /// reasons instead of a guessed graph.

@@ -348,7 +348,8 @@ pub use section::{
     SectionPeriodicCycleOrientation, SectionPeriodicEmbeddingGap,
     SectionPeriodicFaceEmbeddingEvidence, SectionPeriodicFragmentEmbedding,
     SectionProjectiveParameterInterval, SectionRing, SectionRulingFragmentEnd,
-    SectionRulingTrimProvenance, SectionSite, SectionSkewCylinderStrictDiscriminantMiss,
+    SectionRulingTrimProvenance, SectionSite, SectionSkewCylinderBranchCarrier,
+    SectionSkewCylinderBranchPcurve, SectionSkewCylinderStrictDiscriminantMiss,
     SectionSourceParameterKey, SectionUvCircle, SectionUvCurve, SectionUvLine,
     SectionUvParameterInterval, SectionVertex,
 };
