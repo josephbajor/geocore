@@ -51,6 +51,7 @@ pub(super) fn pcurve_bounds(
     let bounds = match pcurve.curve() {
         AnalyticShellPcurve::Line(curve) => curve.bounding_box(active),
         AnalyticShellPcurve::Circle(curve) => curve.bounding_box(active),
+        AnalyticShellPcurve::PersistentSkewCylinderOpenSpan(curve) => curve.bounding_box(active),
     };
     let periods = surface_periodicity(surface);
     let min = pcurve

@@ -17,6 +17,7 @@ use crate::entity::{
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::transaction::Transaction;
 use kcore::error::Error;
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::Line;
 use kgeom::param::ParamRange;
 use kgraph::{
@@ -105,6 +106,8 @@ type UseKey = (AnalyticFaceKey, usize, usize);
 type FaceHandles = BTreeMap<AnalyticFaceKey, FaceId>;
 type SurfaceHandles = BTreeMap<AnalyticFaceKey, crate::entity::SurfaceId>;
 
+const SKEW_CYLINDER_TOLERANCE_OPERATION: &str = "analytic-shell.skew-cylinder-composite";
+
 struct AllocatedFaces {
     topology: FaceHandles,
     surfaces: SurfaceHandles,
@@ -166,6 +169,7 @@ impl Transaction<'_> {
         let pcurves = self.allocate_pcurves(prepared)?;
         let edges = self.allocate_edges(prepared, &vertices, &faces.surfaces, &pcurves)?;
         self.allocate_loops_and_fins(prepared, &faces.topology, &edges, &pcurves)?;
+        self.install_persistent_skew_tolerances(prepared, &edges)?;
         self.record_analytic_lineage(prepared, &faces.topology, &edges);
 
         Ok(AnalyticShellOutput {
@@ -243,6 +247,9 @@ impl Transaction<'_> {
                     let descriptor = match fin.pcurve().curve() {
                         AnalyticShellPcurve::Line(curve) => Curve2dGeom::Line(curve),
                         AnalyticShellPcurve::Circle(curve) => Curve2dGeom::Circle(curve),
+                        AnalyticShellPcurve::PersistentSkewCylinderOpenSpan(curve) => {
+                            Curve2dGeom::from(curve)
+                        }
                     };
                     let handle = self.store_mut().insert_pcurve(descriptor)?;
                     pcurves.insert((face.key(), loop_index, fin_index), handle);
@@ -314,12 +321,31 @@ impl Transaction<'_> {
                     )?;
                     self.store_mut().insert_curve(CurveGeom::Line(carrier))?
                 }
+                AnalyticEdgeProof::PersistentSkewCylinderOpenSpan(certificate) => {
+                    let source_surfaces = [surfaces[&uses[0].face()], surfaces[&uses[1].face()]];
+                    let source_pcurves = [
+                        pcurves[&(uses[0].face(), uses[0].loop_index(), uses[0].fin_index())],
+                        pcurves[&(uses[1].face(), uses[1].loop_index(), uses[1].fin_index())],
+                    ];
+                    self.store_mut()
+                        .insert_verified_skew_cylinder_open_span_curve(
+                            source_surfaces,
+                            source_pcurves,
+                            certificate,
+                        )?
+                }
                 AnalyticEdgeProof::PlaneCylinderRuling(_)
                 | AnalyticEdgeProof::SourceLineagePlaneCylinderRuling(_)
                 | AnalyticEdgeProof::PlaneCylinderCircle(_) => {
                     let descriptor = match declaration.carrier() {
                         AnalyticShellCurve::Line(curve) => CurveGeom::Line(curve),
                         AnalyticShellCurve::Circle(curve) => CurveGeom::Circle(curve),
+                        AnalyticShellCurve::PersistentSkewCylinderOpenSpan(_) => {
+                            return Err(Error::InvalidGeometry {
+                                reason: "persistent skew-cylinder edge lost its sealed proof",
+                            }
+                            .into());
+                        }
                     };
                     self.store_mut().insert_curve(descriptor)?
                 }
@@ -344,6 +370,44 @@ impl Transaction<'_> {
             edges.insert(key, handle);
         }
         Ok(edges)
+    }
+
+    fn install_persistent_skew_tolerances(
+        &mut self,
+        prepared: &PreparedAnalyticShell,
+        edges: &BTreeMap<AnalyticEdgeKey, EdgeId>,
+    ) -> Result<(), AnalyticShellAssemblyError> {
+        let requests = prepared
+            .edges()
+            .iter()
+            .filter_map(|prepared_edge| {
+                prepared_edge
+                    .proof()
+                    .persistent_edge_tolerance()
+                    .map(|tolerance| {
+                        (
+                            edges[&prepared_edge.edge().key()],
+                            tolerance.max(LINEAR_RESOLUTION),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            return Ok(());
+        }
+        let limit = requests.iter().try_fold(0.0, |total, (_, tolerance)| {
+            let next = total + (tolerance - LINEAR_RESOLUTION).max(0.0);
+            next.is_finite()
+                .then_some(next)
+                .ok_or(Error::InvalidGeometry {
+                    reason: "persistent skew-cylinder tolerance budget overflowed",
+                })
+        })?;
+        let budget = self.declare_tolerance_budget(SKEW_CYLINDER_TOLERANCE_OPERATION, limit)?;
+        for (edge, tolerance) in requests {
+            self.grow_edge_tolerance(budget, edge, tolerance)?;
+        }
+        Ok(())
     }
 
     fn recertify_cylinder_cylinder_ruling(

@@ -31,8 +31,9 @@ use kgraph::{
     AffineParamMap1d, CylinderLongitudeTrace, CylinderRulingTrace, IntersectionCertificateError,
     PairedCylinderCylinderRulingResidualCertificate, PairedPlaneCylinderCircleResidualCertificate,
     PairedPlaneCylinderRulingResidualCertificate, PairedPlaneLineResidualCertificate,
-    PlaneCircleTrace, PlaneCylinderCircleTrace, PlaneCylinderRulingTrace, PlaneRulingTrace,
-    certify_paired_cylinder_cylinder_ruling_residuals,
+    PersistentSkewCylinderOpenSpanCarrier, PersistentSkewCylinderOpenSpanCertificate,
+    PersistentSkewCylinderOpenSpanPcurve, PlaneCircleTrace, PlaneCylinderCircleTrace,
+    PlaneCylinderRulingTrace, PlaneRulingTrace, certify_paired_cylinder_cylinder_ruling_residuals,
     certify_paired_plane_cylinder_circle_residuals, certify_paired_plane_cylinder_ruling_residuals,
     certify_paired_plane_line_residuals,
 };
@@ -41,11 +42,14 @@ mod assemble;
 pub use assemble::{AnalyticShellAssemblyError, AnalyticShellOutput};
 mod lineage_ruling;
 pub use lineage_ruling::SourceLineagePlaneCylinderRulingResidualCertificate;
+mod skew_cylinder;
 
 #[cfg(test)]
 mod assemble_tests;
 #[cfg(test)]
 pub(crate) mod cylinder_cylinder_tests;
+#[cfg(test)]
+mod skew_cylinder_tests;
 
 macro_rules! stable_key {
     ($name:ident, $doc:literal) => {
@@ -136,6 +140,8 @@ pub enum AnalyticShellCurve {
     Line(Line),
     /// Periodic circle carrier.
     Circle(Circle),
+    /// Persistent nonperiodic logical composite over one bounded skew span.
+    PersistentSkewCylinderOpenSpan(PersistentSkewCylinderOpenSpanCarrier),
 }
 
 impl AnalyticShellCurve {
@@ -143,6 +149,7 @@ impl AnalyticShellCurve {
         match self {
             Self::Line(curve) => curve.eval(parameter),
             Self::Circle(curve) => curve.eval(parameter),
+            Self::PersistentSkewCylinderOpenSpan(curve) => curve.eval(parameter),
         }
     }
 }
@@ -154,6 +161,8 @@ pub enum AnalyticShellPcurve {
     Line(Line2d),
     /// Parameter-space circle.
     Circle(Circle2d),
+    /// Persistent nonperiodic logical chart over one bounded skew span.
+    PersistentSkewCylinderOpenSpan(PersistentSkewCylinderOpenSpanPcurve),
 }
 
 impl AnalyticShellPcurve {
@@ -161,6 +170,7 @@ impl AnalyticShellPcurve {
         match self {
             Self::Line(curve) => curve.eval(parameter),
             Self::Circle(curve) => curve.eval(parameter),
+            Self::PersistentSkewCylinderOpenSpan(curve) => curve.eval(parameter),
         }
     }
 
@@ -168,6 +178,7 @@ impl AnalyticShellPcurve {
         let bounds = match self {
             Self::Line(curve) => curve.bounding_box(range),
             Self::Circle(curve) => curve.bounding_box(range),
+            Self::PersistentSkewCylinderOpenSpan(curve) => curve.bounding_box(range),
         };
         (bounds.min, bounds.max)
     }
@@ -233,9 +244,80 @@ pub struct AnalyticShellEdge {
     vertices: [AnalyticVertexKey; 2],
     carrier: AnalyticShellCurve,
     range: ParamRange,
+    persistent_skew_certificate: Option<PersistentSkewCylinderOpenSpanCertificate>,
     source: Option<EntityRef>,
     derived_sources: Option<[EntityRef; 2]>,
     split_lineage: Option<(EntityRef, AnalyticEdgeSplitPiece)>,
+}
+
+/// Sealed analytic-shell declarations derived from one persistent skew proof.
+///
+/// The certificate alone chooses the spatial carrier, both ordered pcurves,
+/// topology metric endpoints, logical `[0, 1]` domain, and required edge
+/// tolerance. Generic edge construction cannot author this retained proof and
+/// is therefore rejected when paired with a persistent composite carrier.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnalyticShellSkewCylinderOpenSpan {
+    certificate: PersistentSkewCylinderOpenSpanCertificate,
+    vertices: [AnalyticShellVertex; 2],
+    edge: AnalyticShellEdge,
+    pcurves: [AnalyticPcurveUse; 2],
+}
+
+impl AnalyticShellSkewCylinderOpenSpan {
+    /// Derive one complete bounded declaration from a sealed graph proof.
+    pub fn new(
+        edge: AnalyticEdgeKey,
+        vertices: [AnalyticVertexKey; 2],
+        certificate: PersistentSkewCylinderOpenSpanCertificate,
+    ) -> Self {
+        let endpoint_points = certificate.endpoint_points();
+        let identity = AffineParamMap1d::new(1.0, 0.0)
+            .expect("the persistent skew logical correspondence is identity");
+        Self {
+            certificate,
+            vertices: [
+                AnalyticShellVertex::new(vertices[0], endpoint_points[0]),
+                AnalyticShellVertex::new(vertices[1], endpoint_points[1]),
+            ],
+            edge: AnalyticShellEdge {
+                key: edge,
+                vertices,
+                carrier: AnalyticShellCurve::PersistentSkewCylinderOpenSpan(certificate.carrier()),
+                range: certificate.logical_range(),
+                persistent_skew_certificate: Some(certificate),
+                source: None,
+                derived_sources: None,
+                split_lineage: None,
+            },
+            pcurves: certificate.pcurves().map(|pcurve| {
+                AnalyticPcurveUse::new(
+                    AnalyticShellPcurve::PersistentSkewCylinderOpenSpan(pcurve),
+                    identity,
+                )
+            }),
+        }
+    }
+
+    /// Topology endpoint declarations in logical order.
+    pub const fn vertices(self) -> [AnalyticShellVertex; 2] {
+        self.vertices
+    }
+
+    /// Bounded edge declaration retaining the sealed certificate.
+    pub const fn edge(self) -> AnalyticShellEdge {
+        self.edge
+    }
+
+    /// Exact source-ordered pcurve uses with identity logical maps.
+    pub const fn pcurves(self) -> [AnalyticPcurveUse; 2] {
+        self.pcurves
+    }
+
+    /// Persistent proof from which every declaration was derived.
+    pub const fn certificate(self) -> PersistentSkewCylinderOpenSpanCertificate {
+        self.certificate
+    }
 }
 
 /// Stable semantic order of one result in an explicitly binary edge split.
@@ -274,6 +356,7 @@ impl AnalyticShellEdge {
             vertices,
             carrier,
             range,
+            persistent_skew_certificate: None,
             source: None,
             derived_sources: None,
             split_lineage: None,
@@ -686,6 +769,19 @@ pub enum AnalyticEdgeProof {
     CylinderCylinderRuling(PairedCylinderCylinderRulingResidualCertificate),
     /// A circle whose complete period is proved on a plane and cylinder.
     PlaneCylinderCircle(PairedPlaneCylinderCircleResidualCertificate),
+    /// A normalized skew-cylinder composite bound to two ordered cylinders.
+    PersistentSkewCylinderOpenSpan(PersistentSkewCylinderOpenSpanCertificate),
+}
+
+impl AnalyticEdgeProof {
+    const fn persistent_edge_tolerance(self) -> Option<f64> {
+        match self {
+            Self::PersistentSkewCylinderOpenSpan(certificate) => {
+                Some(certificate.required_edge_tolerance())
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -766,7 +862,11 @@ impl PreparedAnalyticEdge {
         self.edge
     }
 
-    /// Two uses ordered by face, loop, then fin identity.
+    /// Two uses in proof order.
+    ///
+    /// Ordinary analytic pairs retain canonical face/loop/fin order.
+    /// Persistent skew-cylinder pairs use the certificate's geometric source
+    /// order, independent of numeric face keys.
     pub const fn uses(self) -> [AnalyticEdgeUseRef; 2] {
         self.uses
     }
@@ -1137,14 +1237,22 @@ pub(super) fn prepare_analytic_shell_component(
                 uses: candidates.len(),
             });
         }
+        let candidates = match declaration.carrier() {
+            AnalyticShellCurve::PersistentSkewCylinderOpenSpan(_) => {
+                skew_cylinder::order_pair(declaration, *candidates).map_err(|source| {
+                    AnalyticShellPlanError::PairingCertification { edge: key, source }
+                })?
+            }
+            _ => *candidates,
+        };
         if candidates[0].sense == candidates[1].sense {
             return Err(AnalyticShellPlanError::EdgeUsesNotOpposed(key));
         }
         if candidates[0].face == candidates[1].face {
             return Err(AnalyticShellPlanError::SelfAdjacentEdge(key));
         }
-        let proof = certify_edge_pair(key, declaration, *candidates, store, tolerance)?;
-        let refs = (*candidates).map(|candidate| AnalyticEdgeUseRef {
+        let proof = certify_edge_pair(key, declaration, candidates, store, tolerance)?;
+        let refs = candidates.map(|candidate| AnalyticEdgeUseRef {
             face: candidate.face,
             loop_index: candidate.loop_index,
             fin_index: candidate.fin_index,
@@ -1210,6 +1318,7 @@ fn prepare_edges(
                 reason: "analytic shell edge range must be finite and increasing",
             });
         }
+        skew_cylinder::validate_edge_declaration(edge)?;
         match edge.carrier {
             AnalyticShellCurve::Line(_) if edge.vertices[0] == edge.vertices[1] => {
                 return Err(AnalyticShellPlanError::InvalidGeometry {
@@ -1237,8 +1346,12 @@ fn prepare_edges(
             } else {
                 edge.range.hi
             };
-            if !certify_endpoint_incidence(vertex.position, edge.carrier.eval(parameter), tolerance)
-            {
+            let incident = if edge.persistent_skew_certificate.is_some() {
+                skew_cylinder::endpoint_matches(edge, endpoint, vertex.position)
+            } else {
+                certify_endpoint_incidence(vertex.position, edge.carrier.eval(parameter), tolerance)
+            };
+            if !incident {
                 return Err(AnalyticShellPlanError::CarrierEndpointMismatch {
                     edge: edge.key,
                     endpoint,
@@ -1884,6 +1997,11 @@ fn certify_edge_pair(
             AnalyticShellSurface::Cylinder(cylinder),
             AnalyticShellSurface::Plane(plane),
         ) => certify_circle(carrier, uses, plane, cylinder, true, tolerance),
+        (
+            AnalyticShellCurve::PersistentSkewCylinderOpenSpan(_),
+            AnalyticShellSurface::Cylinder(_),
+            AnalyticShellSurface::Cylinder(_),
+        ) => skew_cylinder::certify_pair(edge, uses),
         _ => return Err(AnalyticShellPlanError::UnsupportedPairing(key)),
     };
     certified.map_err(|source| AnalyticShellPlanError::PairingCertification { edge: key, source })

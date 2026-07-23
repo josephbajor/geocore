@@ -25,7 +25,8 @@ use kcore::tolerance::{Tolerances, check_in_size_box};
 use kgeom::vec::Point3;
 use kgraph::{
     Curve2dHandle, GeometryGraph, GeometryGraphError, GeometryRef,
-    PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate, SurfaceHandle,
+    PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate,
+    PersistentSkewCylinderOpenSpanCertificate, SurfaceHandle,
     TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
     VerifiedNurbsIntersectionCertificate,
 };
@@ -399,6 +400,18 @@ impl Store {
     ) -> Result<CurveId> {
         self.geometry
             .insert_verified_plane_intersection_curve(source_surfaces, pcurves, certificate)
+            .map_err(map_graph_error)
+    }
+
+    /// Insert a normalized skew-cylinder span with exact ordered dependencies.
+    pub(crate) fn insert_verified_skew_cylinder_open_span_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: PersistentSkewCylinderOpenSpanCertificate,
+    ) -> Result<CurveId> {
+        self.geometry
+            .insert_verified_skew_cylinder_open_span_curve(source_surfaces, pcurves, certificate)
             .map_err(map_graph_error)
     }
 

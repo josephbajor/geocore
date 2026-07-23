@@ -455,6 +455,7 @@ fn eval_carrier(carrier: AnalyticShellCurve, parameter: f64) -> Point3 {
     match carrier {
         AnalyticShellCurve::Line(line) => line.eval(parameter),
         AnalyticShellCurve::Circle(circle) => circle.eval(parameter),
+        AnalyticShellCurve::PersistentSkewCylinderOpenSpan(curve) => curve.eval(parameter),
     }
 }
 
@@ -1177,7 +1178,7 @@ fn intrinsic_source_range(
     }
     let carrier_period = match source_carrier(store, retained.edge)? {
         AnalyticShellCurve::Circle(circle) => Some(circle.param_range().width()),
-        AnalyticShellCurve::Line(_) => None,
+        AnalyticShellCurve::Line(_) | AnalyticShellCurve::PersistentSkewCylinderOpenSpan(_) => None,
     };
     let parameters = [
         source_parameter(retained.source, evidence[0], source_scalars, carrier_period)?,
