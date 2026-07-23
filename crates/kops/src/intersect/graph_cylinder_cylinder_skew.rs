@@ -5,12 +5,13 @@
 //! resulting exact quadratic in ruling height has an exact cyclic
 //! second-harmonic discriminant. A strictly negative discriminant proves a
 //! complete miss. A strictly positive discriminant proves the existence of two
-//! infinite-support sheets. Full-cycle publication then requires paired
-//! residual certificates for the procedural carrier and both pcurves. Contact
-//! roots unresolved in both ruling charts and failed exact classification
-//! remain typed indeterminate. A parameterization-local projection fold may
-//! retry the reverse chart, but only a strict-positive reverse proof can
-//! supersede Contact; no sampled marcher is allowed to claim completion.
+//! infinite-support sheets. Full-cycle publication requires paired residual
+//! certificates for every retained procedural carrier and both pcurves. Four
+//! exact axial-bound queries additionally admit root-free finite windows with
+//! zero, one, or two whole sheets. Axial cuts, contact roots, and failed exact
+//! classification remain typed indeterminate. A parameterization-local
+//! projection fold may retry the reverse chart, but only a strict-positive
+//! reverse proof can supersede Contact; no sampled marcher may claim completion.
 
 use kcore::error::CapabilityId;
 use kcore::operation::{DiagnosticCode, DiagnosticKind, OperationScope, StageId};
@@ -26,8 +27,8 @@ use kgraph::{
 };
 
 use super::bounded_trigonometric::{
-    CYCLIC_SECOND_HARMONIC_EXACT_WORK, CyclicSecondHarmonicFailure, ExactTrigScalar,
-    SecondHarmonicCoefficients, StrictSign, classify_cyclic_second_harmonic,
+    CYCLIC_SECOND_HARMONIC_EXACT_WORK, CyclicSecondHarmonicFailure, StrictSign,
+    classify_cyclic_second_harmonic,
 };
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
@@ -35,8 +36,16 @@ use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersecti
 use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
+use super::skew_cylinder_axial_roots::{
+    ExactSkewCylinderDiscriminant, SkewCylinderAxialRootFailure, exact_skew_cylinder_discriminant,
+};
+use super::skew_cylinder_sheet_occupancy::{
+    SKEW_CYLINDER_SHEET_OCCUPANCY_EXACT_WORK, SkewCylinderSheetOccupancy,
+    classify_skew_cylinder_sheet_occupancy,
+};
 
-const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires a certified full-cycle contained two-sheet branch carrier";
+const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires certified contained full-cycle branch carriers";
+const CLIPPED_TOPOLOGY_REASON: &str = "finite axial cuts of strict-positive skew Cylinder/Cylinder sheets require certified clipped branch topology";
 const CONTACT_TOPOLOGY_REASON: &str =
     "skew Cylinder/Cylinder discriminant contact roots require certified branch topology";
 const NUMERIC_RESOLUTION_REASON: &str =
@@ -64,11 +73,28 @@ pub const SKEW_CYLINDER_TWO_SHEET_WORK: StageId =
 /// Atomic work charged before certifying both procedural skew branches.
 pub const SKEW_CYLINDER_TWO_SHEET_EXACT_WORK: u64 = 2 * SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK;
 
+/// Stable work stage for one atomic four-bound axial occupancy proof.
+pub const SKEW_CYLINDER_AXIAL_CLIP_WORK: StageId =
+    match StageId::new("kops.intersect.skew-cylinder-axial-clip-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid skew-cylinder axial-clip stage"),
+    };
+
+/// Atomic work charged before classifying all four finite axial bounds.
+pub const SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK: u64 = SKEW_CYLINDER_SHEET_OCCUPANCY_EXACT_WORK;
+
 /// Missing carrier for the two sheets proved by a strict-positive discriminant.
 pub const SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER: CapabilityId =
     match CapabilityId::new("kops.intersect.skew-cylinder-two-sheet-branch-carrier") {
         Ok(capability) => capability,
         Err(_) => panic!("valid skew-cylinder two-sheet capability"),
+    };
+
+/// Missing finite branch topology for one or more exact axial cuts.
+pub const SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY: CapabilityId =
+    match CapabilityId::new("kops.intersect.skew-cylinder-clipped-branch-topology") {
+        Ok(capability) => capability,
+        Err(_) => panic!("valid skew-cylinder clipped-branch capability"),
     };
 
 /// Missing topology for zeroes of the exact cyclic discriminant.
@@ -83,6 +109,13 @@ pub const SKEW_CYLINDER_TWO_SHEET_INCOMPLETE: DiagnosticCode =
     match DiagnosticCode::new("kops.intersect.skew-cylinder-two-sheet-incomplete") {
         Ok(code) => code,
         Err(_) => panic!("valid skew-cylinder two-sheet diagnostic"),
+    };
+
+/// Exact axial roots exist, but clipped branch publication is not yet certified.
+pub const SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE: DiagnosticCode =
+    match DiagnosticCode::new("kops.intersect.skew-cylinder-clipped-topology-incomplete") {
+        Ok(code) => code,
+        Err(_) => panic!("valid skew-cylinder clipped-topology diagnostic"),
     };
 
 /// The discriminant has contact/root topology outside this initial admission.
@@ -110,29 +143,13 @@ pub struct SkewCylinderStrictDiscriminantMiss {
 pub(super) struct CertifiedSkewCylinderIntersections {
     pub(super) raw: SurfaceSurfaceIntersections,
     pub(super) strict_miss: Option<SkewCylinderStrictDiscriminantMiss>,
-    pub(super) two_sheet_certificates: Option<[PairedSkewCylinderBranchResidualCertificate; 2]>,
+    pub(super) two_sheet_certificates: Option<Vec<PairedSkewCylinderBranchResidualCertificate>>,
 }
 
 impl SkewCylinderStrictDiscriminantMiss {
     const fn certified() -> Self {
         Self { _private: () }
     }
-}
-
-#[derive(Debug, Clone)]
-struct FirstHarmonic {
-    constant: ExactTrigScalar,
-    cosine: ExactTrigScalar,
-    sine: ExactTrigScalar,
-}
-
-#[derive(Debug, Clone)]
-struct SecondHarmonic {
-    constant: ExactTrigScalar,
-    cosine: ExactTrigScalar,
-    sine: ExactTrigScalar,
-    cosine2: ExactTrigScalar,
-    sine2: ExactTrigScalar,
 }
 
 /// Classify one validated exact-nonparallel pair from a canonical source order.
@@ -234,31 +251,70 @@ fn intersect_strict_positive_two_sheet(
     let certified = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper].map(|sheet| {
         certify_paired_skew_cylinder_branch_residuals(cylinders, ranges, sheet, tolerance)
     });
-    let certificates = match certified {
-        [Ok(lower), Ok(upper)] => [lower, upper],
-        failures => {
-            let unsupported = failures.iter().any(|result| {
-                matches!(
-                    result,
-                    Err(
-                        IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
-                            | IntersectionCertificateError::InvalidCarrierRange
-                    )
-                )
-            });
-            return Ok(CertifiedSkewCylinderIntersections {
-                raw: if unsupported {
-                    two_sheet_incomplete(scope)
-                } else {
-                    numeric_resolution(scope, SKEW_CYLINDER_TWO_SHEET_WORK)
-                },
-                strict_miss: None,
-                two_sheet_certificates: None,
-            });
+    if let [Ok(lower), Ok(upper)] = &certified {
+        return publish_whole_sheets(vec![*lower, *upper], reversed);
+    }
+
+    if ranges
+        .iter()
+        .any(|window| window[0].width() != core::f64::consts::TAU)
+    {
+        return Ok(branch_certificate_failure(&certified, scope));
+    }
+    scope.ledger_mut().charge(
+        SKEW_CYLINDER_AXIAL_CLIP_WORK,
+        SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK,
+    )?;
+    let canonical_to_source = if reversed { [1, 0] } else { [0, 1] };
+    let occupancy =
+        match classify_skew_cylinder_sheet_occupancy(cylinders, ranges, canonical_to_source) {
+            Ok(occupancy) => occupancy,
+            Err(SkewCylinderAxialRootFailure::IdenticallyOnBound) => {
+                return Ok(CertifiedSkewCylinderIntersections {
+                    raw: clipped_topology_incomplete(scope),
+                    strict_miss: None,
+                    two_sheet_certificates: None,
+                });
+            }
+            Err(_) => {
+                return Ok(CertifiedSkewCylinderIntersections {
+                    raw: numeric_resolution(scope, SKEW_CYLINDER_AXIAL_CLIP_WORK),
+                    strict_miss: None,
+                    two_sheet_certificates: None,
+                });
+            }
+        };
+    if occupancy.contains(&SkewCylinderSheetOccupancy::Clipped) {
+        return Ok(CertifiedSkewCylinderIntersections {
+            raw: clipped_topology_incomplete(scope),
+            strict_miss: None,
+            two_sheet_certificates: None,
+        });
+    }
+
+    let mut certificates = Vec::with_capacity(2);
+    for (state, result) in occupancy.into_iter().zip(certified.iter()) {
+        if state == SkewCylinderSheetOccupancy::Contained {
+            match result {
+                Ok(certificate) => certificates.push(*certificate),
+                Err(failure) => {
+                    return Ok(single_branch_certificate_failure(failure, scope));
+                }
+            }
         }
-    };
+    }
+    publish_whole_sheets(certificates, reversed)
+}
+
+fn publish_whole_sheets(
+    certificates: Vec<PairedSkewCylinderBranchResidualCertificate>,
+    reversed: bool,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
     let certificates = if reversed {
-        certificates.map(PairedSkewCylinderBranchResidualCertificate::swapped)
+        certificates
+            .into_iter()
+            .map(PairedSkewCylinderBranchResidualCertificate::swapped)
+            .collect::<Vec<_>>()
     } else {
         certificates
     };
@@ -266,14 +322,62 @@ fn intersect_strict_positive_two_sheet(
         .iter()
         .map(raw_two_sheet_curve)
         .collect::<Vec<_>>();
-    let raw = SurfaceSurfaceIntersections::canonicalized_complete(Vec::new(), curves)
-        .map_err(IntersectionError::from)
-        .map_err(GraphSurfaceIntersectionError::Intersection)?;
+    let raw = if curves.is_empty() {
+        SurfaceSurfaceIntersections::complete_empty()
+    } else {
+        SurfaceSurfaceIntersections::canonicalized_complete(Vec::new(), curves)
+            .map_err(IntersectionError::from)
+            .map_err(GraphSurfaceIntersectionError::Intersection)?
+    };
     Ok(CertifiedSkewCylinderIntersections {
         raw,
         strict_miss: None,
         two_sheet_certificates: Some(certificates),
     })
+}
+
+fn branch_certificate_failure(
+    results: &[Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError>],
+    scope: &mut OperationScope<'_, '_>,
+) -> CertifiedSkewCylinderIntersections {
+    let unsupported = results.iter().any(|result| {
+        matches!(
+            result,
+            Err(
+                IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
+                    | IntersectionCertificateError::InvalidCarrierRange
+            )
+        )
+    });
+    CertifiedSkewCylinderIntersections {
+        raw: if unsupported {
+            two_sheet_incomplete(scope)
+        } else {
+            numeric_resolution(scope, SKEW_CYLINDER_TWO_SHEET_WORK)
+        },
+        strict_miss: None,
+        two_sheet_certificates: None,
+    }
+}
+
+fn single_branch_certificate_failure(
+    failure: &IntersectionCertificateError,
+    scope: &mut OperationScope<'_, '_>,
+) -> CertifiedSkewCylinderIntersections {
+    let unsupported = matches!(
+        failure,
+        IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
+            | IntersectionCertificateError::InvalidCarrierRange
+    );
+    CertifiedSkewCylinderIntersections {
+        raw: if unsupported {
+            two_sheet_incomplete(scope)
+        } else {
+            numeric_resolution(scope, SKEW_CYLINDER_TWO_SHEET_WORK)
+        },
+        strict_miss: None,
+        two_sheet_certificates: None,
+    }
 }
 
 fn raw_two_sheet_curve(
@@ -305,12 +409,15 @@ enum DiscriminantAdmission {
 }
 
 fn classify_one_parameterization(cylinders: [Cylinder; 2]) -> DiscriminantAdmission {
-    let Some(classification) = exact_ruling_discriminant(cylinders) else {
+    let Ok(classification) = exact_skew_cylinder_discriminant(cylinders) else {
         return DiscriminantAdmission::NumericResolution;
     };
     let (discriminant, cardinal_contact) = match classification {
-        ExactRulingDiscriminant::Admission(admission) => return admission,
-        ExactRulingDiscriminant::Harmonic {
+        ExactSkewCylinderDiscriminant::Strict(sign) => {
+            return DiscriminantAdmission::Strict(sign);
+        }
+        ExactSkewCylinderDiscriminant::Contact => return DiscriminantAdmission::Contact,
+        ExactSkewCylinderDiscriminant::Harmonic {
             coefficients,
             cardinal_contact,
         } => (coefficients, cardinal_contact),
@@ -329,14 +436,6 @@ fn classify_one_parameterization(cylinders: [Cylinder; 2]) -> DiscriminantAdmiss
             | CyclicSecondHarmonicFailure::WorkLimit { .. },
         ) => DiscriminantAdmission::NumericResolution,
     }
-}
-
-enum ExactRulingDiscriminant {
-    Admission(DiscriminantAdmission),
-    Harmonic {
-        coefficients: SecondHarmonicCoefficients,
-        cardinal_contact: bool,
-    },
 }
 
 fn canonical_pair(
@@ -358,303 +457,6 @@ fn axes_are_exactly_nonparallel(cylinders: [Cylinder; 2]) -> bool {
         .any(|axis| orient3d(first, second, axis, [0.0; 3]) != Orientation::Zero)
 }
 
-/// Form `A v² + B(u) v + C(u)` in a division-free dual chart of the second
-/// cylinder, then return the exact second-harmonic coefficients of `B²-4AC`.
-///
-/// For the second stored frame `(x,y,z)`, let `E=det(x,y,z)`,
-/// `X=det(p-O,y,z)`, and `Y=det(x,p-O,z)`. Its actual parametric descriptor
-/// satisfies `X²+Y²-r²E²=0` without assuming the rounded stored frame is
-/// exactly orthonormal.
-fn exact_ruling_discriminant(cylinders: [Cylinder; 2]) -> Option<ExactRulingDiscriminant> {
-    let first = cylinders[0];
-    let second = cylinders[1];
-    let second_axes = [
-        second.frame().x().to_array(),
-        second.frame().y().to_array(),
-        second.frame().z().to_array(),
-    ];
-    let ruling = first.frame().z().to_array();
-    let direction = [
-        exact_determinant(ruling, second_axes[1], second_axes[2])?,
-        exact_determinant(second_axes[0], ruling, second_axes[2])?,
-    ];
-    let a = direction[0]
-        .mul(&direction[0])
-        .ok()?
-        .add(&direction[1].mul(&direction[1]).ok()?)
-        .ok()?;
-    if a.sign() <= 0 {
-        return None;
-    }
-
-    let radial = [
-        radial_coordinate_harmonic(first, second, DualCoordinate::First)?,
-        radial_coordinate_harmonic(first, second, DualCoordinate::Second)?,
-    ];
-    let radius = ExactTrigScalar::from_f64(second.radius()).ok()?;
-    let determinant = exact_determinant(second_axes[0], second_axes[1], second_axes[2])?;
-    let radius_determinant = radius.mul(&determinant).ok()?;
-    let radius_determinant_squared = radius_determinant.mul(&radius_determinant).ok()?;
-
-    // B=2(dx X+dy Y) and C=X²+Y²-r²E². Applying the exact
-    // two-dimensional Lagrange identity before expansion avoids manufacturing
-    // large terms that must later cancel:
-    //
-    // B²-4AC = 4(A r²E² - (dx Y-dy X)²).
-    let cross = cross_first_harmonic(&radial, &direction)?;
-    let k = a.mul(&radius_determinant_squared).ok()?;
-    if let Some(admission) = factor_extrema_admission(&k, &cross) {
-        return Some(ExactRulingDiscriminant::Admission(admission));
-    }
-    let discriminant = SecondHarmonic::constant(k)
-        .sub(&cross.square()?)?
-        .scale(&ExactTrigScalar::from_f64(4.0).ok()?)?;
-    let cardinal_contact = discriminant.cardinal_contact().unwrap_or(false);
-    Some(ExactRulingDiscriminant::Harmonic {
-        coefficients: SecondHarmonicCoefficients::new(
-            discriminant.constant,
-            discriminant.cosine,
-            discriminant.sine,
-            discriminant.cosine2,
-            discriminant.sine2,
-        ),
-        cardinal_contact,
-    })
-}
-
-/// Classify the exact extrema of `4(K-L(u)²)` without square roots.
-///
-/// For `L=c+p cos(u)+q sin(u)`, write `C²=c²`, `R²=p²+q²`, and
-/// `P=4 C² R²`. The two squared comparisons below are exactly equivalent to
-/// comparing `sqrt(K)` with `|c|±sqrt(R²)`. If neither strict inequality
-/// holds, continuity proves that the discriminant has contact/root topology.
-fn factor_extrema_admission(
-    k: &ExactTrigScalar,
-    harmonic: &FirstHarmonic,
-) -> Option<DiscriminantAdmission> {
-    if k.sign() <= 0 {
-        return None;
-    }
-    let c2 = harmonic.constant.mul(&harmonic.constant).ok()?;
-    let r2 = harmonic
-        .cosine
-        .mul(&harmonic.cosine)
-        .ok()?
-        .add(&harmonic.sine.mul(&harmonic.sine).ok()?)
-        .ok()?;
-    let p = c2.mul(&r2).ok()?.scale(4.0).ok()?;
-
-    let t = k.sub(&c2).ok()?.sub(&r2).ok()?;
-    if t.sign() > 0 && t.mul(&t).ok()?.sub(&p).ok()?.sign() > 0 {
-        return Some(DiscriminantAdmission::Strict(StrictSign::Positive));
-    }
-
-    let u = c2.add(&r2).ok()?.sub(k).ok()?;
-    if c2.sub(&r2).ok()?.sign() > 0 && u.sign() > 0 && u.mul(&u).ok()?.sub(&p).ok()?.sign() > 0 {
-        return Some(DiscriminantAdmission::Strict(StrictSign::Negative));
-    }
-    Some(DiscriminantAdmission::Contact)
-}
-
-#[derive(Debug, Clone, Copy)]
-enum DualCoordinate {
-    First,
-    Second,
-}
-
-fn radial_coordinate_harmonic(
-    first: Cylinder,
-    second: Cylinder,
-    coordinate: DualCoordinate,
-) -> Option<FirstHarmonic> {
-    let radius = ExactTrigScalar::from_f64(first.radius()).ok()?;
-    let first_axes = [first.frame().x().to_array(), first.frame().y().to_array()];
-    let second_axes = [
-        second.frame().x().to_array(),
-        second.frame().y().to_array(),
-        second.frame().z().to_array(),
-    ];
-    let offset = exact_vector_difference(
-        first.frame().origin().to_array(),
-        second.frame().origin().to_array(),
-    )?;
-    let determinant = |vector: [ExactTrigScalar; 3]| match coordinate {
-        DualCoordinate::First => exact_determinant_expansion(
-            vector,
-            exact_vector(second_axes[1])?,
-            exact_vector(second_axes[2])?,
-        ),
-        DualCoordinate::Second => exact_determinant_expansion(
-            exact_vector(second_axes[0])?,
-            vector,
-            exact_vector(second_axes[2])?,
-        ),
-    };
-    Some(FirstHarmonic {
-        constant: determinant(offset)?,
-        cosine: determinant(exact_vector(first_axes[0])?)
-            .and_then(|value| value.mul(&radius).ok())?,
-        sine: determinant(exact_vector(first_axes[1])?)
-            .and_then(|value| value.mul(&radius).ok())?,
-    })
-}
-
-fn cross_first_harmonic(
-    values: &[FirstHarmonic; 2],
-    weights: &[ExactTrigScalar; 2],
-) -> Option<FirstHarmonic> {
-    let component = |select: fn(&FirstHarmonic) -> &ExactTrigScalar| {
-        weights[0]
-            .mul(select(&values[1]))
-            .ok()?
-            .sub(&weights[1].mul(select(&values[0])).ok()?)
-            .ok()
-    };
-    Some(FirstHarmonic {
-        constant: component(|value| &value.constant)?,
-        cosine: component(|value| &value.cosine)?,
-        sine: component(|value| &value.sine)?,
-    })
-}
-
-impl FirstHarmonic {
-    fn square(&self) -> Option<SecondHarmonic> {
-        let cosine_squared = self.cosine.mul(&self.cosine).ok()?;
-        let sine_squared = self.sine.mul(&self.sine).ok()?;
-        let first_square_sum = cosine_squared.add(&sine_squared).ok()?;
-        let first_square_difference = cosine_squared.sub(&sine_squared).ok()?;
-        Some(SecondHarmonic {
-            constant: self
-                .constant
-                .mul(&self.constant)
-                .ok()?
-                .add(&first_square_sum.scale(0.5).ok()?)
-                .ok()?,
-            cosine: self.constant.mul(&self.cosine).ok()?.scale(2.0).ok()?,
-            sine: self.constant.mul(&self.sine).ok()?.scale(2.0).ok()?,
-            cosine2: first_square_difference.scale(0.5).ok()?,
-            sine2: self.cosine.mul(&self.sine).ok()?,
-        })
-    }
-}
-
-impl SecondHarmonic {
-    fn constant(value: ExactTrigScalar) -> Self {
-        Self {
-            constant: value,
-            cosine: ExactTrigScalar::zero(),
-            sine: ExactTrigScalar::zero(),
-            cosine2: ExactTrigScalar::zero(),
-            sine2: ExactTrigScalar::zero(),
-        }
-    }
-
-    fn sub(&self, rhs: &Self) -> Option<Self> {
-        Some(Self {
-            constant: self.constant.sub(&rhs.constant).ok()?,
-            cosine: self.cosine.sub(&rhs.cosine).ok()?,
-            sine: self.sine.sub(&rhs.sine).ok()?,
-            cosine2: self.cosine2.sub(&rhs.cosine2).ok()?,
-            sine2: self.sine2.sub(&rhs.sine2).ok()?,
-        })
-    }
-
-    fn scale(&self, factor: &ExactTrigScalar) -> Option<Self> {
-        Some(Self {
-            constant: self.constant.mul(factor).ok()?,
-            cosine: self.cosine.mul(factor).ok()?,
-            sine: self.sine.mul(factor).ok()?,
-            cosine2: self.cosine2.mul(factor).ok()?,
-            sine2: self.sine2.mul(factor).ok()?,
-        })
-    }
-
-    /// A cardinal zero or opposite exact cardinal signs proves that the cycle
-    /// contains contact/root topology. Same-sign values make no claim and
-    /// continue to the complete cyclic authority.
-    fn cardinal_contact(&self) -> Option<bool> {
-        let values = [
-            self.constant
-                .add(&self.cosine)
-                .ok()?
-                .add(&self.cosine2)
-                .ok()?,
-            self.constant
-                .add(&self.sine)
-                .ok()?
-                .sub(&self.cosine2)
-                .ok()?,
-            self.constant
-                .sub(&self.cosine)
-                .ok()?
-                .add(&self.cosine2)
-                .ok()?,
-            self.constant
-                .sub(&self.sine)
-                .ok()?
-                .sub(&self.cosine2)
-                .ok()?,
-        ];
-        let signs = values.each_ref().map(ExactTrigScalar::sign);
-        Some(signs.contains(&0) || (signs.contains(&-1) && signs.contains(&1)))
-    }
-}
-
-fn exact_vector(vector: [f64; 3]) -> Option<[ExactTrigScalar; 3]> {
-    Some([
-        ExactTrigScalar::from_f64(vector[0]).ok()?,
-        ExactTrigScalar::from_f64(vector[1]).ok()?,
-        ExactTrigScalar::from_f64(vector[2]).ok()?,
-    ])
-}
-
-fn exact_vector_difference(point: [f64; 3], origin: [f64; 3]) -> Option<[ExactTrigScalar; 3]> {
-    let mut difference = [
-        ExactTrigScalar::zero(),
-        ExactTrigScalar::zero(),
-        ExactTrigScalar::zero(),
-    ];
-    for coordinate in 0..3 {
-        let point = ExactTrigScalar::from_f64(point[coordinate]).ok()?;
-        let origin = ExactTrigScalar::from_f64(origin[coordinate]).ok()?;
-        difference[coordinate] = point.sub(&origin).ok()?;
-    }
-    Some(difference)
-}
-
-fn exact_determinant(
-    first: [f64; 3],
-    second: [f64; 3],
-    third: [f64; 3],
-) -> Option<ExactTrigScalar> {
-    exact_determinant_expansion(
-        exact_vector(first)?,
-        exact_vector(second)?,
-        exact_vector(third)?,
-    )
-}
-
-fn exact_determinant_expansion(
-    first: [ExactTrigScalar; 3],
-    second: [ExactTrigScalar; 3],
-    third: [ExactTrigScalar; 3],
-) -> Option<ExactTrigScalar> {
-    let minor = |a: usize, b: usize, c: usize, d: usize| {
-        second[a]
-            .mul(&third[b])
-            .ok()?
-            .sub(&second[c].mul(&third[d]).ok()?)
-            .ok()
-    };
-    first[0]
-        .mul(&minor(1, 2, 2, 1)?)
-        .ok()?
-        .sub(&first[1].mul(&minor(0, 2, 2, 0)?).ok()?)
-        .ok()?
-        .add(&first[2].mul(&minor(0, 1, 1, 0)?).ok()?)
-        .ok()
-}
-
 fn two_sheet_incomplete(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceIntersections {
     scope.diagnose(
         SKEW_CYLINDER_TWO_SHEET_WORK,
@@ -671,6 +473,26 @@ fn two_sheet_incomplete(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceInt
                 capability: SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
             },
             message: TWO_SHEET_REASON,
+        }],
+    )
+}
+
+fn clipped_topology_incomplete(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceIntersections {
+    scope.diagnose(
+        SKEW_CYLINDER_AXIAL_CLIP_WORK,
+        SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
+        DiagnosticKind::ProofIncomplete,
+        CLIPPED_TOPOLOGY_REASON,
+    );
+    SurfaceSurfaceIntersections::indeterminate_empty_with_evidence(
+        CLIPPED_TOPOLOGY_REASON,
+        vec![IncompleteEvidence {
+            code: SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
+            stage: SKEW_CYLINDER_AXIAL_CLIP_WORK,
+            cause: IncompleteCause::ProofMethodUnavailable {
+                capability: SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY,
+            },
+            message: CLIPPED_TOPOLOGY_REASON,
         }],
     )
 }

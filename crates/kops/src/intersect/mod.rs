@@ -66,6 +66,8 @@ mod plane_plane;
 mod plane_sphere;
 mod plane_torus;
 mod result;
+mod skew_cylinder_axial_roots;
+mod skew_cylinder_sheet_occupancy;
 mod sphere_nurbs_surface;
 mod sphere_sphere;
 mod sphere_torus;
@@ -110,6 +112,8 @@ pub use graph_cylinder_cylinder::{
     ParallelCylinderRadialRelation, classify_parallel_cylinder_radial_relation,
 };
 pub use graph_cylinder_cylinder_skew::{
+    SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,
+    SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY, SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
     SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY, SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
     SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,

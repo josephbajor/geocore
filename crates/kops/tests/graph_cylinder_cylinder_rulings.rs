@@ -1229,65 +1229,50 @@ fn perpendicular_skew_root_and_ulp_cases_keep_structured_evidence() {
 }
 
 #[test]
-fn skew_two_sheet_refuses_narrow_and_nonperiodic_windows_without_partial_publication() {
+fn skew_two_sheet_refuses_nonperiodic_longitude_without_partial_publication() {
     let [first, second] = perpendicular_axis_pair(Frame::world(), 0.0, 2.0);
     let wide = skew_windows();
-    let fixtures = [
-        (
-            "one-sheet-height-window",
-            [
-                cylinder_window(range(-2.25, 0.0)),
-                cylinder_window(range(-1.25, 1.25)),
-            ],
-        ),
-        (
-            "non-full-angular-window",
-            [
-                [
-                    range(0.0, core::f64::consts::TAU.next_down()),
-                    range(-2.25, 2.25),
-                ],
-                wide[1],
-            ],
-        ),
+    let windows = [
+        [
+            range(0.0, core::f64::consts::TAU.next_down()),
+            range(-2.25, 2.25),
+        ],
+        wide[1],
     ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let forward = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        second_handle,
+        windows[1],
+        first_handle,
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
 
-    for (name, windows) in fixtures {
-        let (graph, first_handle, second_handle) = graph_pair(first, second);
-        let forward = intersect_bounded_graph_surfaces(
-            &graph,
-            first_handle,
-            windows[0],
-            second_handle,
-            windows[1],
-            Tolerances::default(),
-        )
-        .unwrap();
-        let reversed = intersect_bounded_graph_surfaces(
-            &graph,
-            second_handle,
-            windows[1],
-            first_handle,
-            windows[0],
-            Tolerances::default(),
-        )
-        .unwrap();
-
-        for (result, sources) in [
-            (&forward, [first_handle, second_handle]),
-            (&reversed, [second_handle, first_handle]),
-        ] {
-            assert_single_skew_incomplete(
-                result,
-                sources,
-                SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-                SKEW_CYLINDER_TWO_SHEET_WORK,
-                SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
-                name,
-            );
-        }
-        assert_eq!(reversed.raw, forward.raw.clone().swapped(), "{name}");
+    for (result, sources) in [
+        (&forward, [first_handle, second_handle]),
+        (&reversed, [second_handle, first_handle]),
+    ] {
+        assert_single_skew_incomplete(
+            result,
+            sources,
+            SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
+            SKEW_CYLINDER_TWO_SHEET_WORK,
+            SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+            "non-full-angular-window",
+        );
     }
+    assert_eq!(reversed.raw, forward.raw.clone().swapped());
 }
 
 #[test]

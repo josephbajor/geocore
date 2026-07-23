@@ -152,6 +152,13 @@ impl ExactPolynomial {
     pub(super) fn isolate(&self, lo: f64, hi: f64) -> RootIsolation {
         match self.try_isolate(lo, hi) {
             Ok(roots) => RootIsolation::Complete(roots),
+            Err(
+                RootIsolationFailure::UnsafeArithmeticEnvelope
+                | RootIsolationFailure::ExpansionLimit,
+            ) => match self.try_isolate_bernstein(lo, hi) {
+                Ok(roots) => RootIsolation::Complete(roots),
+                Err(failure) => RootIsolation::Ambiguous(failure),
+            },
             Err(failure) => RootIsolation::Ambiguous(failure),
         }
     }
@@ -196,6 +203,13 @@ impl ExactPolynomial {
     pub(super) fn root_is_repeated(&self, root: RootBracket) -> Result<bool, RootIsolationFailure> {
         if self.is_zero() {
             return Err(RootIsolationFailure::ZeroPolynomial);
+        }
+        let derivative = self.derivative()?;
+        if derivative
+            .strict_sign_on_interval(root.lo, root.hi)?
+            .is_some()
+        {
+            return Ok(false);
         }
         let chain = self.sturm_chain()?;
         let gcd = chain.last().ok_or(RootIsolationFailure::SturmChainLimit)?;
@@ -424,6 +438,167 @@ impl ExactPolynomial {
         }
         Ok(roots)
     }
+
+    /// Exact Bernstein/Descartes fallback for simple roots when pseudo-
+    /// remainder coefficient growth leaves the expansion product envelope.
+    /// Sign variation zero excludes roots and variation one proves exactly
+    /// one root counting multiplicity. Unresolved repeated clusters still
+    /// fail closed at the shared depth/cell bounds.
+    fn try_isolate_bernstein(
+        &self,
+        lo: f64,
+        hi: f64,
+    ) -> Result<Vec<RootBracket>, RootIsolationFailure> {
+        if self.is_zero() {
+            return Err(RootIsolationFailure::ZeroPolynomial);
+        }
+        if !lo.is_finite() || !hi.is_finite() || lo > hi {
+            return Err(RootIsolationFailure::InvalidRange);
+        }
+        if lo == hi {
+            return if self.evaluate(lo)?.is_zero() {
+                Ok(vec![RootBracket { lo, hi }])
+            } else {
+                Ok(Vec::new())
+            };
+        }
+
+        let mut roots = Vec::with_capacity(self.degree());
+        if self.evaluate(lo)?.is_zero() {
+            roots.push(RootBracket { lo, hi: lo });
+        }
+        let hi_is_root = self.evaluate(hi)?.is_zero();
+        let mut cells = vec![BernsteinIsolationCell {
+            lo,
+            hi,
+            controls: self.bernstein_controls(lo, hi)?,
+            depth: 0,
+        }];
+        let mut visited = 0_usize;
+
+        while let Some(cell) = cells.pop() {
+            visited += 1;
+            if visited > MAX_ISOLATION_CELLS {
+                return Err(RootIsolationFailure::IsolationLimit);
+            }
+            let variations = sign_variations(&cell.controls);
+            if variations == 0 {
+                continue;
+            }
+            if adjacent(cell.lo, cell.hi) {
+                if variations != 1
+                    || self.evaluate(cell.lo)?.is_zero()
+                    || self.evaluate(cell.hi)?.is_zero()
+                {
+                    return Err(RootIsolationFailure::ParameterResolution);
+                }
+                roots.push(RootBracket {
+                    lo: cell.lo,
+                    hi: cell.hi,
+                });
+                continue;
+            }
+            if cell.depth >= MAX_ISOLATION_DEPTH {
+                return Err(RootIsolationFailure::IsolationLimit);
+            }
+
+            let midpoint = strict_midpoint(cell.lo, cell.hi)
+                .ok_or(RootIsolationFailure::ParameterResolution)?;
+            if self.evaluate(midpoint)?.is_zero() {
+                roots.push(RootBracket {
+                    lo: midpoint,
+                    hi: midpoint,
+                });
+            }
+            let [left, right] = split_bernstein_controls(&cell.controls)?;
+            let next_depth = cell.depth + 1;
+            if sign_variations(&right) > 0 {
+                cells.push(BernsteinIsolationCell {
+                    lo: midpoint,
+                    hi: cell.hi,
+                    controls: right,
+                    depth: next_depth,
+                });
+            }
+            if sign_variations(&left) > 0 {
+                cells.push(BernsteinIsolationCell {
+                    lo: cell.lo,
+                    hi: midpoint,
+                    controls: left,
+                    depth: next_depth,
+                });
+            }
+        }
+
+        if hi_is_root {
+            roots.push(RootBracket { lo: hi, hi });
+        }
+        roots.sort_by(|a, b| a.lo.total_cmp(&b.lo).then(a.hi.total_cmp(&b.hi)));
+        roots.dedup();
+        if roots
+            .windows(2)
+            .any(|pair| pair[0].representative() >= pair[1].representative())
+        {
+            return Err(RootIsolationFailure::ParameterResolution);
+        }
+        Ok(roots)
+    }
+
+    fn strict_sign_on_interval(
+        &self,
+        lo: f64,
+        hi: f64,
+    ) -> Result<Option<i8>, RootIsolationFailure> {
+        let controls = self.bernstein_controls(lo, hi)?;
+        let signs = controls.iter().map(ExactScalar::sign).collect::<Vec<_>>();
+        Ok(if signs.iter().all(|sign| *sign > 0) {
+            Some(1)
+        } else if signs.iter().all(|sign| *sign < 0) {
+            Some(-1)
+        } else {
+            None
+        })
+    }
+
+    fn bernstein_controls(
+        &self,
+        lo: f64,
+        hi: f64,
+    ) -> Result<Vec<ExactScalar>, RootIsolationFailure> {
+        let width = hi - lo;
+        let exact_width = ExactScalar::from_f64(hi)?.sub(&ExactScalar::from_f64(lo)?)?;
+        if exact_width != ExactScalar::from_f64(width)? {
+            return Err(RootIsolationFailure::UnsafeArithmeticEnvelope);
+        }
+        let degree = self.degree();
+        let mut affine = vec![ExactScalar::zero(); degree + 1];
+        for (power, coefficient) in self.coefficients.iter().enumerate() {
+            for (target_power, slot) in affine.iter_mut().enumerate().take(power + 1) {
+                let mut term = coefficient.clone();
+                for _ in 0..power - target_power {
+                    term = term.scale(lo)?;
+                }
+                for _ in 0..target_power {
+                    term = term.scale(width)?;
+                }
+                term = term.scale(binomial(power, target_power) as f64)?;
+                *slot = slot.add(&term)?;
+            }
+        }
+
+        let factorials = [1_usize, 1, 2, 6, 24];
+        let mut controls = Vec::with_capacity(degree + 1);
+        for control in 0..=degree {
+            let mut value = ExactScalar::zero();
+            for (power, coefficient) in affine.iter().enumerate().take(control + 1) {
+                let factor =
+                    binomial(control, power) * factorials[power] * factorials[degree - power];
+                value = value.add(&coefficient.scale(factor as f64)?)?;
+            }
+            controls.push(value);
+        }
+        Ok(controls)
+    }
 }
 
 /// A closed interval containing exactly one distinct root.
@@ -461,6 +636,61 @@ struct IsolationCell {
     hi: f64,
     count: usize,
     depth: usize,
+}
+
+#[derive(Debug, Clone)]
+struct BernsteinIsolationCell {
+    lo: f64,
+    hi: f64,
+    controls: Vec<ExactScalar>,
+    depth: usize,
+}
+
+fn binomial(n: usize, k: usize) -> usize {
+    let k = k.min(n - k);
+    let mut value = 1_usize;
+    for index in 0..k {
+        value = value * (n - index) / (index + 1);
+    }
+    value
+}
+
+fn sign_variations(controls: &[ExactScalar]) -> usize {
+    let mut previous = 0_i8;
+    let mut variations = 0_usize;
+    for sign in controls.iter().map(ExactScalar::sign) {
+        if sign == 0 {
+            continue;
+        }
+        if previous != 0 && sign != previous {
+            variations += 1;
+        }
+        previous = sign;
+    }
+    variations
+}
+
+fn split_bernstein_controls(
+    controls: &[ExactScalar],
+) -> Result<[Vec<ExactScalar>; 2], RootIsolationFailure> {
+    let degree = controls
+        .len()
+        .checked_sub(1)
+        .ok_or(RootIsolationFailure::DegreeLimit)?;
+    let mut row = controls.to_vec();
+    let mut left = vec![ExactScalar::zero(); degree + 1];
+    let mut right = vec![ExactScalar::zero(); degree + 1];
+    left[0] = row[0].clone();
+    right[degree] = row[degree].clone();
+    for level in 1..=degree {
+        row = row
+            .windows(2)
+            .map(|pair| pair[0].add(&pair[1])?.scale(0.5))
+            .collect::<Result<Vec<_>, RootIsolationFailure>>()?;
+        left[level] = row[0].clone();
+        right[degree - level] = row[row.len() - 1].clone();
+    }
+    Ok([left, right])
 }
 
 fn checked_components(components: Vec<f64>) -> Result<ExactScalar, RootIsolationFailure> {
@@ -783,6 +1013,38 @@ mod tests {
             p.isolate_repeated_roots(0.5, 1.5),
             RootIsolation::Complete(Vec::new())
         );
+    }
+
+    #[test]
+    fn bernstein_fallback_isolates_four_irrational_roots_after_sturm_envelope_refusal() {
+        // Substituting sin(u)=2t/(1+t^2) into
+        // 1.8^2 + sin(u)^2 - 4 produces this exact even quartic. Its expanded
+        // dyadic coefficients drive pseudo-remainders outside the conservative
+        // product envelope, while Bernstein sign variation still proves all
+        // four simple roots without sampling.
+        let height = scalar(1.8);
+        let constant = height.mul(&height).unwrap().sub(&scalar(4.0)).unwrap();
+        let quadratic = constant.scale(2.0).unwrap().add(&scalar(4.0)).unwrap();
+        let p = ExactPolynomial::new(vec![
+            constant.clone(),
+            scalar(0.0),
+            quadratic,
+            scalar(0.0),
+            constant,
+        ])
+        .unwrap();
+        assert_eq!(
+            p.try_isolate(-2.0, 2.0),
+            Err(RootIsolationFailure::UnsafeArithmeticEnvelope)
+        );
+
+        let sine = (4.0 - 1.8_f64 * 1.8).sqrt();
+        let cosine = (1.0 - sine * sine).sqrt();
+        let tangent = sine / (1.0 + cosine);
+        let expected = [-1.0 / tangent, -tangent, tangent, 1.0 / tangent];
+        let roots = complete_roots(&p, -2.0, 2.0);
+        assert_brackets_root(&roots, &expected, 4.0 * f64::EPSILON);
+        assert!(roots.iter().all(|root| !p.root_is_repeated(*root).unwrap()));
     }
 
     #[test]

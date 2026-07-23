@@ -713,7 +713,13 @@ fn assert_contained_skew_graph(
     bodies: [BodyId; 2],
     frame: Frame,
     operands_swapped: bool,
-) -> [i8; 2] {
+    expected_sheet_signs: &[i8],
+) {
+    assert!(
+        matches!(expected_sheet_signs.len(), 1 | 2),
+        "contained skew publication must retain one or both ordered sheets"
+    );
+    let branch_count = expected_sheet_signs.len();
     assert_eq!(graph.bodies(), &bodies);
     assert_eq!(
         graph.completion(),
@@ -724,17 +730,19 @@ fn assert_contained_skew_graph(
     assert!(graph.vertices().is_empty());
     assert!(graph.edges().is_empty());
     assert!(graph.loops().is_empty());
-    assert_eq!(graph.branches().len(), 2);
+    assert_eq!(graph.branches().len(), branch_count);
     assert!(graph.curve_endpoints().is_empty());
-    assert_eq!(graph.curve_fragments().len(), 2);
-    assert_eq!(graph.curve_components().len(), 2);
-    assert_eq!(graph.rings().len(), 2);
+    assert_eq!(graph.curve_fragments().len(), branch_count);
+    assert_eq!(graph.curve_components().len(), branch_count);
+    assert_eq!(graph.rings().len(), branch_count);
 
-    let signs = [
-        assert_contained_skew_branch(part, graph, 0, frame, operands_swapped),
-        assert_contained_skew_branch(part, graph, 1, frame, operands_swapped),
-    ];
-    assert_eq!(signs, [-1, 1], "sheet order must remain Lower then Upper");
+    let signs = (0..branch_count)
+        .map(|branch| assert_contained_skew_branch(part, graph, branch, frame, operands_swapped))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        signs, expected_sheet_signs,
+        "retained sheets escaped their Lower-then-Upper order"
+    );
 
     let mut component_fragments = graph
         .curve_components()
@@ -746,15 +754,17 @@ fn assert_contained_skew_graph(
         })
         .collect::<Vec<_>>();
     component_fragments.sort_unstable();
-    assert_eq!(component_fragments, vec![0, 1]);
+    assert_eq!(component_fragments, (0..branch_count).collect::<Vec<_>>());
     let mut ring_branches = graph
         .rings()
         .iter()
         .map(|ring| ring.branch())
         .collect::<Vec<_>>();
     ring_branches.sort_unstable();
-    assert_eq!(ring_branches, vec![0, 1]);
+    assert_eq!(ring_branches, (0..branch_count).collect::<Vec<_>>());
 
+    // Periodic embedding evidence is face-owned: one typed entry for each
+    // cylinder operand, independent of whether one or both sheets survive.
     assert_eq!(graph.periodic_face_embeddings().len(), 2);
     let mut embedding_operands = Vec::new();
     for embedding in graph.periodic_face_embeddings() {
@@ -769,7 +779,37 @@ fn assert_contained_skew_graph(
     }
     embedding_operands.sort_unstable();
     assert_eq!(embedding_operands, vec![0, 1]);
-    signs
+}
+
+fn assert_contained_skew_swap_equivalence(forward: &BodySectionGraph, swapped: &BodySectionGraph) {
+    assert_eq!(forward.branches().len(), swapped.branches().len());
+    for branch_index in 0..forward.branches().len() {
+        let original = &forward.branches()[branch_index];
+        let exchanged = &swapped.branches()[branch_index];
+        let original_carrier = skew_carrier(original);
+        let exchanged_carrier = skew_carrier(exchanged);
+        assert_eq!(original_carrier.source(), exchanged_carrier.source());
+        assert_eq!(original_carrier.range(), exchanged_carrier.range());
+        assert_ne!(original_carrier.reversed(), exchanged_carrier.reversed());
+        assert_eq!(
+            original.faces(),
+            &[exchanged.faces()[1].clone(), exchanged.faces()[0].clone()]
+        );
+        assert_eq!(
+            original.evidence().residual_bounds(),
+            [
+                exchanged.evidence().residual_bounds()[1],
+                exchanged.evidence().residual_bounds()[0],
+            ]
+        );
+        for operand in 0..2 {
+            let original_pcurve = skew_pcurve(original, operand);
+            let exchanged_pcurve = skew_pcurve(exchanged, 1 - operand);
+            assert_eq!(original_pcurve.source(), exchanged_pcurve.source());
+            assert_eq!(original_pcurve.range(), exchanged_pcurve.range());
+            assert_ne!(original_pcurve.reversed(), exchanged_pcurve.reversed());
+        }
+    }
 }
 
 #[test]
@@ -782,54 +822,23 @@ fn contained_skew_two_sheet_section_is_complete_read_only_and_transform_stable()
         assert_eq!(forward, replay, "serial contained-skew replay changed");
 
         let part = fixture.session.part(fixture.part_id.clone()).unwrap();
-        assert_eq!(
-            assert_contained_skew_graph(
-                &part,
-                &forward,
-                [fixture.first.clone(), fixture.second.clone()],
-                fixture.frame,
-                false,
-            ),
-            [-1, 1]
+        assert_contained_skew_graph(
+            &part,
+            &forward,
+            [fixture.first.clone(), fixture.second.clone()],
+            fixture.frame,
+            false,
+            &[-1, 1],
         );
-        assert_eq!(
-            assert_contained_skew_graph(
-                &part,
-                &swapped,
-                [fixture.second.clone(), fixture.first.clone()],
-                fixture.frame,
-                true,
-            ),
-            [-1, 1]
+        assert_contained_skew_graph(
+            &part,
+            &swapped,
+            [fixture.second.clone(), fixture.first.clone()],
+            fixture.frame,
+            true,
+            &[-1, 1],
         );
-
-        for branch_index in 0..2 {
-            let original = &forward.branches()[branch_index];
-            let exchanged = &swapped.branches()[branch_index];
-            let original_carrier = skew_carrier(original);
-            let exchanged_carrier = skew_carrier(exchanged);
-            assert_eq!(original_carrier.source(), exchanged_carrier.source());
-            assert_eq!(original_carrier.range(), exchanged_carrier.range());
-            assert_ne!(original_carrier.reversed(), exchanged_carrier.reversed());
-            assert_eq!(
-                original.faces(),
-                &[exchanged.faces()[1].clone(), exchanged.faces()[0].clone()]
-            );
-            assert_eq!(
-                original.evidence().residual_bounds(),
-                [
-                    exchanged.evidence().residual_bounds()[1],
-                    exchanged.evidence().residual_bounds()[0],
-                ]
-            );
-            for operand in 0..2 {
-                let original_pcurve = skew_pcurve(original, operand);
-                let exchanged_pcurve = skew_pcurve(exchanged, 1 - operand);
-                assert_eq!(original_pcurve.source(), exchanged_pcurve.source());
-                assert_eq!(original_pcurve.range(), exchanged_pcurve.range());
-                assert_ne!(original_pcurve.reversed(), exchanged_pcurve.reversed());
-            }
-        }
+        assert_contained_skew_swap_equivalence(&forward, &swapped);
         drop(part);
 
         assert_eq!(
@@ -856,7 +865,7 @@ fn contained_skew_two_sheet_section_is_complete_read_only_and_transform_stable()
 }
 
 #[test]
-fn narrow_skew_height_refuses_partial_sheet_publication_with_one_graph_gap() {
+fn narrow_skew_height_publishes_one_complete_lower_sheet_read_only() {
     let fixture = skew_two_sheet_fixture(Placement::World, true);
     let forward = section(&fixture, fixture.first.clone(), fixture.second.clone());
     let replay = section(&fixture, fixture.first.clone(), fixture.second.clone());
@@ -864,34 +873,25 @@ fn narrow_skew_height_refuses_partial_sheet_publication_with_one_graph_gap() {
     assert_eq!(forward, replay, "serial narrow-skew replay changed");
 
     let part = fixture.session.part(fixture.part_id.clone()).unwrap();
-    for (candidate, bodies) in [
-        (&forward, [fixture.first.clone(), fixture.second.clone()]),
-        (&swapped, [fixture.second.clone(), fixture.first.clone()]),
-    ] {
-        assert_eq!(candidate.bodies(), &bodies);
-        assert_eq!(candidate.completion(), SectionCompletion::Indeterminate);
-        assert!(candidate.vertices().is_empty());
-        assert!(candidate.edges().is_empty());
-        assert!(candidate.branches().is_empty());
-        assert!(candidate.curve_endpoints().is_empty());
-        assert!(candidate.curve_fragments().is_empty());
-        assert!(candidate.curve_components().is_empty());
-        assert!(candidate.rings().is_empty());
-        assert!(candidate.periodic_face_embeddings().is_empty());
-        assert_eq!(candidate.gaps().len(), 1, "{candidate:#?}");
-        assert_eq!(
-            candidate.gaps()[0].reason(),
-            "a candidate face pair returned an indeterminate intersection result"
-        );
-        assert_eq!(candidate.gaps()[0].faces().len(), 2);
-        assert!(
-            candidate.gaps()[0]
-                .faces()
-                .iter()
-                .all(|face| face_is_cylinder(&part, face))
-        );
-    }
+    assert_contained_skew_graph(
+        &part,
+        &forward,
+        [fixture.first.clone(), fixture.second.clone()],
+        fixture.frame,
+        false,
+        &[-1],
+    );
+    assert_contained_skew_graph(
+        &part,
+        &swapped,
+        [fixture.second.clone(), fixture.first.clone()],
+        fixture.frame,
+        true,
+        &[-1],
+    );
+    assert_contained_skew_swap_equivalence(&forward, &swapped);
     drop(part);
+
     assert_eq!(
         source_signature(
             &fixture.session,
@@ -900,8 +900,18 @@ fn narrow_skew_height_refuses_partial_sheet_publication_with_one_graph_gap() {
             &fixture.second,
         ),
         fixture.before,
-        "narrow-skew refusal mutated a source body"
+        "single-sheet skew Section mutated a source body"
     );
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    for body in [fixture.first.clone(), fixture.second.clone()] {
+        let check = part
+            .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(check.outcome(), CheckOutcome::Valid);
+        assert!(check.gaps().is_empty());
+    }
 }
 
 #[test]

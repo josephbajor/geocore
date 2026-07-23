@@ -1,6 +1,7 @@
 //! Composed resource policy for graph-owned surface intersection.
 
 use super::graph_cylinder_cylinder_skew::{
+    SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_WORK,
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_WORK,
 };
@@ -58,6 +59,13 @@ impl GraphSurfaceBudgetProfile {
                         ResourceKind::Work,
                         AccountingMode::Cumulative,
                         SKEW_CYLINDER_TWO_SHEET_EXACT_WORK
+                            * MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE,
+                    ),
+                    LimitSpec::new(
+                        SKEW_CYLINDER_AXIAL_CLIP_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK
                             * MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE,
                     ),
                     LimitSpec::new(

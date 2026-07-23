@@ -1203,7 +1203,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         ResolvedGraphProofSources {
             fields,
             offset_plane_traces,
-            skew_cylinder_two_sheet_certificates,
+            skew_cylinder_two_sheet_certificates: skew_cylinder_two_sheet_certificates.as_deref(),
         },
         [range_a, range_b],
         &raw,
@@ -2114,7 +2114,7 @@ pub(super) struct VerifiedBranchPayload {
 struct ResolvedGraphProofSources<'a> {
     fields: [ResolvedGraphSurfaceField<'a>; 2],
     offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
-    skew_cylinder_two_sheet_certificates: Option<[PairedSkewCylinderBranchResidualCertificate; 2]>,
+    skew_cylinder_two_sheet_certificates: Option<&'a [PairedSkewCylinderBranchResidualCertificate]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
