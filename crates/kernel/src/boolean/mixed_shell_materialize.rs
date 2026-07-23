@@ -1,4 +1,4 @@
-//! Exact-scalar completion and read-only analytic-shell materialization.
+//! Exact trim-authority completion and read-only analytic-shell materialization.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,6 +24,9 @@ use ktopo::entity::{
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
+
+#[path = "mixed_shell_materialize/skew_cylinder.rs"]
+mod skew_cylinder;
 
 use super::super::mixed_cap_boundary::MixedCylinderCapRing;
 use super::super::mixed_periodic_arrangement::PeriodicSourceLoopKey;
@@ -77,7 +80,18 @@ pub(crate) struct RetainedPlanarSpan {
 pub(super) struct RetainedSectionTrim {
     fragment: usize,
     endpoints: [usize; 2],
-    certified: Option<[(f64, Point3); 2]>,
+    authority: RetainedSectionTrimAuthority,
+}
+
+/// Mutually exclusive authority for one Section edge's bounded ends.
+#[derive(Debug, Clone, PartialEq)]
+enum RetainedSectionTrimAuthority {
+    /// Exact intrinsic carrier scalars and their certified metric points.
+    Exact([(f64, Point3); 2]),
+    /// A sealed composite consumes physical roots without exposing scalars.
+    PersistentComposite,
+    /// Exact scalar authority is still absent.
+    Missing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,6 +213,7 @@ impl PhysicalEdge {
 pub(crate) struct MixedShellMaterializationBlueprint {
     edges: Vec<PhysicalEdge>,
     planar_use_count: usize,
+    persistent_skew_work: u64,
     work: u64,
 }
 
@@ -223,6 +238,11 @@ impl MixedShellMaterializationBlueprint {
         self.planar_use_count
     }
 
+    /// Exact precharge for persistent skew composites represented by this plan.
+    pub(crate) const fn persistent_skew_work(&self) -> u64 {
+        self.persistent_skew_work
+    }
+
     pub(crate) fn all_edges_have_two_opposed_uses(&self) -> bool {
         self.edges
             .iter()
@@ -242,7 +262,10 @@ pub(crate) enum MixedShellMaterializationError {
     MissingPlanarLineage,
     EndpointFreeSourceRingMismatch,
     PlanVertexMismatch,
-    EdgeUseCount { edge: usize, uses: usize },
+    EdgeUseCount {
+        edge: usize,
+        uses: usize,
+    },
     EdgeUsesNotOpposed(usize),
     SelfAdjacentEdge(usize),
     DuplicateSourceRootScalar(SourceRootScalarKey),
@@ -252,9 +275,19 @@ pub(crate) enum MixedShellMaterializationError {
     UnexpectedSourceRootScalar(SourceRootScalarKey),
     UnexpectedSectionTrimScalar(SectionTrimScalarKey),
     ScalarOutsideCertifiedRange,
+    PersistentSkewScalarPath(usize),
+    MissingPersistentSkewInput(usize),
+    PersistentSkewEndpointIdentityMismatch(usize),
+    PersistentSkewLineageMismatch {
+        fragment: usize,
+        face: MixedSourceFaceKey,
+    },
+    PersistentSkewCertificate(kgraph::IntersectionCertificateError),
     InvalidSourcePeriodLift,
     NonIncreasingEdgeRange(usize),
-    EndpointBitsMismatch { distance: f64 },
+    EndpointBitsMismatch {
+        distance: f64,
+    },
     UnsupportedSourceCurve,
     UnsupportedSourceSurface,
     UnsupportedPcurve,
@@ -267,8 +300,14 @@ pub(crate) enum MixedShellMaterializationError {
     ComponentFaceUnavailable(usize),
     ComponentEdgeUnavailable(AnalyticEdgeKey),
     ComponentVertexUnavailable(AnalyticVertexKey),
-    ComponentEdgeCountMismatch { expected: usize, actual: usize },
-    ComponentVertexCountMismatch { expected: usize, actual: usize },
+    ComponentEdgeCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    ComponentVertexCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
     StoreRead,
     WorkCountOverflow,
     AnalyticPreflight(AnalyticShellPlanError),
@@ -390,10 +429,19 @@ fn section_parameters(
             edge.endpoints()[0],
         )),
     )?;
+    let certified = match retained.authority {
+        RetainedSectionTrimAuthority::Exact(values) => Some(values),
+        RetainedSectionTrimAuthority::Missing => None,
+        RetainedSectionTrimAuthority::PersistentComposite => {
+            return Err(MixedShellMaterializationError::PersistentSkewScalarPath(
+                edge.fragment_index(),
+            ));
+        }
+    };
     let mut resolve = |index: usize| {
         let endpoint = retained.endpoints[index];
         let key = SectionTrimScalarKey::new(edge.fragment_index(), endpoint);
-        if let Some(certified) = retained.certified.map(|values| values[index].0) {
+        if let Some(certified) = certified.map(|values| values[index].0) {
             if let Some(candidate) = inputs.remove(&key)
                 && candidate.to_bits() != certified.to_bits()
             {
@@ -486,6 +534,30 @@ fn intern_vertex(
         .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)
 }
 
+/// Intern a topology-owned composite endpoint without permitting a metric
+/// representative from another incident carrier to replace it.
+fn intern_exact_vertex(
+    vertices: &mut Vec<(PhysicalVertex, Point3)>,
+    key: PhysicalVertex,
+    point: Point3,
+) -> Result<AnalyticVertexKey, MixedShellMaterializationError> {
+    if let Some((index, (_, retained))) = vertices
+        .iter()
+        .enumerate()
+        .find(|(_, (candidate, _))| *candidate == key)
+    {
+        if !same_point_bits(*retained, point) {
+            return Err(MixedShellMaterializationError::EndpointBitsMismatch {
+                distance: (*retained - point).norm(),
+            });
+        }
+        return u64::try_from(index)
+            .map(AnalyticVertexKey::new)
+            .map_err(|_| MixedShellMaterializationError::WorkCountOverflow);
+    }
+    intern_vertex(vertices, key, point)
+}
+
 pub(super) fn retain_materialization_evidence(
     faces: &[MixedShellFacePlan],
     arrangements: &BTreeMap<MixedSourceFaceKey, MixedArrangementBinding<'_>>,
@@ -572,13 +644,20 @@ pub(super) fn retain_materialization_evidence(
     let section_trims = section_edges
         .iter()
         .map(|edge| {
-            let certified =
+            let authority = if edge.skew_persistence().is_some() {
+                RetainedSectionTrimAuthority::PersistentComposite
+            } else if let Some(certified) =
                 retained_periodic_trim_scalars(arrangements, graph, edge.fragment_index())
-                    .or_else(|| retained_ruling_trim_scalars(edge.fragment()));
+                    .or_else(|| retained_ruling_trim_scalars(edge.fragment()))
+            {
+                RetainedSectionTrimAuthority::Exact(certified)
+            } else {
+                RetainedSectionTrimAuthority::Missing
+            };
             RetainedSectionTrim {
                 fragment: edge.fragment_index(),
                 endpoints: edge.endpoints(),
-                certified,
+                authority,
             }
         })
         .collect();
@@ -1117,12 +1196,15 @@ pub(crate) fn prepare_mixed_shell_materialization(
         .and_then(|value| value.checked_add(u64::try_from(plan.section_edges.len()).ok()?))
         .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
     let periodic_window_work = periodic_window_work(plan, &edges, store)?;
+    let persistent_skew_work = skew_cylinder::physical_work(plan, &edges)?;
     let work = base_work
         .checked_add(periodic_window_work)
+        .and_then(|work| work.checked_add(persistent_skew_work))
         .ok_or(MixedShellMaterializationError::WorkCountOverflow)?;
     Ok(MixedShellMaterializationBlueprint {
         edges,
         planar_use_count,
+        persistent_skew_work,
         work,
     })
 }
@@ -1549,7 +1631,9 @@ fn materialized_pcurve_for_use(
     loop_index: usize,
     use_index: usize,
     use_: &super::MixedShellEdgeUse,
+    edge_index: usize,
     physical: &PhysicalEdge,
+    skew_pcurves: &[Option<[AnalyticPcurveUse; 2]>],
 ) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
     match use_.edge() {
         MixedShellEdgeKey::PlanarSource { source, span } => {
@@ -1569,7 +1653,20 @@ fn materialized_pcurve_for_use(
             }
         }
         MixedShellEdgeKey::SectionFragment(fragment) => {
-            section_pcurve(section_edge(plan, *fragment)?, use_.pcurve())
+            let edge = section_edge(plan, *fragment)?;
+            match skew_pcurves.get(edge_index).copied().flatten() {
+                Some(pcurves) => {
+                    let face = plan
+                        .faces()
+                        .get(face_index)
+                        .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+                    skew_cylinder::pcurve_for_use(edge, face.source(), use_.pcurve(), pcurves)
+                }
+                None if edge.skew_persistence().is_some() => Err(
+                    MixedShellMaterializationError::MissingPersistentSkewInput(*fragment),
+                ),
+                None => section_pcurve(edge, use_.pcurve()),
+            }
         }
         MixedShellEdgeKey::PeriodicSource { source, loop_key } => {
             let (raw_edge, raw_fin) = validate_periodic_source_use(
@@ -1603,6 +1700,7 @@ fn prepare_periodic_face_windows(
     store: &Store,
     closed_edges: &mut [AnalyticShellClosedEdge],
     edge_ranges: &mut [ParamRange],
+    skew_pcurves: &[Option<[AnalyticPcurveUse; 2]>],
 ) -> Result<Vec<Option<ParamRange>>, MixedShellMaterializationError> {
     let mut face_windows = vec![None; plan.faces.len()];
     let mut edge_windows = vec![None; blueprint.edges.len()];
@@ -1626,7 +1724,15 @@ fn prepare_periodic_face_windows(
                 };
                 let (edge_index, physical, _) = physical_edge_for_use(blueprint, location)?;
                 let pcurve = materialized_pcurve_for_use(
-                    plan, store, face_index, loop_index, use_index, use_, physical,
+                    plan,
+                    store,
+                    face_index,
+                    loop_index,
+                    use_index,
+                    use_,
+                    edge_index,
+                    physical,
+                    skew_pcurves,
                 )?;
                 if physical.endpoints.is_none() {
                     endpoint_free_uses.push((edge_index, pcurve));
@@ -1685,6 +1791,70 @@ fn build_mixed_shell_input(
     build_mixed_shell_input_from_blueprint(plan, &blueprint, store, scalars, tolerance)
 }
 
+fn certify_skew_spans(
+    plan: &MixedShellProofPlan,
+    blueprint: &MixedShellMaterializationBlueprint,
+) -> Result<Vec<Option<skew_cylinder::CertifiedSkewCylinderSpan>>, MixedShellMaterializationError> {
+    blueprint
+        .edges
+        .iter()
+        .map(|physical| {
+            let PhysicalCarrier::Section(fragment) = physical.carrier else {
+                return Ok(None);
+            };
+            let section = section_edge(plan, fragment)?;
+            section
+                .skew_persistence()
+                .map(|_| skew_cylinder::certify(section))
+                .transpose()
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_skew_edge(
+    plan: &MixedShellProofPlan,
+    physical: &PhysicalEdge,
+    edge_index: usize,
+    key: AnalyticEdgeKey,
+    endpoints: [PhysicalVertex; 2],
+    certificates: &[Option<skew_cylinder::CertifiedSkewCylinderSpan>],
+    retained_vertices: &mut Vec<(PhysicalVertex, Point3)>,
+) -> Result<
+    Option<(AnalyticShellEdge, ParamRange, [AnalyticPcurveUse; 2])>,
+    MixedShellMaterializationError,
+> {
+    let PhysicalCarrier::Section(fragment) = physical.carrier else {
+        return Ok(None);
+    };
+    let section = section_edge(plan, fragment)?;
+    if section.skew_persistence().is_none() {
+        return Ok(None);
+    }
+    let certified = certificates.get(edge_index).copied().flatten().ok_or(
+        MixedShellMaterializationError::MissingPersistentSkewInput(fragment),
+    )?;
+    let points = certified.endpoint_points();
+    let mut vertices = [AnalyticVertexKey::new(0); 2];
+    for endpoint in 0..2 {
+        vertices[endpoint] =
+            intern_exact_vertex(retained_vertices, endpoints[endpoint], points[endpoint])?;
+    }
+    let declarations = certified.declarations(key, vertices);
+    let declared_vertices = declarations.vertices();
+    if (0..2).any(|endpoint| {
+        declared_vertices[endpoint].key() != vertices[endpoint]
+            || !same_point_bits(declared_vertices[endpoint].position(), points[endpoint])
+    }) {
+        return Err(MixedShellMaterializationError::InvalidAnalyticGeometry);
+    }
+    Ok(Some((
+        declarations.edge(),
+        certified.logical_range(),
+        declarations.pcurves(),
+    )))
+}
+
 fn build_mixed_shell_input_from_blueprint(
     plan: &MixedShellProofPlan,
     blueprint: &MixedShellMaterializationBlueprint,
@@ -1692,12 +1862,37 @@ fn build_mixed_shell_input_from_blueprint(
     scalars: &MixedShellScalarInputs,
     tolerance: f64,
 ) -> Result<AnalyticShellInput, MixedShellMaterializationError> {
+    // Operation callers must charge `blueprint.work()` before entering this
+    // builder. In particular, persistent certification below consumes the
+    // blueprint's explicit `persistent_skew_work()` exactly once per physical
+    // fragment. Direct test calls are accounting harnesses only.
     let mut source_scalars = source_scalar_map(scalars)?;
     let mut trim_scalars = trim_scalar_map(scalars)?;
     let mut retained_vertices = Vec::<(PhysicalVertex, Point3)>::new();
+    let skew_certificates = certify_skew_spans(plan, blueprint)?;
+    for (physical, certificate) in blueprint.edges.iter().zip(&skew_certificates) {
+        let Some(certified) = certificate else {
+            continue;
+        };
+        let PhysicalCarrier::Section(fragment) = physical.carrier else {
+            return Err(MixedShellMaterializationError::PlanVertexMismatch);
+        };
+        let endpoints = physical.endpoints.ok_or(
+            MixedShellMaterializationError::PersistentSkewEndpointIdentityMismatch(fragment),
+        )?;
+        let points = certified.endpoint_points();
+        for endpoint in 0..2 {
+            intern_exact_vertex(
+                &mut retained_vertices,
+                endpoints[endpoint],
+                points[endpoint],
+            )?;
+        }
+    }
     let mut analytic_edges = Vec::with_capacity(blueprint.edges.len());
     let mut analytic_closed_edges = Vec::new();
     let mut analytic_edge_ranges = Vec::with_capacity(blueprint.edges.len());
+    let mut skew_pcurves = vec![None; blueprint.edges.len()];
 
     for (edge_index, physical) in blueprint.edges.iter().enumerate() {
         let key = u64::try_from(edge_index)
@@ -1719,6 +1914,20 @@ fn build_mixed_shell_input_from_blueprint(
             analytic_edge_ranges.push(range);
             continue;
         };
+        if let Some((edge, range, pcurves)) = materialize_skew_edge(
+            plan,
+            physical,
+            edge_index,
+            key,
+            endpoints,
+            &skew_certificates,
+            &mut retained_vertices,
+        )? {
+            analytic_edges.push(edge);
+            analytic_edge_ranges.push(range);
+            skew_pcurves[edge_index] = Some(pcurves);
+            continue;
+        }
         let (carrier, parameters, source) = match physical.carrier {
             PhysicalCarrier::Source(raw_edge) => {
                 let parameters =
@@ -1733,7 +1942,11 @@ fn build_mixed_shell_input_from_blueprint(
                 let section = section_edge(plan, fragment)?;
                 let parameters = section_parameters(plan, section, &mut trim_scalars)?;
                 if let Some(certified) =
-                    retained_section_trim(plan, fragment).and_then(|trim| trim.certified)
+                    retained_section_trim(plan, fragment).and_then(|trim| match trim.authority {
+                        RetainedSectionTrimAuthority::Exact(values) => Some(values),
+                        RetainedSectionTrimAuthority::PersistentComposite
+                        | RetainedSectionTrimAuthority::Missing => None,
+                    })
                 {
                     let carrier = section_carrier(section)?;
                     for endpoint in 0..2 {
@@ -1785,6 +1998,7 @@ fn build_mixed_shell_input_from_blueprint(
         store,
         &mut analytic_closed_edges,
         &mut analytic_edge_ranges,
+        &skew_pcurves,
     )?;
 
     let analytic_vertices = retained_vertices
@@ -1818,7 +2032,15 @@ fn build_mixed_shell_input_from_blueprint(
                     .map(AnalyticEdgeKey::new)
                     .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)?;
                 let pcurve = materialized_pcurve_for_use(
-                    plan, store, face_index, loop_index, use_index, use_, physical,
+                    plan,
+                    store,
+                    face_index,
+                    loop_index,
+                    use_index,
+                    use_,
+                    edge_index,
+                    physical,
+                    &skew_pcurves,
                 )?;
                 let pcurve = if let Some(periodic_window) = periodic_window {
                     normalize_periodic_pcurve_chart(
@@ -1867,6 +2089,9 @@ fn build_mixed_shell_input_from_blueprint(
 }
 
 /// Materialize and preflight one connected mixed-shell proof plan.
+///
+/// This convenience entry point is retained for tests. An operation caller
+/// must first prepare and charge an equivalent blueprint before invoking it.
 pub(crate) fn materialize_mixed_shell_input(
     plan: &MixedShellProofPlan,
     store: &Store,
@@ -1885,7 +2110,9 @@ pub(crate) fn materialize_mixed_shell_input(
 /// Component membership comes from exact physical edge incidence. This pass
 /// retains the globally stable analytic keys but takes a complete face/edge/
 /// vertex closure for each component, so keys remain comparable while the
-/// topology batch assembler can treat them as component-local.
+/// topology batch assembler can treat them as component-local. The operation
+/// caller must have charged `blueprint.work()` before invocation; direct test
+/// calls are accounting harnesses only.
 pub(crate) fn materialize_mixed_shell_component_inputs(
     plan: &MixedShellProofPlan,
     blueprint: &MixedShellMaterializationBlueprint,
@@ -2022,7 +2249,7 @@ pub(super) fn remaining_gaps(
         }
     }
     for trim in &evidence.section_trims {
-        if trim.certified.is_none() {
+        if matches!(trim.authority, RetainedSectionTrimAuthority::Missing) {
             for endpoint in trim.endpoints {
                 gaps.insert(MixedShellMaterializationGap::ExactTrimParameterRequired {
                     fragment: trim.fragment,

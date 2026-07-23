@@ -41,6 +41,7 @@ use super::mixed_periodic_arrangement::{
     MixedPeriodicFaceArrangement, PeriodicArrangementCellKey, PeriodicArrangementVertexKey,
     PeriodicCutFragmentKey, PeriodicSourceLoopKey,
 };
+use crate::section::{SectionSkewCylinderPersistenceInput, bounded_skew_persistence_input};
 use crate::{
     BodySectionGraph, FaceId, SectionBranch, SectionCompletion, SectionCurveEndpointTopology,
     SectionCurveFragment, SectionCurveFragmentSpan, SectionPeriodicFaceEmbeddingEvidence,
@@ -296,6 +297,7 @@ pub(crate) struct MixedSectionEdgePlan {
     branch: SectionBranch,
     endpoints: [usize; 2],
     carrier_faces: [MixedSourceFaceKey; 2],
+    skew_persistence: Option<SectionSkewCylinderPersistenceInput>,
 }
 
 impl MixedSectionEdgePlan {
@@ -317,6 +319,11 @@ impl MixedSectionEdgePlan {
 
     pub(crate) const fn carrier_faces(&self) -> [MixedSourceFaceKey; 2] {
         self.carrier_faces
+    }
+
+    /// Sealed graph/Section handoff for a bounded procedural skew span.
+    pub(crate) const fn skew_persistence(&self) -> Option<SectionSkewCylinderPersistenceInput> {
+        self.skew_persistence
     }
 }
 
@@ -446,6 +453,28 @@ impl MixedShellProofPlan {
     pub(crate) fn materialization_gaps(&self) -> &[MixedShellMaterializationGap] {
         &self.materialization_gaps
     }
+
+    #[cfg(test)]
+    pub(crate) fn clear_skew_persistence_for_test(&mut self, fragment: usize) {
+        if let Some(edge) = self
+            .section_edges
+            .iter_mut()
+            .find(|edge| edge.fragment_index == fragment)
+        {
+            edge.skew_persistence = None;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn swap_skew_carrier_faces_for_test(&mut self, fragment: usize) {
+        if let Some(edge) = self
+            .section_edges
+            .iter_mut()
+            .find(|edge| edge.fragment_index == fragment)
+        {
+            edge.carrier_faces.swap(0, 1);
+        }
+    }
 }
 
 /// Typed refusal while building the exact intermediate.
@@ -477,6 +506,9 @@ pub(crate) enum MixedShellPlanError {
     UnknownSectionBranch {
         fragment: usize,
         branch: usize,
+    },
+    InvalidSkewPersistence {
+        fragment: usize,
     },
     SectionFragmentLeavesFace {
         fragment: usize,
@@ -2027,12 +2059,25 @@ fn collect_section_edges(
             source_face_key(store, graph, &branch.faces()[0], 0)?,
             source_face_key(store, graph, &branch.faces()[1], 1)?,
         ];
+        let skew_persistence = if matches!(
+            fragment.span(),
+            SectionCurveFragmentSpan::BoundedProcedural { .. }
+        ) {
+            Some(bounded_skew_persistence_input(branch, fragment).ok_or(
+                MixedShellPlanError::InvalidSkewPersistence {
+                    fragment: fragment_index,
+                },
+            )?)
+        } else {
+            None
+        };
         output.push(MixedSectionEdgePlan {
             fragment_index,
             fragment: fragment.clone(),
             branch: branch.clone(),
             endpoints,
             carrier_faces,
+            skew_persistence,
         });
     }
     Ok(output)

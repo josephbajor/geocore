@@ -4,7 +4,8 @@
 //! Section subsets.  A prepared transverse cylinder pair has the stronger
 //! contract that every admitted Section fragment must bound the selected
 //! result.  This adapter proves that stronger invariant after exact physical
-//! edge coalescing and stops before scalar completion or topology allocation.
+//! edge coalescing, precharges persistent composite certification, and stops
+//! before certificate construction or topology allocation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,9 +45,14 @@ impl CertifiedCylinderPairPlan {
         &self.blueprint
     }
 
-    /// Exact charged work for physical coalescing plus complete-plan validation.
+    /// Exact charged work for coalescing, composites, and complete validation.
     pub(crate) const fn work(&self) -> u64 {
         self.work
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mut_for_test(&mut self) -> &mut MixedShellProofPlan {
+        &mut self.plan
     }
 }
 
@@ -78,8 +84,8 @@ pub(crate) enum CylinderPairPlanError {
     },
 }
 
-/// Select, plan, coalesce, and certify complete physical incidence without
-/// requiring scalar completion or allocating topology.
+/// Select, plan, coalesce, precharge, and certify complete physical incidence
+/// without constructing persistent certificates or allocating topology.
 pub(crate) fn plan_cylinder_pair_boundary(
     store: &Store,
     graph: &BodySectionGraph,

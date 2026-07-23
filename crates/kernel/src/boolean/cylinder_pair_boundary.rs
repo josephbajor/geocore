@@ -4,9 +4,9 @@
 //! This bridge checks that those fragments cover both cylinder-side annuli and
 //! every cut cap exactly, classifies the resulting open cells against the
 //! opposite solid, and exposes ordinary mixed-shell planning bindings.  It
-//! neither selects Boolean truth nor allocates topology, and does not claim
-//! that the skew bindings are materializable without physical-root carrier
-//! trims and persistent skew pcurves.
+//! neither selects Boolean truth nor allocates topology. The mixed-shell plan
+//! later seals each bounded procedural fragment's physical roots with its
+//! graph proof before persistent skew pcurves can be declared.
 
 // The shared boundary error retains exact arrangement diagnostics inline.
 #![allow(clippy::result_large_err)]
@@ -484,6 +484,8 @@ mod tests {
         frame::Frame,
         vec::{Point3, Vec3},
     };
+    use kgraph::PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK;
+    use ktopo::analytic_shell::AnalyticShellCurve;
 
     use super::*;
     use crate::{
@@ -494,13 +496,13 @@ mod tests {
             boundary_select::RegularizedBooleanOperation,
             curved_source::{CylinderSourceOutcome, extract_cylinder_source},
             mixed_shell_plan::{
-                MixedShellMaterializationGap,
+                components::partition_prepared_mixed_shell_components,
                 cylinder_pair::{
                     CertifiedCylinderPairPlan, CylinderPairPlanError, plan_cylinder_pair_boundary,
                 },
                 materialize::{
                     MixedShellMaterializationError, MixedShellScalarInputs, PhysicalCarrier,
-                    materialize_mixed_shell_input,
+                    SectionTrimScalarKey, materialize_mixed_shell_component_inputs,
                 },
             },
             pipeline::PLANAR_BOOLEAN_REALIZATION_WORK,
@@ -512,6 +514,9 @@ mod tests {
     const BOUNDED_SKEW_TRANSVERSE_HALF_HEIGHT: f64 = 1.25;
     const BOUNDED_SKEW_TRANSVERSE_RADIUS: f64 = 2.0;
     const BOUNDED_SKEW_BOUNDARY_WORK: u64 = 56;
+    const BOUNDED_SKEW_COMPOSITE_COUNT: u64 = 4;
+    const BOUNDED_SKEW_COMPOSITE_WORK: u64 =
+        BOUNDED_SKEW_COMPOSITE_COUNT * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK;
 
     #[derive(Debug, Clone, Copy)]
     enum Placement {
@@ -773,10 +778,16 @@ mod tests {
         swapped: bool,
     ) -> (u64, usize) {
         match (operation, swapped) {
-            (RegularizedBooleanOperation::Unite, _) => (2_690, 14),
-            (RegularizedBooleanOperation::Intersect, _) => (2_046, 12),
-            (RegularizedBooleanOperation::Subtract, false) => (2_048, 12),
-            (RegularizedBooleanOperation::Subtract, true) => (2_688, 14),
+            (RegularizedBooleanOperation::Unite, _) => (2_690 + BOUNDED_SKEW_COMPOSITE_WORK, 14),
+            (RegularizedBooleanOperation::Intersect, _) => {
+                (2_046 + BOUNDED_SKEW_COMPOSITE_WORK, 12)
+            }
+            (RegularizedBooleanOperation::Subtract, false) => {
+                (2_048 + BOUNDED_SKEW_COMPOSITE_WORK, 12)
+            }
+            (RegularizedBooleanOperation::Subtract, true) => {
+                (2_688 + BOUNDED_SKEW_COMPOSITE_WORK, 14)
+            }
         }
     }
 
@@ -1071,6 +1082,10 @@ mod tests {
                     assert_eq!(certified.work(), expected_work);
                     assert_eq!(post_selection_snapshot(&report).consumed, expected_work);
                     assert_eq!(certified.blueprint().edges().len(), expected_edges);
+                    assert_eq!(
+                        certified.blueprint().persistent_skew_work(),
+                        BOUNDED_SKEW_COMPOSITE_WORK
+                    );
 
                     let fragments = certified
                         .plan()
@@ -1093,50 +1108,68 @@ mod tests {
                             .count(),
                         8
                     );
-
-                    let expected_gaps = graph
-                        .curve_fragments()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(fragment, value)| match value.span() {
-                            crate::SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
-                                Some(
-                                    endpoints
-                                        .each_ref()
-                                        .map(|end| (fragment, end.physical_root().endpoint())),
-                                )
-                            }
-                            _ => None,
-                        })
-                        .flatten()
-                        .collect::<BTreeSet<_>>();
-                    let actual_gaps = certified
-                        .plan()
-                        .materialization_gaps()
-                        .iter()
-                        .map(|gap| match gap {
-                            MixedShellMaterializationGap::ExactTrimParameterRequired {
-                                fragment,
-                                endpoint,
-                            } => (*fragment, *endpoint),
-                            other => panic!("unexpected bounded-skew gap: {other:?}"),
-                        })
-                        .collect::<BTreeSet<_>>();
-                    assert_eq!(expected_gaps.len(), 8);
-                    assert_eq!(actual_gaps, expected_gaps);
-                    assert!(matches!(
-                        materialize_mixed_shell_input(
-                            certified.plan(),
-                            &part.state.store,
-                            &MixedShellScalarInputs::empty(),
-                            Tolerances::default().linear(),
-                        ),
-                        Err(
-                            MixedShellMaterializationError::UnresolvedMaterializationGap(
-                                MixedShellMaterializationGap::ExactTrimParameterRequired { .. }
-                            )
+                    assert_eq!(
+                        certified
+                            .plan()
+                            .section_edges()
+                            .iter()
+                            .filter(|edge| edge.skew_persistence().is_some())
+                            .count(),
+                        usize::try_from(BOUNDED_SKEW_COMPOSITE_COUNT).unwrap()
+                    );
+                    assert!(certified.plan().materialization_gaps().is_empty());
+                    let components = partition_prepared_mixed_shell_components(
+                        certified.plan(),
+                        certified.blueprint(),
+                    )
+                    .unwrap();
+                    let inputs = materialize_mixed_shell_component_inputs(
+                        certified.plan(),
+                        certified.blueprint(),
+                        &components,
+                        &part.state.store,
+                        &MixedShellScalarInputs::empty(),
+                        Tolerances::default().linear(),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{placement:?} swapped={swapped} {operation:?}: materialization failed: {error:?}"
                         )
-                    ));
+                    });
+                    let replay_components = partition_prepared_mixed_shell_components(
+                        replay.plan(),
+                        replay.blueprint(),
+                    )
+                    .unwrap();
+                    let replay_inputs = materialize_mixed_shell_component_inputs(
+                        replay.plan(),
+                        replay.blueprint(),
+                        &replay_components,
+                        &part.state.store,
+                        &MixedShellScalarInputs::empty(),
+                        Tolerances::default().linear(),
+                    )
+                    .unwrap();
+                    assert_eq!(inputs, replay_inputs);
+                    let persistent_edges = inputs
+                        .iter()
+                        .flat_map(|input| input.edges())
+                        .filter(|edge| {
+                            matches!(
+                                edge.carrier(),
+                                AnalyticShellCurve::PersistentSkewCylinderOpenSpan(_)
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        persistent_edges.len(),
+                        usize::try_from(BOUNDED_SKEW_COMPOSITE_COUNT).unwrap()
+                    );
+                    assert!(
+                        persistent_edges
+                            .iter()
+                            .all(|edge| edge.range() == kgeom::param::ParamRange::new(0.0, 1.0))
+                    );
 
                     let (exact, exact_report) =
                         plan(&part, &graph, &prepared, operation, Some(expected_work));
@@ -1228,6 +1261,95 @@ mod tests {
                 "{placement:?}: exact-N/N-1 preparation mutated either source body"
             );
         }
+    }
+
+    #[test]
+    fn bounded_skew_composite_refuses_malformed_lineage_and_scalar_override() {
+        let fixture = fixture(Placement::World);
+        let before = source_signature(&fixture);
+        let bodies = ordered_bodies(&fixture, false);
+        let graph = section(&fixture, &bodies);
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        let sources = cylinder_sources(&part, &bodies);
+        let (prepared, _) = prepare(&part, &graph, &bodies, &sources, None);
+        let prepared = prepared.unwrap();
+        let (certified, _) = plan(
+            &part,
+            &graph,
+            &prepared,
+            RegularizedBooleanOperation::Unite,
+            None,
+        );
+        let certified = certified.unwrap();
+        let fragment = certified
+            .plan()
+            .section_edges()
+            .iter()
+            .find(|edge| edge.skew_persistence().is_some())
+            .map(|edge| edge.fragment_index())
+            .unwrap();
+        let endpoint = certified
+            .plan()
+            .section_edges()
+            .iter()
+            .find(|edge| edge.fragment_index() == fragment)
+            .unwrap()
+            .endpoints()[0];
+        let components =
+            partition_prepared_mixed_shell_components(certified.plan(), certified.blueprint())
+                .unwrap();
+
+        let mut missing = certified.clone();
+        missing
+            .plan_mut_for_test()
+            .clear_skew_persistence_for_test(fragment);
+        assert!(matches!(
+            materialize_mixed_shell_component_inputs(
+                missing.plan(),
+                missing.blueprint(),
+                &components,
+                &part.state.store,
+                &MixedShellScalarInputs::empty(),
+                Tolerances::default().linear(),
+            ),
+            Err(MixedShellMaterializationError::PersistentSkewScalarPath(candidate))
+                if candidate == fragment
+        ));
+
+        let mut mismatched = certified.clone();
+        mismatched
+            .plan_mut_for_test()
+            .swap_skew_carrier_faces_for_test(fragment);
+        assert!(matches!(
+            materialize_mixed_shell_component_inputs(
+                mismatched.plan(),
+                mismatched.blueprint(),
+                &components,
+                &part.state.store,
+                &MixedShellScalarInputs::empty(),
+                Tolerances::default().linear(),
+            ),
+            Err(MixedShellMaterializationError::PersistentSkewLineageMismatch {
+                fragment: candidate,
+                ..
+            }) if candidate == fragment
+        ));
+
+        let scalar = SectionTrimScalarKey::new(fragment, endpoint);
+        assert_eq!(
+            materialize_mixed_shell_component_inputs(
+                certified.plan(),
+                certified.blueprint(),
+                &components,
+                &part.state.store,
+                &MixedShellScalarInputs::new(Vec::new(), vec![(scalar, 0.0)]),
+                Tolerances::default().linear(),
+            ),
+            Err(MixedShellMaterializationError::UnexpectedSectionTrimScalar(
+                scalar
+            ))
+        );
+        assert_eq!(source_signature(&fixture), before);
     }
 
     #[test]

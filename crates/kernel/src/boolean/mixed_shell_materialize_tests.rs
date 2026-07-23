@@ -225,7 +225,9 @@ fn emit_projected_pcurve(
         0,
         0,
         use_,
+        0,
         &fixture.physical,
+        &[None],
     )
 }
 
