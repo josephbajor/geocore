@@ -22,9 +22,8 @@ use super::face_arrangement::{
     preview_bounded_surface_cycles,
 };
 use crate::{
-    BodySectionGraph, FaceId, SectionCompletion, SectionCurveFragment, SectionCurveFragmentSpan,
-    SectionPeriodicCycleOrientation, SectionPeriodicEmbeddingGap,
-    SectionPeriodicFaceEmbeddingEvidence,
+    BodySectionGraph, FaceId, SectionCompletion, SectionPeriodicCycleOrientation,
+    SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence,
 };
 
 /// Exact identity of one directed section fragment on the periodic face.
@@ -292,7 +291,9 @@ type PeriodicArrangementCycle =
 mod error;
 pub(crate) use error::{MixedPeriodicArrangementContractGap, MixedPeriodicArrangementError};
 mod face_local;
-use face_local::collect_unstitched_fragment_paths;
+use face_local::{
+    collect_unstitched_fragment_paths, fragment_endpoints, validate_fragment_embedding_endpoints,
+};
 mod source_span;
 pub(crate) use source_span::canonical_source_span_open_interval;
 
@@ -663,6 +664,7 @@ fn adapt_components(
                 },
             )?;
             let endpoints = fragment_endpoints(actual, fragment)?;
+            validate_fragment_embedding_endpoints(actual, endpoints, embedded)?;
             for endpoint in endpoints {
                 if endpoint >= graph.curve_endpoints().len() {
                     return Err(MixedPeriodicArrangementError::UnknownEndpoint {
@@ -799,6 +801,7 @@ fn adapt_boundary_traces(
                 },
             )?;
             let endpoints = fragment_endpoints(actual_fragment, fragment)?;
+            validate_fragment_embedding_endpoints(actual_fragment, endpoints, embedded)?;
             for endpoint in endpoints {
                 if endpoint >= graph.curve_endpoints().len() {
                     return Err(MixedPeriodicArrangementError::UnknownEndpoint {
@@ -1159,26 +1162,6 @@ fn validate_component_evidence(
         });
     }
     Ok(())
-}
-
-fn fragment_endpoints(
-    fragment_index: usize,
-    fragment: &SectionCurveFragment,
-) -> Result<[usize; 2], MixedPeriodicArrangementError> {
-    match fragment.span() {
-        SectionCurveFragmentSpan::Whole => {
-            Err(MixedPeriodicArrangementError::WholeFragment(fragment_index))
-        }
-        SectionCurveFragmentSpan::Arc { endpoints, .. } => {
-            Ok(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
-        }
-        SectionCurveFragmentSpan::LineSegment { endpoints } => {
-            Ok(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
-        }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => Err(
-            MixedPeriodicArrangementError::BoundedProceduralFragment(fragment_index),
-        ),
-    }
 }
 
 fn validate_component_chain(
@@ -2942,3 +2925,7 @@ mod returning_tests;
 #[cfg(test)]
 #[path = "mixed_periodic_arrangement_face_local_tests.rs"]
 mod face_local_tests;
+
+#[cfg(test)]
+#[path = "mixed_periodic_arrangement_bounded_procedural_tests.rs"]
+mod bounded_procedural_tests;

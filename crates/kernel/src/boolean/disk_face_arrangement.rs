@@ -1419,12 +1419,24 @@ fn propagate_classification(
 mod tests {
     use super::*;
     use kgeom::frame::Frame;
-    use kgeom::vec::Point3;
+    use kgeom::vec::{Point3, Vec3};
     use ktopo::store::Store;
 
     use crate::{
-        BlockRequest, BodyId, CylinderRequest, Kernel, PartId, SectionBodiesRequest, Session,
+        BlockRequest, BodyId, CheckBodyRequest, CheckLevel, CheckOutcome, CylinderRequest, Kernel,
+        PartId, SectionBodiesRequest, Session,
     };
+
+    const BOUNDED_SKEW_LOWER: f64 = 1.8;
+    const BOUNDED_SKEW_UPPER: f64 = 1.9;
+    const BOUNDED_SKEW_SECOND_HALF_HEIGHT: f64 = 1.25;
+    const BOUNDED_SKEW_SECOND_RADIUS: f64 = 2.0;
+
+    #[derive(Debug, Clone, Copy)]
+    enum BoundedSkewPlacement {
+        World,
+        Oblique,
+    }
 
     fn topology_ids() -> (RawEdgeId, RawFinId) {
         let mut store = Store::new();
@@ -1486,6 +1498,221 @@ mod tests {
             ]
         });
         (topology, part.bodies().len())
+    }
+
+    fn bounded_skew_frame(placement: BoundedSkewPlacement) -> Frame {
+        match placement {
+            BoundedSkewPlacement::World => Frame::world(),
+            BoundedSkewPlacement::Oblique => Frame::new(
+                Point3::new(2.5, -1.75, 0.625),
+                Vec3::new(0.48, 0.64, 0.6),
+                Vec3::new(0.8, -0.6, 0.0),
+            )
+            .unwrap(),
+        }
+    }
+
+    fn bounded_skew_fixture(placement: BoundedSkewPlacement) -> (Session, PartId, [BodyId; 2]) {
+        let frame = bounded_skew_frame(placement);
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let bodies = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let bounded = edit
+                .create_cylinder(CylinderRequest::new(
+                    frame.with_origin(frame.point_at(0.0, 0.0, BOUNDED_SKEW_LOWER)),
+                    1.0,
+                    BOUNDED_SKEW_UPPER - BOUNDED_SKEW_LOWER,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let transverse_frame = Frame::new(
+                frame.point_at(-BOUNDED_SKEW_SECOND_HALF_HEIGHT, 0.0, 0.0),
+                frame.x(),
+                frame.y(),
+            )
+            .unwrap();
+            let transverse = edit
+                .create_cylinder(CylinderRequest::new(
+                    transverse_frame,
+                    BOUNDED_SKEW_SECOND_RADIUS,
+                    2.0 * BOUNDED_SKEW_SECOND_HALF_HEIGHT,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            [bounded, transverse]
+        };
+        (session, part_id, bodies)
+    }
+
+    fn cap_fragment_endpoint(
+        graph: &BodySectionGraph,
+        cap: &FaceId,
+        operand: usize,
+    ) -> (usize, usize) {
+        graph
+            .curve_fragments()
+            .iter()
+            .enumerate()
+            .find_map(|(fragment_index, fragment)| {
+                let branch = &graph.branches()[fragment.branch()];
+                if branch.faces()[operand] != *cap {
+                    return None;
+                }
+                let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
+                    return None;
+                };
+                Some((fragment_index, endpoints[0].endpoint()))
+            })
+            .expect("each affected bounded-cylinder cap must retain a ruling chord")
+    }
+
+    fn disk_root_signature(disk: &ArrangedDiskFace) -> Vec<(usize, usize, u64, [u64; 2])> {
+        let mut roots = BTreeMap::new();
+        for arc in disk.source_arcs() {
+            for root in arc.roots() {
+                roots.insert(root.key().endpoint(), root);
+            }
+        }
+        let mut signature = roots
+            .into_values()
+            .map(|root| {
+                (
+                    root.key().circular_ordinal(),
+                    root.key().source_root_ordinal(),
+                    root.root_parameter().to_bits(),
+                    root.root_enclosure().map(f64::to_bits),
+                )
+            })
+            .collect::<Vec<_>>();
+        signature.sort_unstable();
+        signature
+    }
+
+    fn assert_bounded_skew_disk(
+        graph: &BodySectionGraph,
+        disk: &ArrangedDiskFace,
+        topology: DiskCapTopology,
+        cap: &FaceId,
+        operand: usize,
+    ) {
+        assert_eq!(disk.proof().roots_conserved(), 4);
+        assert_eq!(disk.proof().source_arcs_conserved(), 4);
+        assert_eq!(disk.proof().opposed_chords(), 2);
+        assert_eq!(disk.proof().cells(), 3);
+        assert_eq!(disk.proof().dual_edges(), 2);
+        assert!(disk.proof().dual_connected());
+
+        let arrangement = disk.arrangement();
+        assert_eq!(arrangement.source_spans().len(), 4);
+        assert_eq!(arrangement.cut_fragments().len(), 2);
+        assert_eq!(arrangement.cells().len(), 3);
+        assert_eq!(arrangement.adjacency().len(), 2);
+        let mut cell_boundary_sizes = arrangement
+            .cells()
+            .iter()
+            .map(|cell| cell.boundary().uses().len())
+            .collect::<Vec<_>>();
+        cell_boundary_sizes.sort_unstable();
+        assert_eq!(cell_boundary_sizes, vec![2, 2, 4]);
+
+        let signature = disk_root_signature(disk);
+        assert_eq!(
+            signature
+                .iter()
+                .map(|&(circular, source, _, _)| (circular, source))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (1, 1), (2, 2), (3, 3)]
+        );
+        let roots = disk
+            .source_arcs()
+            .iter()
+            .flat_map(|arc| arc.roots())
+            .map(|root| (root.key().endpoint(), root))
+            .collect::<BTreeMap<_, _>>();
+        for root in roots.values() {
+            let SectionCurveEndpointTopology::Trim {
+                source_parameters, ..
+            } = graph.curve_endpoints()[root.key().endpoint()].topology()
+            else {
+                panic!("bounded-skew cap root lost its physical trim identity")
+            };
+            let source = source_parameters[operand]
+                .as_ref()
+                .expect("the cap operand must own every disk root");
+            assert_eq!(source.edge().raw(), topology.edge);
+            assert_eq!(source.root_ordinal(), root.key().source_root_ordinal());
+            assert_eq!(
+                source.root_parameter().to_bits(),
+                root.root_parameter().to_bits()
+            );
+            let source_enclosure = source.root_parameter_enclosure();
+            assert_eq!(
+                [
+                    source_enclosure.lo().to_bits(),
+                    source_enclosure.hi().to_bits(),
+                ],
+                root.root_enclosure().map(f64::to_bits)
+            );
+        }
+
+        let expected_arc_order = match topology.sense {
+            Sense::Forward => vec![[0, 1], [1, 2], [2, 3], [3, 0]],
+            Sense::Reversed => vec![[3, 2], [2, 1], [1, 0], [0, 3]],
+        };
+        assert_eq!(
+            disk.source_arcs()
+                .iter()
+                .map(|arc| arc.roots().map(|root| root.key().circular_ordinal()))
+                .collect::<Vec<_>>(),
+            expected_arc_order
+        );
+
+        let mut cut_pairs = arrangement
+            .cut_fragments()
+            .iter()
+            .map(|cut| {
+                let [start, end] = cut
+                    .endpoints()
+                    .map(|endpoint| roots[endpoint].key().circular_ordinal());
+                assert_eq!(
+                    graph.branches()[graph.curve_fragments()[cut.key().fragment()].branch()]
+                        .faces()[operand],
+                    *cap
+                );
+                if start < end {
+                    [start, end]
+                } else {
+                    [end, start]
+                }
+            })
+            .collect::<Vec<_>>();
+        cut_pairs.sort_unstable();
+        assert_eq!(cut_pairs, vec![[0, 1], [2, 3]]);
+
+        let cut_keys = arrangement
+            .cut_fragments()
+            .iter()
+            .map(|cut| cut.key())
+            .collect::<BTreeSet<_>>();
+        let adjacency_keys = arrangement
+            .adjacency()
+            .iter()
+            .map(|adjacency| adjacency.cut())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(adjacency_keys, cut_keys);
+        let mut dual_degree = vec![0usize; arrangement.cells().len()];
+        for adjacency in arrangement.adjacency() {
+            assert_ne!(adjacency.forward_cell(), adjacency.reverse_cell());
+            dual_degree[adjacency.forward_cell()] += 1;
+            dual_degree[adjacency.reverse_cell()] += 1;
+        }
+        dual_degree.sort_unstable();
+        assert_eq!(dual_degree, vec![1, 1, 2]);
     }
 
     fn assert_real_section_seam_arc_arranges(
@@ -2205,5 +2432,110 @@ mod tests {
             }
         }
         assert_eq!(source_signature(&session, &part_id, &sources), before);
+    }
+
+    #[test]
+    fn section_adapter_arranges_bounded_skew_cap_chords_exactly_and_fail_closed() {
+        for placement in [BoundedSkewPlacement::World, BoundedSkewPlacement::Oblique] {
+            let (session, part_id, bodies) = bounded_skew_fixture(placement);
+            let before = source_signature(&session, &part_id, &bodies);
+            let section = |left: BodyId, right: BodyId| {
+                session
+                    .part(part_id.clone())
+                    .unwrap()
+                    .section_bodies(SectionBodiesRequest::new(left, right))
+                    .unwrap()
+                    .into_result()
+                    .unwrap()
+            };
+            let forward = section(bodies[0].clone(), bodies[1].clone());
+            let replay = section(bodies[0].clone(), bodies[1].clone());
+            let swapped = section(bodies[1].clone(), bodies[0].clone());
+            assert_eq!(forward, replay, "bounded-skew Section replay changed");
+
+            let part = session.part(part_id.clone()).unwrap();
+            let store = &part.state.store;
+            let caps = store
+                .faces_of_body(bodies[0].raw())
+                .unwrap()
+                .into_iter()
+                .filter(|raw_face| {
+                    store.get(*raw_face).ok().is_some_and(|face| {
+                        matches!(store.surface(face.surface()), Ok(SurfaceGeom::Plane(_)))
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(caps.len(), 2);
+
+            for (cap_index, raw_cap) in caps.iter().copied().enumerate() {
+                let cap = FaceId::new(part_id.clone(), raw_cap);
+                let topology = disk_cap_topology(store, raw_cap).unwrap();
+                let forward_disk = arrange_section_disk_face(store, &forward, &cap, 0)
+                    .expect("bounded-skew cap rulings must arrange");
+                let replay_disk = arrange_section_disk_face(store, &replay, &cap, 0).unwrap();
+                let swapped_disk = arrange_section_disk_face(store, &swapped, &cap, 1)
+                    .expect("operand swap must retain the same cap arrangement");
+                assert_eq!(forward_disk, replay_disk);
+                assert_bounded_skew_disk(&forward, &forward_disk, topology, &cap, 0);
+                assert_bounded_skew_disk(&swapped, &swapped_disk, topology, &cap, 1);
+                assert_eq!(
+                    disk_root_signature(&forward_disk),
+                    disk_root_signature(&swapped_disk),
+                    "operand swap changed exact cap-root order or materialization"
+                );
+
+                let classified = classify_disk_face_from_anchor(
+                    &forward_disk,
+                    forward_disk.source_arcs()[0].key(),
+                    DiskCellClassification::Exterior,
+                )
+                .expect("the two-chord cap dual must classify all three cells");
+                assert_eq!(classified.classes().len(), 3);
+                assert_eq!(classified.dual_edges_checked(), 2);
+                for adjacency in forward_disk.arrangement().adjacency() {
+                    assert_ne!(
+                        classified.classes()[&adjacency.forward_cell()],
+                        classified.classes()[&adjacency.reverse_cell()]
+                    );
+                }
+
+                let other_cap = FaceId::new(part_id.clone(), caps[1 - cap_index]);
+                let (fragment, target_endpoint) = cap_fragment_endpoint(&forward, &cap, 0);
+                let (_, donor_endpoint) = cap_fragment_endpoint(&forward, &other_cap, 0);
+                let mut malformed = forward.clone();
+                malformed
+                    .curve_endpoints
+                    .swap(target_endpoint, donor_endpoint);
+                let malformed_before = malformed.clone();
+                assert_eq!(
+                    arrange_section_disk_face(store, &malformed, &cap, 0),
+                    Err(SectionDiskArrangementError::EndpointProvenanceMismatch {
+                        fragment,
+                        endpoint: target_endpoint,
+                    })
+                );
+                assert_eq!(
+                    malformed, malformed_before,
+                    "failed arrangement mutated malformed Section evidence"
+                );
+            }
+            drop(part);
+
+            assert_eq!(
+                source_signature(&session, &part_id, &bodies),
+                before,
+                "disk arrangement mutated a bounded-skew source"
+            );
+            let part = session.part(part_id.clone()).unwrap();
+            for body in bodies {
+                let check = part
+                    .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(check.outcome(), CheckOutcome::Valid);
+                assert!(check.gaps().is_empty());
+            }
+        }
     }
 }

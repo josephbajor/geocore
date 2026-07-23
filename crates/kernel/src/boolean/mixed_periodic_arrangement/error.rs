@@ -107,9 +107,14 @@ pub(crate) enum MixedPeriodicArrangementError {
         expected: usize,
         actual: usize,
     },
+    FragmentEmbeddingEndpointMismatch {
+        fragment: usize,
+        end: usize,
+        expected: usize,
+        actual: usize,
+    },
     DuplicateFragment(usize),
     WholeFragment(usize),
-    BoundedProceduralFragment(usize),
     UnknownEndpoint {
         fragment: usize,
         endpoint: usize,

@@ -1,4 +1,5 @@
-use super::{BodySectionGraph, SectionCurveFragment, SectionCurveFragmentSpan};
+use super::{BodySectionGraph, MixedPeriodicArrangementError};
+use crate::{SectionCurveFragment, SectionCurveFragmentSpan};
 
 pub(super) struct UnstitchedFragmentPaths {
     pub(super) paths: Vec<Vec<usize>>,
@@ -101,6 +102,40 @@ fn bounded_fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize;
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
         }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
+        SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
+            Some(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
+        }
     }
+}
+
+pub(super) fn fragment_endpoints(
+    fragment_index: usize,
+    fragment: &SectionCurveFragment,
+) -> Result<[usize; 2], MixedPeriodicArrangementError> {
+    bounded_fragment_endpoints(fragment)
+        .ok_or(MixedPeriodicArrangementError::WholeFragment(fragment_index))
+}
+
+pub(super) fn validate_fragment_embedding_endpoints(
+    fragment: usize,
+    expected: [usize; 2],
+    embedded: &crate::SectionPeriodicFragmentEmbedding,
+) -> Result<(), MixedPeriodicArrangementError> {
+    let actual = embedded
+        .trim_scalars()
+        .each_ref()
+        .map(|trim| trim.endpoint());
+    for end in 0..2 {
+        if actual[end] != expected[end] {
+            return Err(
+                MixedPeriodicArrangementError::FragmentEmbeddingEndpointMismatch {
+                    fragment,
+                    end,
+                    expected: expected[end],
+                    actual: actual[end],
+                },
+            );
+        }
+    }
+    Ok(())
 }
