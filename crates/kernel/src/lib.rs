@@ -338,8 +338,8 @@ pub use properties::{
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, CertifiedSectionPeriodicFaceEmbedding,
     SECTION_FACE_PAIRS, SECTION_WORK, SectionBodiesRequest, SectionBoundedProceduralFragmentEnd,
-    SectionBoundedProceduralTrimProvenance, SectionBranch, SectionBranchEvidence,
-    SectionBranchTopology, SectionCarrier, SectionCarrierParameterInterval,
+    SectionBoundedProceduralPhysicalRoot, SectionBoundedProceduralTrimProvenance, SectionBranch,
+    SectionBranchEvidence, SectionBranchTopology, SectionCarrier, SectionCarrierParameterInterval,
     SectionCarrierTrimScalarEvidence, SectionCompletion, SectionCurveComponent,
     SectionCurveEndpoint, SectionCurveEndpointTopology, SectionCurveFragment,
     SectionCurveFragmentEnd, SectionCurveFragmentSpan, SectionCurveTrimProvenance,

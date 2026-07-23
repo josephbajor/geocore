@@ -977,6 +977,9 @@ fn assert_bounded_procedural_fragment(
     for (slot, end) in endpoints.iter().enumerate() {
         incidence[end.endpoint()][1] += 1;
         points[end.endpoint()].push(end.root_point());
+        let physical_root = end.physical_root();
+        assert_eq!(physical_root.endpoint(), end.endpoint());
+        assert_eq!(physical_root.point(), end.root_point());
         let expected_parameter = if slot == 0 {
             branch.range().lo
         } else {
@@ -1005,6 +1008,7 @@ fn assert_bounded_procedural_fragment(
             .expect("directed physical-root corridor disappeared");
         assert_eq!(root.section_end(), slot);
         assert_eq!(root.work(), embedding.root_corridor_work());
+        assert_eq!(physical_root.carrier_parameter(), root.root_parameter());
         assert!(
             root.corridor()
                 .parameter()

@@ -238,6 +238,7 @@ impl MixedShellMaterializationBlueprint {
 /// Read-only refusal before any topology transaction exists.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum MixedShellMaterializationError {
+    UnresolvedMaterializationGap(MixedShellMaterializationGap),
     MissingPlanarLineage,
     EndpointFreeSourceRingMismatch,
     PlanVertexMismatch,
@@ -591,6 +592,18 @@ fn retained_periodic_trim_scalars(
     graph: &BodySectionGraph,
     fragment_index: usize,
 ) -> Option<[(f64, Point3); 2]> {
+    if matches!(
+        graph.curve_fragments().get(fragment_index)?.span(),
+        crate::SectionCurveFragmentSpan::BoundedProcedural { .. }
+    ) {
+        // Periodic embedding trim scalars for a bounded procedural fragment
+        // are residual guards strictly inside the physical roots.  The
+        // Section-owned physical-root authority is an exact enclosure, not a
+        // representable carrier scalar, so realization must keep its typed
+        // trim-parameter gap until the composite carrier can consume that
+        // authority directly.
+        return None;
+    }
     let global = graph
         .periodic_face_embeddings()
         .iter()
@@ -1859,6 +1872,7 @@ pub(crate) fn materialize_mixed_shell_input(
     scalars: &MixedShellScalarInputs,
     tolerance: f64,
 ) -> Result<AnalyticShellInput, MixedShellMaterializationError> {
+    refuse_unresolved_materialization_gap(plan)?;
     let input = build_mixed_shell_input(plan, store, scalars, tolerance)?;
     prepare_analytic_shell(&input, store, tolerance)
         .map_err(MixedShellMaterializationError::AnalyticPreflight)?;
@@ -1879,12 +1893,22 @@ pub(crate) fn materialize_mixed_shell_component_inputs(
     scalars: &MixedShellScalarInputs,
     tolerance: f64,
 ) -> Result<Vec<AnalyticShellInput>, MixedShellMaterializationError> {
+    refuse_unresolved_materialization_gap(plan)?;
     let global =
         build_mixed_shell_input_from_blueprint(plan, blueprint, store, scalars, tolerance)?;
     components
         .iter()
         .map(|component| component_input(&global, component, store, tolerance))
         .collect()
+}
+
+fn refuse_unresolved_materialization_gap(
+    plan: &MixedShellProofPlan,
+) -> Result<(), MixedShellMaterializationError> {
+    match plan.materialization_gaps().first() {
+        Some(gap) => Err(MixedShellMaterializationError::UnresolvedMaterializationGap(gap.clone())),
+        None => Ok(()),
+    }
 }
 
 fn component_input(

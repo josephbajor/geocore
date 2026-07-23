@@ -115,17 +115,63 @@ impl SectionBoundedProceduralTrimProvenance {
     }
 }
 
+/// Sealed carrier authority for one physical bounded-procedural root.
+///
+/// `carrier_parameter` is an outward enclosure of the exact physical root in
+/// Section traversal orientation. `point` is the canonical topology-owned
+/// source-edge materialization of that same root. Neither value is the
+/// residual guard retained by [`SectionBoundedProceduralFragmentEnd`], and the
+/// enclosure deliberately does not pretend to provide an analytic trim
+/// scalar.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionBoundedProceduralPhysicalRoot {
+    endpoint: usize,
+    carrier_parameter: SectionSkewCylinderInterval,
+    point: Point3,
+}
+
+impl SectionBoundedProceduralPhysicalRoot {
+    pub(super) const fn new(
+        endpoint: usize,
+        carrier_parameter: SectionSkewCylinderInterval,
+        point: Point3,
+    ) -> Self {
+        Self {
+            endpoint,
+            carrier_parameter,
+            point,
+        }
+    }
+
+    /// Index into `BodySectionGraph::curve_endpoints`.
+    pub const fn endpoint(self) -> usize {
+        self.endpoint
+    }
+
+    /// Exact physical-root enclosure in Section-oriented carrier parameter.
+    pub const fn carrier_parameter(self) -> SectionSkewCylinderInterval {
+        self.carrier_parameter
+    }
+
+    /// Canonical source-edge materialization of this physical root.
+    ///
+    /// Exact joins use [`Self::endpoint`]; this point is metric evidence.
+    pub const fn point(self) -> Point3 {
+        self.point
+    }
+}
+
 /// One directed end of a bounded procedural Section fragment.
 ///
 /// The physical root and the residual-certified carrier endpoint are distinct:
-/// `root_point` is the canonical source-edge materialization of the exact trim,
-/// while `inside_point` and `inside_carrier_parameter` lie strictly inside the
+/// [`Self::physical_root`] binds the topology endpoint to its exact
+/// carrier-root enclosure and canonical source-edge materialization, while
+/// `inside_point` and `inside_carrier_parameter` lie strictly inside the
 /// retained component and delimit the graph certificate's active range.
 /// Combinatorial stitching uses only [`Self::endpoint`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionBoundedProceduralFragmentEnd {
-    pub(super) endpoint: usize,
-    pub(super) root_point: Point3,
+    pub(super) physical_root: SectionBoundedProceduralPhysicalRoot,
     pub(super) inside_point: Point3,
     pub(super) inside_carrier_parameter: f64,
     pub(super) trim: SectionBoundedProceduralTrimProvenance,
@@ -134,14 +180,19 @@ pub struct SectionBoundedProceduralFragmentEnd {
 impl SectionBoundedProceduralFragmentEnd {
     /// Index into `BodySectionGraph::curve_endpoints`.
     pub const fn endpoint(&self) -> usize {
-        self.endpoint
+        self.physical_root.endpoint
+    }
+
+    /// Sealed physical-root carrier and point authority.
+    pub const fn physical_root(&self) -> SectionBoundedProceduralPhysicalRoot {
+        self.physical_root
     }
 
     /// Canonical source-edge materialization of the physical trim root.
     ///
     /// This point is metric evidence only; exact joins use [`Self::endpoint`].
     pub const fn root_point(&self) -> Point3 {
-        self.root_point
+        self.physical_root.point
     }
 
     /// Graph-certified model-space representative on the retained inside side.

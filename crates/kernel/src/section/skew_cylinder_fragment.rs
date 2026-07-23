@@ -751,11 +751,13 @@ pub(super) fn publish_fragments(
         }
         let mut public_ends = Vec::with_capacity(2);
         for (section_end, evidence) in fragment.endpoints.iter().enumerate() {
-            if !published_corridor_matches_end(embedding, section_end, evidence) {
+            let Some(carrier_parameter) =
+                published_physical_root_parameter(embedding, section_end, evidence)
+            else {
                 return Err(inconsistent_topology(
                     "bounded procedural endpoint diverged from its root corridor",
                 ));
-            }
+            };
             let mut sites = [
                 SectionSite::FaceInterior(branch.faces[0].clone()),
                 SectionSite::FaceInterior(branch.faces[1].clone()),
@@ -807,8 +809,11 @@ pub(super) fn publish_fragments(
                 },
             };
             public_ends.push(SectionBoundedProceduralFragmentEnd {
-                endpoint,
-                root_point: evidence.root_point,
+                physical_root: SectionBoundedProceduralPhysicalRoot::new(
+                    endpoint,
+                    carrier_parameter,
+                    evidence.root_point,
+                ),
                 inside_point: evidence.inside_point,
                 inside_carrier_parameter: evidence.inside_carrier_parameter,
                 trim,
@@ -828,23 +833,30 @@ pub(super) fn publish_fragments(
     Ok(())
 }
 
-fn published_corridor_matches_end(
+fn published_physical_root_parameter(
     embedding: &SectionSkewCylinderEmbeddingCertificate,
     section_end: usize,
     evidence: &CertifiedBoundedSkewCylinderEnd,
-) -> bool {
+) -> Option<SectionSkewCylinderInterval> {
     let Some(source) = embedding.source_root_corridor(section_end) else {
-        return false;
+        return None;
     };
     let Some(root) = embedding.root_corridor(section_end) else {
-        return false;
+        return None;
     };
     let expected_guard = if section_end == 0 {
         embedding.range().lo
     } else {
         embedding.range().hi
     };
+    let physical_parameter = root.root_parameter();
+    let root_is_outside_guard = if section_end == 0 {
+        physical_parameter.hi() < embedding.range().lo
+    } else {
+        physical_parameter.lo() > embedding.range().hi
+    };
     if evidence.inside_carrier_parameter.to_bits() != expected_guard.to_bits()
+        || !root_is_outside_guard
         || !root
             .corridor()
             .parameter()
@@ -853,23 +865,24 @@ fn published_corridor_matches_end(
             !pcurve.stored_is_strictly_regular() || !pcurve.source_is_strictly_regular()
         })
     {
-        return false;
+        return None;
     }
     let root_pcurves = source.root_pcurves();
     if evidence.source_operand > 1
         || !root_pcurves[evidence.source_operand].stored_uv()[1].contains(evidence.authored_height)
         || !root_pcurves[evidence.source_operand].source_uv()[1].contains(evidence.authored_height)
     {
-        return false;
+        return None;
     }
     let Some(projective) = exact_chart_root_longitude(
         evidence.carrier_root.chart,
         evidence.carrier_root.projective.lo(),
         evidence.carrier_root.projective.hi(),
     ) else {
-        return false;
+        return None;
     };
     periodic_root_interval_matches(projective, source.root_parameter())
+        .then_some(physical_parameter)
 }
 
 fn finite_interval(value: Interval) -> bool {

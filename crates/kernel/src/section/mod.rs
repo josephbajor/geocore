@@ -77,12 +77,12 @@ pub(crate) use periodic_embedding::{
     certify_periodic_face_fragment_subset, periodic_face_fragment_subset_work,
 };
 pub use skew_cylinder_public::{
-    SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralTrimProvenance,
-    SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve,
-    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderEmbeddingCertificate,
-    SectionSkewCylinderInterval, SectionSkewCylinderPcurveCellCertificate,
-    SectionSkewCylinderPcurveEnclosure, SectionSkewCylinderRootChart,
-    SectionSkewCylinderRootCorridorCertificate,
+    SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralPhysicalRoot,
+    SectionBoundedProceduralTrimProvenance, SectionSkewCylinderBranchCarrier,
+    SectionSkewCylinderBranchPcurve, SectionSkewCylinderCarrierRootEnclosure,
+    SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
+    SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
+    SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
 };
 
 #[cfg(test)]

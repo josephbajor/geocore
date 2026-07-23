@@ -15,6 +15,8 @@ use ktopo::store::Store;
 
 #[path = "mixed_shell_components.rs"]
 pub(crate) mod components;
+#[path = "mixed_shell_plan/cylinder_pair.rs"]
+pub(crate) mod cylinder_pair;
 #[path = "mixed_shell_materialize.rs"]
 pub(crate) mod materialize;
 #[path = "mixed_shell_plan/parallel_cylinder_lens.rs"]
@@ -1258,7 +1260,11 @@ fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize; 2]> {
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some([endpoints[0].endpoint(), endpoints[1].endpoint()])
         }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
+        SectionCurveFragmentSpan::BoundedProcedural { endpoints } => Some(
+            endpoints
+                .each_ref()
+                .map(|end| end.physical_root().endpoint()),
+        ),
     }
 }
 

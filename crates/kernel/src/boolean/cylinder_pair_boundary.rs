@@ -491,7 +491,19 @@ mod tests {
         Session,
         boolean::{
             BooleanBudgetProfile,
+            boundary_select::RegularizedBooleanOperation,
             curved_source::{CylinderSourceOutcome, extract_cylinder_source},
+            mixed_shell_plan::{
+                MixedShellMaterializationGap,
+                cylinder_pair::{
+                    CertifiedCylinderPairPlan, CylinderPairPlanError, plan_cylinder_pair_boundary,
+                },
+                materialize::{
+                    MixedShellMaterializationError, MixedShellScalarInputs, PhysicalCarrier,
+                    materialize_mixed_shell_input,
+                },
+            },
+            pipeline::PLANAR_BOOLEAN_REALIZATION_WORK,
         },
     };
 
@@ -670,6 +682,49 @@ mod tests {
             .expect("Boolean defaults must retain boundary work accounting")
     }
 
+    fn plan(
+        part: &Part<'_>,
+        graph: &BodySectionGraph,
+        prepared: &PreparedCylinderPairBoundary,
+        operation: RegularizedBooleanOperation,
+        allowed: Option<u64>,
+    ) -> (
+        Result<CertifiedCylinderPairPlan, CylinderPairPlanError>,
+        OperationReport,
+    ) {
+        let context = OperationContext::new(part.policy(), Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(BooleanBudgetProfile::v1_defaults());
+        let context = match allowed {
+            Some(allowed) => context.with_budget_overrides(
+                BudgetPlan::new([LimitSpec::new(
+                    PLANAR_BOOLEAN_REALIZATION_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            ),
+            None => context,
+        };
+        let mut scope = OperationScope::new(&context);
+        let result =
+            plan_cylinder_pair_boundary(&part.state.store, graph, prepared, operation, &mut scope);
+        scope.finish_typed(result).into_parts()
+    }
+
+    fn post_selection_snapshot(report: &OperationReport) -> kcore::operation::LimitSnapshot {
+        report
+            .usage()
+            .iter()
+            .copied()
+            .find(|snapshot| {
+                snapshot.stage == PLANAR_BOOLEAN_REALIZATION_WORK
+                    && snapshot.resource == ResourceKind::Work
+            })
+            .expect("Boolean defaults must retain post-selection work accounting")
+    }
+
     fn preparation_shape(prepared: &PreparedCylinderPairBoundary) -> PreparationShape {
         let mut periodic = prepared
             .periodic
@@ -710,6 +765,18 @@ mod tests {
             disks,
             cap_boundaries,
             classifications: prepared.classified.len(),
+        }
+    }
+
+    const fn expected_plan_shape(
+        operation: RegularizedBooleanOperation,
+        swapped: bool,
+    ) -> (u64, usize) {
+        match (operation, swapped) {
+            (RegularizedBooleanOperation::Unite, _) => (2_690, 14),
+            (RegularizedBooleanOperation::Intersect, _) => (2_046, 12),
+            (RegularizedBooleanOperation::Subtract, false) => (2_048, 12),
+            (RegularizedBooleanOperation::Subtract, true) => (2_688, 14),
         }
     }
 
@@ -965,6 +1032,140 @@ mod tests {
                 before,
                 "{placement:?}: preparation mutated either source body"
             );
+        }
+    }
+
+    #[test]
+    fn bounded_skew_planning_is_complete_replay_stable_and_exactly_accounted() {
+        for placement in [Placement::World, Placement::Oblique] {
+            let fixture = fixture(placement);
+            let before = source_signature(&fixture);
+            for swapped in [false, true] {
+                let bodies = ordered_bodies(&fixture, swapped);
+                let graph = section(&fixture, &bodies);
+                let replay_graph = section(&fixture, &bodies);
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                let sources = cylinder_sources(&part, &bodies);
+                let (prepared, _) = prepare(&part, &graph, &bodies, &sources, None);
+                let prepared = prepared.unwrap();
+                let (replay_prepared, _) = prepare(&part, &replay_graph, &bodies, &sources, None);
+                let replay_prepared = replay_prepared.unwrap();
+
+                for operation in [
+                    RegularizedBooleanOperation::Unite,
+                    RegularizedBooleanOperation::Intersect,
+                    RegularizedBooleanOperation::Subtract,
+                ] {
+                    let (certified, report) = plan(&part, &graph, &prepared, operation, None);
+                    let certified = certified.unwrap_or_else(|error| {
+                        panic!(
+                            "{placement:?} swapped={swapped} {operation:?}: planning failed: {error:?}"
+                        )
+                    });
+                    let (replay, replay_report) =
+                        plan(&part, &replay_graph, &replay_prepared, operation, None);
+                    let replay = replay.unwrap();
+                    assert_eq!(certified, replay);
+                    assert_eq!(report, replay_report);
+                    let (expected_work, expected_edges) = expected_plan_shape(operation, swapped);
+                    assert_eq!(certified.work(), expected_work);
+                    assert_eq!(post_selection_snapshot(&report).consumed, expected_work);
+                    assert_eq!(certified.blueprint().edges().len(), expected_edges);
+
+                    let fragments = certified
+                        .plan()
+                        .section_edges()
+                        .iter()
+                        .map(|edge| edge.fragment_index())
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        fragments,
+                        (0..graph.curve_fragments().len()).collect::<Vec<_>>()
+                    );
+                    assert_eq!(fragments.len(), 8);
+                    assert!(certified.blueprint().all_edges_have_two_opposed_uses());
+                    assert_eq!(
+                        certified
+                            .blueprint()
+                            .edges()
+                            .iter()
+                            .filter(|edge| matches!(edge.carrier(), PhysicalCarrier::Section(_)))
+                            .count(),
+                        8
+                    );
+
+                    let expected_gaps = graph
+                        .curve_fragments()
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(fragment, value)| match value.span() {
+                            crate::SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
+                                Some(
+                                    endpoints
+                                        .each_ref()
+                                        .map(|end| (fragment, end.physical_root().endpoint())),
+                                )
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect::<BTreeSet<_>>();
+                    let actual_gaps = certified
+                        .plan()
+                        .materialization_gaps()
+                        .iter()
+                        .map(|gap| match gap {
+                            MixedShellMaterializationGap::ExactTrimParameterRequired {
+                                fragment,
+                                endpoint,
+                            } => (*fragment, *endpoint),
+                            other => panic!("unexpected bounded-skew gap: {other:?}"),
+                        })
+                        .collect::<BTreeSet<_>>();
+                    assert_eq!(expected_gaps.len(), 8);
+                    assert_eq!(actual_gaps, expected_gaps);
+                    assert!(matches!(
+                        materialize_mixed_shell_input(
+                            certified.plan(),
+                            &part.state.store,
+                            &MixedShellScalarInputs::empty(),
+                            Tolerances::default().linear(),
+                        ),
+                        Err(
+                            MixedShellMaterializationError::UnresolvedMaterializationGap(
+                                MixedShellMaterializationGap::ExactTrimParameterRequired { .. }
+                            )
+                        )
+                    ));
+
+                    let (exact, exact_report) =
+                        plan(&part, &graph, &prepared, operation, Some(expected_work));
+                    assert_eq!(exact.unwrap(), certified);
+                    let exact_snapshot = post_selection_snapshot(&exact_report);
+                    assert_eq!(exact_snapshot.consumed, expected_work);
+                    assert_eq!(exact_snapshot.allowed, expected_work);
+                    assert!(exact_report.limit_events().is_empty());
+
+                    let (denied, denied_report) =
+                        plan(&part, &graph, &prepared, operation, Some(expected_work - 1));
+                    let error = denied.expect_err("N-1 must refuse before plan publication");
+                    let limit = match error {
+                        CylinderPairPlanError::Execution(error) => error
+                            .limit()
+                            .expect("planning refusal must retain limit evidence"),
+                        other => panic!("unexpected planning refusal: {other:?}"),
+                    };
+                    assert_eq!(limit.stage, PLANAR_BOOLEAN_REALIZATION_WORK);
+                    assert_eq!(limit.resource, ResourceKind::Work);
+                    assert_eq!(limit.consumed, expected_work);
+                    assert_eq!(limit.allowed, expected_work - 1);
+                    let denied_snapshot = post_selection_snapshot(&denied_report);
+                    assert_eq!(denied_snapshot.consumed, 0);
+                    assert_eq!(denied_snapshot.allowed, expected_work - 1);
+                    assert_eq!(denied_report.limit_events(), &[limit]);
+                }
+            }
+            assert_eq!(source_signature(&fixture), before);
         }
     }
 
