@@ -11,13 +11,13 @@
 //! relations, skew axes, and every incomplete family remain explicit typed
 //! gaps.
 
-use super::bounded_polynomial::ExactScalar;
 use kcore::predicates::{Orientation, orient3d};
 use kgeom::curve::Line;
 use kgeom::curve2d::Line2d;
 use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
 use kgeom::vec::Vec2;
+use kgraph::exact::bounded_polynomial::ExactScalar;
 use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, CurveDescriptor, CylinderRulingTrace,
     certify_paired_cylinder_cylinder_ruling_residuals,

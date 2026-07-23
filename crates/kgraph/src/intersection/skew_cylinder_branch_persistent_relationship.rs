@@ -47,6 +47,8 @@ pub enum PersistentSkewCylinderSpanRelationshipRequest {
 pub struct PersistentSkewCylinderDirectedChartIntegralCertificate {
     stored: Interval,
     source: Interval,
+    stored_ordinate_delta: Interval,
+    source_ordinate_delta: Interval,
 }
 
 impl PersistentSkewCylinderDirectedChartIntegralCertificate {
@@ -58,6 +60,16 @@ impl PersistentSkewCylinderDirectedChartIntegralCertificate {
     /// Independently exact-source integral enclosure.
     pub const fn source_enclosure(self) -> Interval {
         self.source
+    }
+
+    /// Procedural-evaluator enclosure of `v(end) - v(start)`.
+    pub const fn stored_ordinate_delta_enclosure(self) -> Interval {
+        self.stored_ordinate_delta
+    }
+
+    /// Independently exact-source enclosure of `v(end) - v(start)`.
+    pub const fn source_ordinate_delta_enclosure(self) -> Interval {
+        self.source_ordinate_delta
     }
 }
 
@@ -388,6 +400,8 @@ const fn public_integral(
     PersistentSkewCylinderDirectedChartIntegralCertificate {
         stored: integral.stored,
         source: integral.source,
+        stored_ordinate_delta: integral.stored_ordinate_delta,
+        source_ordinate_delta: integral.source_ordinate_delta,
     }
 }
 

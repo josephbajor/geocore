@@ -80,15 +80,17 @@ pub(crate) use periodic_embedding::{
 };
 #[allow(unused_imports)]
 pub(crate) use skew_cylinder_persistence::{
-    SectionSkewCylinderPersistenceInput, bounded_skew_persistence_input,
+    SectionSkewCylinderEndpointSlab, SectionSkewCylinderPersistenceInput,
+    bounded_skew_persistence_input,
 };
 pub use skew_cylinder_public::{
     SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralPhysicalRoot,
-    SectionBoundedProceduralTrimProvenance, SectionSkewCylinderBranchCarrier,
-    SectionSkewCylinderBranchPcurve, SectionSkewCylinderCarrierRootEnclosure,
-    SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
-    SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
-    SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
+    SectionBoundedProceduralTrimProvenance, SectionSkewCylinderAxialBoundary,
+    SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve,
+    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderEmbeddingCertificate,
+    SectionSkewCylinderInterval, SectionSkewCylinderPcurveCellCertificate,
+    SectionSkewCylinderPcurveEnclosure, SectionSkewCylinderRootChart,
+    SectionSkewCylinderRootCorridorCertificate,
 };
 
 #[cfg(test)]
@@ -882,6 +884,14 @@ impl SectionCurveFragment {
     /// Exact whole-period, bounded-analytic, or bounded-procedural coverage.
     pub const fn span(&self) -> &SectionCurveFragmentSpan {
         &self.span
+    }
+
+    #[cfg(test)]
+    pub(crate) fn perturb_bounded_procedural_bound_for_test(&mut self) {
+        let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = &mut self.span else {
+            return;
+        };
+        endpoints[0].trim.authored_bound = endpoints[0].trim.authored_bound.next_up();
     }
 }
 

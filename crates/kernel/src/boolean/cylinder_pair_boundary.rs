@@ -1335,6 +1335,23 @@ mod tests {
             }) if candidate == fragment
         ));
 
+        let mut mismatched_slab = certified.clone();
+        mismatched_slab
+            .plan_mut_for_test()
+            .perturb_skew_endpoint_bound_for_test(fragment);
+        assert!(matches!(
+            materialize_mixed_shell_component_inputs(
+                mismatched_slab.plan(),
+                mismatched_slab.blueprint(),
+                &components,
+                &part.state.store,
+                &MixedShellScalarInputs::empty(),
+                Tolerances::default().linear(),
+            ),
+            Err(MixedShellMaterializationError::PersistentSkewEndpointSlabMismatch(candidate))
+                if candidate == fragment
+        ));
+
         let scalar = SectionTrimScalarKey::new(fragment, endpoint);
         assert_eq!(
             materialize_mixed_shell_component_inputs(

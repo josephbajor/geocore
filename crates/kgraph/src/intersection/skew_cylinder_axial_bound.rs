@@ -13,20 +13,19 @@
 //! Above/Below relation on every open cyclic cell. No sampled evaluation is
 //! used for a topological decision.
 
+use super::SkewCylinderSheet;
 use kcore::math;
 use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
-use kgraph::SkewCylinderSheet;
 
-use super::bounded_polynomial::{
+use crate::exact::bounded_polynomial::{
     ExactPolynomial, ExactScalar, RootIsolation, RootIsolationFailure,
 };
-use super::bounded_trigonometric::{
+use crate::exact::bounded_trigonometric::{
     CYCLIC_SECOND_HARMONIC_EXACT_WORK, CyclicRoot, CyclicRootBracket, CyclicSecondHarmonicFailure,
     CyclicSecondHarmonicTopology, HalfAngleChart, SecondHarmonicCoefficients, StrictSign,
     classify_cyclic_second_harmonic,
 };
-use super::parameter::fit_periodic_parameter;
 
 const TAU: f64 = core::f64::consts::TAU;
 
@@ -36,34 +35,43 @@ const TAU: f64 = core::f64::consts::TAU;
 /// `4 * 64` operation-ledger charge. This pure query checks its complete
 /// allowance before constructing exact coefficients and never returns a
 /// partial root list.
-pub(super) const SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK: u64 = CYCLIC_SECOND_HARMONIC_EXACT_WORK;
+pub const SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK: u64 = CYCLIC_SECOND_HARMONIC_EXACT_WORK;
 
 /// Caller-authored side of one finite axial window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkewCylinderAxialBoundary {
+pub enum SkewCylinderAxialBoundary {
+    /// Low end of the caller-authored axial interval.
     Lower,
+    /// High end of the caller-authored axial interval.
     Upper,
 }
 
 /// Caller-order provenance retained by every source root.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SkewCylinderAxialBoundProvenance {
-    pub(super) source_operand: usize,
-    pub(super) boundary: SkewCylinderAxialBoundary,
-    pub(super) value: f64,
+pub struct SkewCylinderAxialBoundProvenance {
+    /// Caller/source operand whose axial chart supplies the bound.
+    pub source_operand: usize,
+    /// Authored side of that operand's axial interval.
+    pub boundary: SkewCylinderAxialBoundary,
+    /// Exact caller-authored axial coordinate.
+    pub value: f64,
 }
 
 /// Strict relation of one sheet height to the queried bound on an open cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkewCylinderAxialRelation {
+pub enum SkewCylinderAxialRelation {
+    /// The sheet height is strictly less than the bound.
     Below,
+    /// The sheet height is strictly greater than the bound.
     Above,
 }
 
 /// Half-angle chart retaining the exact source-root identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkewCylinderHalfAngleChart {
+pub enum SkewCylinderHalfAngleChart {
+    /// Tangent half-angle coordinate `t = tan(u / 2)`.
     Tangent,
+    /// Cotangent half-angle coordinate `q = cot(u / 2)`.
     Cotangent,
 }
 
@@ -78,24 +86,29 @@ impl From<HalfAngleChart> for SkewCylinderHalfAngleChart {
 
 /// One source root bracket in its owning projective half-angle chart.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SkewCylinderHalfAngleRootBracket {
-    pub(super) chart: SkewCylinderHalfAngleChart,
-    pub(super) lo: f64,
-    pub(super) hi: f64,
+pub struct SkewCylinderHalfAngleRootBracket {
+    /// Projective chart that owns the bracket without ambiguity.
+    pub chart: SkewCylinderHalfAngleChart,
+    /// Inclusive lower projective coordinate.
+    pub lo: f64,
+    /// Inclusive upper projective coordinate.
+    pub hi: f64,
 }
 
 /// Numeric enclosure of one source root, ordered by increasing canonical
 /// longitude in `[0, 2π)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SkewCylinderAngularRootBracket {
-    pub(super) lo: f64,
-    pub(super) hi: f64,
+pub struct SkewCylinderAngularRootBracket {
+    /// Inclusive lower canonical-longitude coordinate.
+    pub lo: f64,
+    /// Inclusive upper canonical-longitude coordinate.
+    pub hi: f64,
 }
 
 #[allow(dead_code)] // Legacy lift helpers remain covered by the root-level tests.
 impl SkewCylinderAngularRootBracket {
     /// Deterministic numeric representative of this exact-source bracket.
-    pub(super) fn representative(self) -> f64 {
+    pub fn representative(self) -> f64 {
         if self.lo == self.hi {
             self.lo
         } else {
@@ -108,12 +121,12 @@ impl SkewCylinderAngularRootBracket {
     /// For an exactly representable root the bracket collapses and the exact
     /// root itself is returned; otherwise this is the non-root enclosure
     /// endpoint on the requested side.
-    pub(super) const fn before_side(self) -> f64 {
+    pub const fn before_side(self) -> f64 {
         self.lo
     }
 
     /// Endpoint certified on the increasing-`u` side after the root.
-    pub(super) const fn after_side(self) -> f64 {
+    pub const fn after_side(self) -> f64 {
         self.hi
     }
 
@@ -121,7 +134,7 @@ impl SkewCylinderAngularRootBracket {
     /// root corridor. A collapsed exact-source corridor is opened by one
     /// representable parameter step so a subrange residual proof never uses
     /// the boundary root itself as an interior point.
-    pub(super) fn strict_before_side(self) -> f64 {
+    pub fn strict_before_side(self) -> f64 {
         if self.lo == 0.0 {
             TAU.next_down()
         } else {
@@ -131,14 +144,14 @@ impl SkewCylinderAngularRootBracket {
 
     /// Strict representable endpoint on the increasing-`u` side after the
     /// root corridor.
-    pub(super) fn strict_after_side(self) -> f64 {
+    pub fn strict_after_side(self) -> f64 {
         self.hi.next_up()
     }
 
     /// Lift one canonical representative into any exact full-period authored
     /// longitude window. The earliest accepted representative is chosen, so
     /// a canonical seam root maps deterministically to the window's low end.
-    pub(super) fn lift_representative(self, range: ParamRange) -> Option<f64> {
+    pub fn lift_representative(self, range: ParamRange) -> Option<f64> {
         if !range.is_finite() || range.width() != TAU {
             return None;
         }
@@ -146,7 +159,7 @@ impl SkewCylinderAngularRootBracket {
     }
 
     /// Lift the certified before-side endpoint into a full-period window.
-    pub(super) fn lift_before_side(self, range: ParamRange) -> Option<f64> {
+    pub fn lift_before_side(self, range: ParamRange) -> Option<f64> {
         if !range.is_finite() || range.width() != TAU {
             return None;
         }
@@ -154,7 +167,7 @@ impl SkewCylinderAngularRootBracket {
     }
 
     /// Lift the certified after-side endpoint into a full-period window.
-    pub(super) fn lift_after_side(self, range: ParamRange) -> Option<f64> {
+    pub fn lift_after_side(self, range: ParamRange) -> Option<f64> {
         if !range.is_finite() || range.width() != TAU {
             return None;
         }
@@ -164,49 +177,97 @@ impl SkewCylinderAngularRootBracket {
 
 /// One sheet-owned root of an authored axial bound.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SkewCylinderAxialRoot {
-    pub(super) provenance: SkewCylinderAxialBoundProvenance,
-    pub(super) sheet: SkewCylinderSheet,
+pub struct SkewCylinderAxialRoot {
+    /// Caller-order bound identity.
+    pub provenance: SkewCylinderAxialBoundProvenance,
+    /// Ordered quadratic sheet that crosses the bound.
+    pub sheet: SkewCylinderSheet,
     /// Ordinal of the distinct cyclic cut. Both sheets share this ordinal
     /// only in the exact `dz = 0` dual-height family.
-    pub(super) cyclic_ordinal: usize,
-    pub(super) bracket: SkewCylinderHalfAngleRootBracket,
-    pub(super) repeated: bool,
-    pub(super) before: SkewCylinderAxialRelation,
-    pub(super) after: SkewCylinderAxialRelation,
+    pub cyclic_ordinal: usize,
+    /// Exact-source isolating bracket in its projective chart.
+    pub bracket: SkewCylinderHalfAngleRootBracket,
+    /// Whether the eliminated equation has a repeated/contact root.
+    pub repeated: bool,
+    /// Strict sheet relation immediately before the cut.
+    pub before: SkewCylinderAxialRelation,
+    /// Strict sheet relation immediately after the cut.
+    pub after: SkewCylinderAxialRelation,
 }
 
 impl SkewCylinderAxialRoot {
     /// Convert the projective source bracket into increasing canonical
     /// longitude without changing its exact half-angle provenance.
-    pub(super) fn angular_bracket(self) -> SkewCylinderAngularRootBracket {
+    pub fn angular_bracket(self) -> SkewCylinderAngularRootBracket {
         angular_bracket(self.bracket)
     }
 }
 
 /// Complete finite root and open-cell topology for one axial bound.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct SkewCylinderAxialBoundTopology {
-    pub(super) provenance: SkewCylinderAxialBoundProvenance,
+pub struct SkewCylinderAxialBoundTopology {
+    formula_cylinders: [Cylinder; 2],
+    formula_to_source: [usize; 2],
+    provenance: SkewCylinderAxialBoundProvenance,
     /// Sheet-owned events in canonical cyclic-cut order. Equal ordinals are
     /// ordered Lower then Upper.
-    pub(super) roots: Vec<SkewCylinderAxialRoot>,
+    roots: Vec<SkewCylinderAxialRoot>,
     /// With roots, entry `i` is the two-sheet relation after distinct cut `i`
     /// through the open cell leading to cut `i + 1` modulo the cut count. A
     /// root-free cycle has one entry.
-    pub(super) open_cell_relations: Vec<[SkewCylinderAxialRelation; 2]>,
+    open_cell_relations: Vec<[SkewCylinderAxialRelation; 2]>,
+}
+
+impl SkewCylinderAxialBoundTopology {
+    /// Exact cylinders in the ruling formula order used by the classifier.
+    pub const fn formula_cylinders(&self) -> [Cylinder; 2] {
+        self.formula_cylinders
+    }
+
+    /// Formula-slot to caller/source-slot permutation used by the classifier.
+    pub const fn formula_to_source(&self) -> [usize; 2] {
+        self.formula_to_source
+    }
+
+    /// Caller-order identity of the classified axial bound.
+    pub const fn provenance(&self) -> SkewCylinderAxialBoundProvenance {
+        self.provenance
+    }
+
+    /// Complete sheet-owned root events in distinct cyclic-cut order.
+    pub fn roots(&self) -> &[SkewCylinderAxialRoot] {
+        &self.roots
+    }
+
+    /// Complete two-sheet relations on every cyclic open cell.
+    pub fn open_cell_relations(&self) -> &[[SkewCylinderAxialRelation; 2]] {
+        &self.open_cell_relations
+    }
 }
 
 /// Stable fail-closed causes for one exact axial-bound query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkewCylinderAxialRootFailure {
-    WorkLimit { required: u64, provided: u64 },
+pub enum SkewCylinderAxialRootFailure {
+    /// The complete fixed-work query was not fully reserved.
+    WorkLimit {
+        /// Minimum logical work required for publication.
+        required: u64,
+        /// Logical work made available by the caller.
+        provided: u64,
+    },
+    /// Formula slots were not mapped by one of the two valid permutations.
     InvalidSourcePermutation,
+    /// Bound provenance named a caller/source slot outside `0..2`.
     InvalidSourceOperand,
+    /// The authored bound was NaN or infinite.
     NonFiniteBound,
+    /// The exact ruling construction is degenerate for this formula order.
     DegenerateExactSource,
+    /// A sheet equation vanishes identically on the queried bound.
     IdenticallyOnBound,
+    /// Exact polynomial isolation refused or exhausted its safe envelope.
     ExactArithmetic(RootIsolationFailure),
+    /// Root events and open-cell relations did not form one cyclic topology.
     InconsistentTopology,
 }
 
@@ -230,17 +291,85 @@ impl From<CyclicSecondHarmonicFailure> for SkewCylinderAxialRootFailure {
 
 /// Exact discriminant shortcut shared with the strict-positive admission.
 #[derive(Debug)]
-pub(super) enum ExactSkewCylinderDiscriminant {
+pub enum ExactSkewCylinderDiscriminant {
+    /// Root-free discriminant with one strict sign over the full cycle.
     Strict(StrictSign),
+    /// The exact discriminant has a zero/contact on the full cycle.
     Contact,
+    /// Nonconstant cyclic second harmonic requiring exact classification.
     Harmonic {
+        /// Exact-source second-harmonic coefficients.
         coefficients: SecondHarmonicCoefficients,
+        /// Whether an exactly evaluated cardinal longitude is a contact.
         cardinal_contact: bool,
     },
 }
 
+/// Sealed exact strict-positive admission for two nonparallel formula cylinders.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
+    formula_cylinders: [Cylinder; 2],
+}
+
+impl SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
+    /// Exact cylinders in the admitted ruling formula order.
+    pub const fn formula_cylinders(self) -> [Cylinder; 2] {
+        self.formula_cylinders
+    }
+
+    /// Existing logical work represented by this one parameterization.
+    pub const fn work(self) -> u64 {
+        SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK
+    }
+}
+
+/// Complete exact discriminant outcome for one ruling parameterization.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SkewCylinderExactDiscriminantTopology {
+    /// Both regular infinite-support sheets exist over the complete cycle.
+    StrictPositive(SkewCylinderStrictPositiveTwoSheetAdmissionCertificate),
+    /// No real infinite-support sheet exists over the complete cycle.
+    StrictNegative,
+    /// A discriminant contact or unresolved exact zero is retained.
+    Contact,
+}
+
+/// Classify the complete skew-cylinder discriminant in one formula order.
+pub fn classify_skew_cylinder_exact_discriminant(
+    cylinders: [Cylinder; 2],
+    work_limit: u64,
+) -> Result<SkewCylinderExactDiscriminantTopology, SkewCylinderAxialRootFailure> {
+    if work_limit < SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK {
+        return Err(SkewCylinderAxialRootFailure::WorkLimit {
+            required: SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+            provided: work_limit,
+        });
+    }
+    let classification = exact_skew_cylinder_discriminant(cylinders)?;
+    let strict = match classification {
+        ExactSkewCylinderDiscriminant::Strict(sign) => Some(sign),
+        ExactSkewCylinderDiscriminant::Contact => None,
+        ExactSkewCylinderDiscriminant::Harmonic {
+            coefficients,
+            cardinal_contact,
+        } if !cardinal_contact => {
+            classify_cyclic_second_harmonic(&coefficients, work_limit)?.strict_full_cycle_sign()
+        }
+        ExactSkewCylinderDiscriminant::Harmonic { .. } => None,
+    };
+    Ok(match strict {
+        Some(StrictSign::Positive) => SkewCylinderExactDiscriminantTopology::StrictPositive(
+            SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
+                formula_cylinders: cylinders,
+            },
+        ),
+        Some(StrictSign::Negative) => SkewCylinderExactDiscriminantTopology::StrictNegative,
+        None => SkewCylinderExactDiscriminantTopology::Contact,
+    })
+}
+
 /// Build the existing exact skew-cylinder discriminant from source values.
-pub(super) fn exact_skew_cylinder_discriminant(
+pub fn exact_skew_cylinder_discriminant(
     cylinders: [Cylinder; 2],
 ) -> Result<ExactSkewCylinderDiscriminant, SkewCylinderAxialRootFailure> {
     ExactSkewCylinderAlgebra::new(cylinders)?.discriminant()
@@ -253,7 +382,7 @@ pub(super) fn exact_skew_cylinder_discriminant(
 /// and must be either `[0, 1]` or `[1, 0]`. This query deliberately does not
 /// require axial windows or a paired branch certificate: it creates the cuts
 /// that a later finite-window proof consumes.
-pub(super) fn classify_skew_cylinder_axial_bound(
+pub fn classify_skew_cylinder_axial_bound(
     cylinders: [Cylinder; 2],
     canonical_to_source: [usize; 2],
     provenance: SkewCylinderAxialBoundProvenance,
@@ -274,7 +403,14 @@ pub(super) fn classify_skew_cylinder_axial_bound(
     let equation = algebra.axial_equation(canonical_operand, provenance.value)?;
     let coefficients = equation.coefficients();
     let topology = classify_cyclic_second_harmonic(&coefficients, work_limit)?;
-    topology_from_classification(algebra, equation, provenance, topology)
+    topology_from_classification(
+        algebra,
+        equation,
+        cylinders,
+        canonical_to_source,
+        provenance,
+        topology,
+    )
 }
 
 fn canonical_operand(
@@ -327,6 +463,8 @@ impl AxialEquation {
 fn topology_from_classification(
     algebra: ExactSkewCylinderAlgebra,
     equation: AxialEquation,
+    formula_cylinders: [Cylinder; 2],
+    formula_to_source: [usize; 2],
     provenance: SkewCylinderAxialBoundProvenance,
     topology: CyclicSecondHarmonicTopology,
 ) -> Result<SkewCylinderAxialBoundTopology, SkewCylinderAxialRootFailure> {
@@ -343,6 +481,8 @@ fn topology_from_classification(
             .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?;
         let relations = root_free_relations(&equation, sign)?;
         return Ok(SkewCylinderAxialBoundTopology {
+            formula_cylinders,
+            formula_to_source,
             provenance,
             roots: Vec::new(),
             open_cell_relations: vec![relations],
@@ -353,9 +493,14 @@ fn topology_from_classification(
     }
 
     match &equation {
-        AxialEquation::SharedOppositeHeight { e_sign, .. } => {
-            shared_height_topology(provenance, &roots, &open_cell_signs, *e_sign)
-        }
+        AxialEquation::SharedOppositeHeight { e_sign, .. } => shared_height_topology(
+            formula_cylinders,
+            formula_to_source,
+            provenance,
+            &roots,
+            &open_cell_signs,
+            *e_sign,
+        ),
         AxialEquation::Canonical { selector, .. } | AxialEquation::Opposite { selector, .. } => {
             let selector_signs = roots
                 .iter()
@@ -364,6 +509,8 @@ fn topology_from_classification(
             selected_sheet_topology(
                 algebra,
                 equation,
+                formula_cylinders,
+                formula_to_source,
                 provenance,
                 roots,
                 open_cell_signs,
@@ -402,6 +549,8 @@ fn root_free_relations(
 fn selected_sheet_topology(
     _algebra: ExactSkewCylinderAlgebra,
     equation: AxialEquation,
+    formula_cylinders: [Cylinder; 2],
+    formula_to_source: [usize; 2],
     provenance: SkewCylinderAxialBoundProvenance,
     roots: Vec<CyclicRoot>,
     open_cell_signs: Vec<StrictSign>,
@@ -432,6 +581,8 @@ fn selected_sheet_topology(
         events.push(root_event(provenance, sheet, ordinal, root, before, after));
     }
     Ok(SkewCylinderAxialBoundTopology {
+        formula_cylinders,
+        formula_to_source,
         provenance,
         roots: events,
         open_cell_relations,
@@ -439,6 +590,8 @@ fn selected_sheet_topology(
 }
 
 fn shared_height_topology(
+    formula_cylinders: [Cylinder; 2],
+    formula_to_source: [usize; 2],
     provenance: SkewCylinderAxialBoundProvenance,
     roots: &[CyclicRoot],
     open_cell_signs: &[StrictSign],
@@ -466,6 +619,8 @@ fn shared_height_topology(
         }
     }
     Ok(SkewCylinderAxialBoundTopology {
+        formula_cylinders,
+        formula_to_source,
         provenance,
         roots: events,
         open_cell_relations,
@@ -660,6 +815,20 @@ fn canonical_angle(parameter: f64) -> f64 {
     } else {
         parameter
     }
+}
+
+fn fit_periodic_parameter(
+    candidate: f64,
+    range: ParamRange,
+    period: f64,
+    tolerance: f64,
+) -> Option<f64> {
+    let k_min = ((range.lo - tolerance - candidate) / period).ceil() as i64;
+    let k_max = ((range.hi + tolerance - candidate) / period).floor() as i64;
+    if k_min > k_max {
+        return None;
+    }
+    Some((candidate + k_min as f64 * period).clamp(range.lo, range.hi))
 }
 
 #[derive(Debug, Clone)]
@@ -1171,5 +1340,5 @@ fn exact_determinant_expansion(
 }
 
 #[cfg(test)]
-#[path = "skew_cylinder_axial_roots_tests.rs"]
+#[path = "skew_cylinder_axial_bound_tests.rs"]
 mod tests;

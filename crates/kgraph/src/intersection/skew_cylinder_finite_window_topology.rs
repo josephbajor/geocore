@@ -11,57 +11,67 @@
 
 use core::cmp::Ordering;
 
+use super::{
+    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderAxialBoundProvenance,
+    SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
+    SkewCylinderAxialRoot, SkewCylinderHalfAngleChart, SkewCylinderHalfAngleRootBracket,
+    SkewCylinderSheet,
+};
 use kcore::interval::Interval;
 use kgeom::param::ParamRange;
-use kgraph::SkewCylinderSheet;
-
-use super::parameter::fit_periodic_parameter;
-use super::skew_cylinder_axial_roots::{
-    SkewCylinderAxialBoundProvenance, SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary,
-    SkewCylinderAxialRelation, SkewCylinderAxialRoot, SkewCylinderHalfAngleChart,
-    SkewCylinderHalfAngleRootBracket,
-};
 
 const TAU: f64 = core::f64::consts::TAU;
 // Deterministic interval-rounding headroom for both the stored and exact-source
 // residual enclosures. The merged-corridor checks below still refuse any
 // authored chart where these steps could cross another root.
-const ENDPOINT_GUARD_STEPS: usize = 2 * kgraph::SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS;
+const ENDPOINT_GUARD_STEPS: usize = 2 * SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS;
 
 /// Four exact bound topologies and the authored windows they must describe.
 ///
 /// `ranges` is in canonical solver order; provenance remains in caller order
 /// through `canonical_to_source`.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct SkewCylinderOpenSpanTopologyInput<'a> {
-    pub(super) topologies: &'a [SkewCylinderAxialBoundTopology; 4],
-    pub(super) ranges: [[ParamRange; 2]; 2],
-    pub(super) canonical_to_source: [usize; 2],
+pub struct SkewCylinderOpenSpanTopologyInput<'a> {
+    /// Four sealed exact bound outcomes.
+    pub topologies: &'a [SkewCylinderAxialBoundTopology; 4],
+    /// Exact authored windows in formula order.
+    pub ranges: [[ParamRange; 2]; 2],
+    /// Formula-slot to caller/source-slot permutation.
+    pub canonical_to_source: [usize; 2],
 }
 
 /// The strict side of a source-root corridor retained by one finite span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkewCylinderRootInsideSide {
+pub enum SkewCylinderRootInsideSide {
+    /// Increasing-longitude side immediately before the exact root.
     Before,
+    /// Increasing-longitude side immediately after the exact root.
     After,
 }
 
 /// Exact-source endpoint identity plus the representable parameter on its
 /// proven finite-window side.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SkewCylinderOpenSpanEndpointProof {
-    pub(super) root: SkewCylinderAxialRoot,
-    pub(super) inside_side: SkewCylinderRootInsideSide,
-    pub(super) carrier_parameter: f64,
+pub struct SkewCylinderOpenSpanEndpointProof {
+    /// Exact source-root event.
+    pub root: SkewCylinderAxialRoot,
+    /// Retained side of that root.
+    pub inside_side: SkewCylinderRootInsideSide,
+    /// Representable inside-side carrier parameter.
+    pub carrier_parameter: f64,
 }
 
 /// One proper finite component in increasing authored carrier order.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SkewCylinderOpenSpan {
-    pub(super) sheet: SkewCylinderSheet,
-    pub(super) range: ParamRange,
-    pub(super) start: SkewCylinderOpenSpanEndpointProof,
-    pub(super) end: SkewCylinderOpenSpanEndpointProof,
+pub struct SkewCylinderOpenSpan {
+    /// Ordered quadratic sheet.
+    pub sheet: SkewCylinderSheet,
+    /// Strict guarded open range.
+    pub range: ParamRange,
+    /// Lower canonical endpoint proof.
+    pub start: SkewCylinderOpenSpanEndpointProof,
+    /// Upper canonical endpoint proof.
+    pub end: SkewCylinderOpenSpanEndpointProof,
 }
 
 impl SkewCylinderOpenSpan {
@@ -72,10 +82,7 @@ impl SkewCylinderOpenSpan {
     /// parameter, independent of caller operand order. The exact projective
     /// provenance remains attached to `start` and `end`; these intervals are
     /// only its monotone longitude image for pcurve corridor certification.
-    pub(super) fn root_longitude_intervals(
-        self,
-        authored_longitude: ParamRange,
-    ) -> Option<[Interval; 2]> {
+    pub fn root_longitude_intervals(self, authored_longitude: ParamRange) -> Option<[Interval; 2]> {
         if self.start.inside_side != SkewCylinderRootInsideSide::After
             || self.end.inside_side != SkewCylinderRootInsideSide::Before
             || self.start.carrier_parameter.to_bits() != self.range.lo.to_bits()
@@ -91,25 +98,75 @@ impl SkewCylinderOpenSpan {
 
 /// Complete finite occupancy for one ordered strict-positive sheet.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum SkewCylinderFiniteSheetTopology {
+pub enum SkewCylinderFiniteSheetTopology {
+    /// No point of this sheet lies inside all four axial bounds.
     Outside,
+    /// The complete full-period sheet lies inside all four axial bounds.
     Whole,
+    /// Every retained non-wrapping finite component in increasing longitude.
     Open(Vec<SkewCylinderOpenSpan>),
 }
 
 /// Conservative refusal causes for the topology-only merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkewCylinderOpenSpanFailure {
+pub enum SkewCylinderOpenSpanFailure {
+    /// Formula slots do not map bijectively to the two caller/source slots.
     InvalidSourcePermutation,
+    /// At least one authored range is nonfinite or reverses its endpoints.
     InvalidRange,
+    /// A bound identity or full-period longitude differs from its header.
     RangeMismatch,
+    /// The four lower/upper source bounds are not represented exactly once.
     DuplicateOrMissingBound,
+    /// Sealed roots and open-cell relations do not form one valid cyclic sweep.
     InconsistentTopology,
+    /// A repeated or non-transverse axial root cannot bound an open component.
     ContactRoot,
+    /// A projective root bracket straddles a chart sector boundary.
     AmbiguousRootSector,
+    /// Two exact-source root corridors cannot be strictly ordered.
     CoincidentOrOverlappingRoots,
+    /// A root-to-guard continuation leaves the authored longitude chart.
     RootCorridorCrossesSeam,
+    /// An occupied component wraps through the authored longitude seam.
     SeamWrappingSpan,
+}
+
+/// Sealed complete two-sheet finite-window topology.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderFiniteWindowTopologyCertificate {
+    formula_cylinders: [kgeom::surface::Cylinder; 2],
+    formula_ranges: [[ParamRange; 2]; 2],
+    formula_to_source: [usize; 2],
+    bound_topologies: [SkewCylinderAxialBoundTopology; 4],
+    sheets: [SkewCylinderFiniteSheetTopology; 2],
+}
+
+impl SkewCylinderFiniteWindowTopologyCertificate {
+    /// Exact cylinders in formula/ruling order.
+    pub const fn formula_cylinders(&self) -> [kgeom::surface::Cylinder; 2] {
+        self.formula_cylinders
+    }
+
+    /// Exact authored windows in formula/ruling order.
+    pub const fn formula_ranges(&self) -> [[ParamRange; 2]; 2] {
+        self.formula_ranges
+    }
+
+    /// Formula-slot to caller/source-slot permutation.
+    pub const fn formula_to_source(&self) -> [usize; 2] {
+        self.formula_to_source
+    }
+
+    /// The four sealed bound outcomes used by the sweep.
+    pub const fn bound_topologies(&self) -> &[SkewCylinderAxialBoundTopology; 4] {
+        &self.bound_topologies
+    }
+
+    /// Complete occupancy for Lower or Upper.
+    pub const fn sheet(&self, sheet: SkewCylinderSheet) -> &SkewCylinderFiniteSheetTopology {
+        &self.sheets[sheet_index(sheet)]
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,12 +236,33 @@ fn lift_root_longitude_interval(
     }
 }
 
+fn fit_periodic_parameter(
+    candidate: f64,
+    range: ParamRange,
+    period: f64,
+    tolerance: f64,
+) -> Option<f64> {
+    let k_min = ((range.lo - tolerance - candidate) / period).ceil() as i64;
+    let k_max = ((range.hi + tolerance - candidate) / period).floor() as i64;
+    if k_min > k_max {
+        return None;
+    }
+    Some((candidate + k_min as f64 * period).clamp(range.lo, range.hi))
+}
+
 /// Merge four exact source-bound topologies into complete Lower/Upper finite
 /// occupancy. The result order is always `[Lower, Upper]`.
-pub(super) fn classify_skew_cylinder_open_spans(
+pub fn classify_skew_cylinder_open_spans(
     input: SkewCylinderOpenSpanTopologyInput<'_>,
-) -> Result<[SkewCylinderFiniteSheetTopology; 2], SkewCylinderOpenSpanFailure> {
+) -> Result<SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpanFailure> {
     validate_ranges(input.ranges, input.canonical_to_source)?;
+    let formula_cylinders = input.topologies[0].formula_cylinders();
+    if input.topologies.iter().any(|topology| {
+        topology.formula_cylinders() != formula_cylinders
+            || topology.formula_to_source() != input.canonical_to_source
+    }) {
+        return Err(SkewCylinderOpenSpanFailure::RangeMismatch);
+    }
     let topologies = normalize_topologies(input)?;
     let mut cuts = Vec::new();
     for (topology_index, topology) in topologies.iter().enumerate() {
@@ -201,7 +279,7 @@ pub(super) fn classify_skew_cylinder_open_spans(
     validate_authored_root_order(&authored, carrier_range)?;
 
     let (initial_inside, transitions) = sweep_topologies(&topologies, &authored)?;
-    Ok([
+    let sheets = [
         classify_sheet(
             SkewCylinderSheet::Lower,
             initial_inside[0],
@@ -214,7 +292,14 @@ pub(super) fn classify_skew_cylinder_open_spans(
             &transitions,
             carrier_range,
         )?,
-    ])
+    ];
+    Ok(SkewCylinderFiniteWindowTopologyCertificate {
+        formula_cylinders,
+        formula_ranges: input.ranges,
+        formula_to_source: input.canonical_to_source,
+        bound_topologies: core::array::from_fn(|index| topologies[index].clone()),
+        sheets,
+    })
 }
 
 fn validate_ranges(
@@ -245,13 +330,13 @@ fn normalize_topologies<'a>(
 ) -> Result<[&'a SkewCylinderAxialBoundTopology; 4], SkewCylinderOpenSpanFailure> {
     let mut normalized: [Option<&SkewCylinderAxialBoundTopology>; 4] = [None; 4];
     for topology in input.topologies {
-        let source_operand = topology.provenance.source_operand;
+        let source_operand = topology.provenance().source_operand;
         let canonical_operand = input
             .canonical_to_source
             .iter()
             .position(|source| *source == source_operand)
             .ok_or(SkewCylinderOpenSpanFailure::RangeMismatch)?;
-        let boundary_index = match topology.provenance.boundary {
+        let boundary_index = match topology.provenance().boundary {
             SkewCylinderAxialBoundary::Lower => 0,
             SkewCylinderAxialBoundary::Upper => 1,
         };
@@ -260,7 +345,7 @@ fn normalize_topologies<'a>(
         } else {
             input.ranges[canonical_operand][1].hi
         };
-        if topology.provenance.value.to_bits() != expected_value.to_bits() {
+        if topology.provenance().value.to_bits() != expected_value.to_bits() {
             return Err(SkewCylinderOpenSpanFailure::RangeMismatch);
         }
         let slot = 2 * canonical_operand + boundary_index;
@@ -284,18 +369,18 @@ fn validate_topology(
     topology_index: usize,
     topology: &SkewCylinderAxialBoundTopology,
 ) -> Result<Vec<RootCut>, SkewCylinderOpenSpanFailure> {
-    if topology.open_cell_relations.is_empty() {
+    if topology.open_cell_relations().is_empty() {
         return Err(SkewCylinderOpenSpanFailure::InconsistentTopology);
     }
-    if topology.roots.is_empty() {
-        return if topology.open_cell_relations.len() == 1 {
+    if topology.roots().is_empty() {
+        return if topology.open_cell_relations().len() == 1 {
             Ok(Vec::new())
         } else {
             Err(SkewCylinderOpenSpanFailure::InconsistentTopology)
         };
     }
 
-    let root_count = topology.open_cell_relations.len();
+    let root_count = topology.open_cell_relations().len();
     let mut cuts = (0..root_count)
         .map(|cyclic_ordinal| RootCut {
             topology_index,
@@ -310,7 +395,7 @@ fn validate_topology(
         .collect::<Vec<_>>();
     let mut initialized = vec![false; root_count];
 
-    for root in &topology.roots {
+    for root in topology.roots() {
         validate_root(topology, *root)?;
         let cut = cuts
             .get_mut(root.cyclic_ordinal)
@@ -335,8 +420,8 @@ fn validate_topology(
 
     for cut in &cuts {
         let before =
-            topology.open_cell_relations[(cut.cyclic_ordinal + root_count - 1) % root_count];
-        let after = topology.open_cell_relations[cut.cyclic_ordinal];
+            topology.open_cell_relations()[(cut.cyclic_ordinal + root_count - 1) % root_count];
+        let after = topology.open_cell_relations()[cut.cyclic_ordinal];
         for sheet in 0..2 {
             if (before[sheet] != after[sheet]) != cut.events[sheet].is_some() {
                 return Err(SkewCylinderOpenSpanFailure::InconsistentTopology);
@@ -355,20 +440,20 @@ fn validate_root(
     topology: &SkewCylinderAxialBoundTopology,
     root: SkewCylinderAxialRoot,
 ) -> Result<(), SkewCylinderOpenSpanFailure> {
-    if root.provenance != topology.provenance {
+    if root.provenance != topology.provenance() {
         return Err(SkewCylinderOpenSpanFailure::InconsistentTopology);
     }
     if root.repeated || root.before == root.after {
         return Err(SkewCylinderOpenSpanFailure::ContactRoot);
     }
-    let root_count = topology.open_cell_relations.len();
+    let root_count = topology.open_cell_relations().len();
     if root.cyclic_ordinal >= root_count {
         return Err(SkewCylinderOpenSpanFailure::InconsistentTopology);
     }
     let sheet = sheet_index(root.sheet);
     let before =
-        topology.open_cell_relations[(root.cyclic_ordinal + root_count - 1) % root_count][sheet];
-    let after = topology.open_cell_relations[root.cyclic_ordinal][sheet];
+        topology.open_cell_relations()[(root.cyclic_ordinal + root_count - 1) % root_count][sheet];
+    let after = topology.open_cell_relations()[root.cyclic_ordinal][sheet];
     if (root.before, root.after) != (before, after) {
         return Err(SkewCylinderOpenSpanFailure::InconsistentTopology);
     }
@@ -552,15 +637,15 @@ fn sweep_topologies(
 ) -> Result<([bool; 2], Vec<CutTransition>), SkewCylinderOpenSpanFailure> {
     let mut states = [[SkewCylinderAxialRelation::Below; 2]; 4];
     for (topology_index, topology) in topologies.iter().enumerate() {
-        states[topology_index] = if topology.roots.is_empty() {
-            topology.open_cell_relations[0]
+        states[topology_index] = if topology.roots().is_empty() {
+            topology.open_cell_relations()[0]
         } else {
             let first = cuts
                 .iter()
                 .find(|cut| cut.source.topology_index == topology_index)
                 .ok_or(SkewCylinderOpenSpanFailure::InconsistentTopology)?;
-            let count = topology.open_cell_relations.len();
-            topology.open_cell_relations[(first.source.cyclic_ordinal + count - 1) % count]
+            let count = topology.open_cell_relations().len();
+            topology.open_cell_relations()[(first.source.cyclic_ordinal + count - 1) % count]
         };
     }
     let initial_states = states;
@@ -569,13 +654,14 @@ fn sweep_topologies(
     for cut in cuts {
         let before_inside = sheet_inside(topologies, &states);
         let topology = topologies[cut.source.topology_index];
-        let count = topology.open_cell_relations.len();
+        let count = topology.open_cell_relations().len();
         let expected_before =
-            topology.open_cell_relations[(cut.source.cyclic_ordinal + count - 1) % count];
+            topology.open_cell_relations()[(cut.source.cyclic_ordinal + count - 1) % count];
         if states[cut.source.topology_index] != expected_before {
             return Err(SkewCylinderOpenSpanFailure::InconsistentTopology);
         }
-        states[cut.source.topology_index] = topology.open_cell_relations[cut.source.cyclic_ordinal];
+        states[cut.source.topology_index] =
+            topology.open_cell_relations()[cut.source.cyclic_ordinal];
         let after_inside = sheet_inside(topologies, &states);
         transitions.push(CutTransition {
             cut: *cut,
@@ -594,10 +680,9 @@ fn sheet_inside(
     states: &[[SkewCylinderAxialRelation; 2]; 4],
 ) -> [bool; 2] {
     core::array::from_fn(|sheet| {
-        topologies
-            .iter()
-            .enumerate()
-            .all(|(index, topology)| states[index][sheet] == required_relation(topology.provenance))
+        topologies.iter().enumerate().all(|(index, topology)| {
+            states[index][sheet] == required_relation(topology.provenance())
+        })
     })
 }
 
@@ -660,6 +745,12 @@ fn classify_sheet(
         if end_index <= *start_index && end_transition.cut.root_parameter != carrier_range.lo {
             return Err(SkewCylinderOpenSpanFailure::SeamWrappingSpan);
         }
+        if !start_parameter.is_finite()
+            || !end_parameter.is_finite()
+            || start_parameter >= end_parameter
+        {
+            return Err(SkewCylinderOpenSpanFailure::CoincidentOrOverlappingRoots);
+        }
         let range = ParamRange::new(start_parameter, end_parameter);
         if !range.is_finite() || range.width() <= 0.0 || range.width() >= TAU {
             return Err(SkewCylinderOpenSpanFailure::SeamWrappingSpan);
@@ -693,7 +784,7 @@ fn required_relation(provenance: SkewCylinderAxialBoundProvenance) -> SkewCylind
     }
 }
 
-fn sheet_index(sheet: SkewCylinderSheet) -> usize {
+const fn sheet_index(sheet: SkewCylinderSheet) -> usize {
     match sheet {
         SkewCylinderSheet::Lower => 0,
         SkewCylinderSheet::Upper => 1,
@@ -702,10 +793,8 @@ fn sheet_index(sheet: SkewCylinderSheet) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, classify_skew_cylinder_axial_bound};
     use super::*;
-    use crate::intersect::skew_cylinder_axial_roots::{
-        SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, classify_skew_cylinder_axial_bound,
-    };
     use kgeom::frame::Frame;
     use kgeom::surface::Cylinder;
     use kgeom::vec::{Point3, Vec3};
@@ -761,7 +850,7 @@ mod tests {
     fn classify(
         topologies: &[SkewCylinderAxialBoundTopology; 4],
         ranges: [[ParamRange; 2]; 2],
-    ) -> Result<[SkewCylinderFiniteSheetTopology; 2], SkewCylinderOpenSpanFailure> {
+    ) -> Result<SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpanFailure> {
         classify_skew_cylinder_open_spans(SkewCylinderOpenSpanTopologyInput {
             topologies,
             ranges,
@@ -783,8 +872,12 @@ mod tests {
         let source = topologies(cylinders, ranges);
         let result = classify(&source, ranges).unwrap();
 
-        assert_eq!(result[0], SkewCylinderFiniteSheetTopology::Outside);
-        let SkewCylinderFiniteSheetTopology::Open(spans) = &result[1] else {
+        assert_eq!(
+            result.sheet(SkewCylinderSheet::Lower),
+            &SkewCylinderFiniteSheetTopology::Outside
+        );
+        let SkewCylinderFiniteSheetTopology::Open(spans) = result.sheet(SkewCylinderSheet::Upper)
+        else {
             panic!("{result:?}");
         };
         assert_eq!(spans.len(), 1);
@@ -829,8 +922,12 @@ mod tests {
         source.reverse();
         assert_eq!(classify(&source, ranges).unwrap(), result);
 
-        assert_eq!(result[0], SkewCylinderFiniteSheetTopology::Outside);
-        let SkewCylinderFiniteSheetTopology::Open(spans) = &result[1] else {
+        assert_eq!(
+            result.sheet(SkewCylinderSheet::Lower),
+            &SkewCylinderFiniteSheetTopology::Outside
+        );
+        let SkewCylinderFiniteSheetTopology::Open(spans) = result.sheet(SkewCylinderSheet::Upper)
+        else {
             panic!("{result:?}");
         };
         assert_eq!(spans.len(), 4);
@@ -901,10 +998,11 @@ mod tests {
     fn source_bound_range_mismatch_is_refused() {
         let cylinders = perpendicular_pair(0.0);
         let ranges = clipped_ranges(ParamRange::new(0.0, TAU));
-        let mut source = topologies(cylinders, ranges);
-        source[0].provenance.value = 1.8_f64.next_up();
+        let source = topologies(cylinders, ranges);
+        let mut mismatched_ranges = ranges;
+        mismatched_ranges[0][1].lo = 1.8_f64.next_up();
         assert_eq!(
-            classify(&source, ranges),
+            classify(&source, mismatched_ranges),
             Err(SkewCylinderOpenSpanFailure::RangeMismatch)
         );
     }
@@ -912,18 +1010,89 @@ mod tests {
     #[test]
     fn coincident_cross_bound_root_corridors_are_refused() {
         let cylinders = perpendicular_pair(0.0);
-        let ranges = clipped_ranges(ParamRange::new(0.0, TAU));
-        let mut source = topologies(cylinders, ranges);
-        let original = source[0].roots[0];
-        for replacement in source[3]
-            .roots
-            .iter_mut()
-            .filter(|root| root.cyclic_ordinal == 0)
-        {
-            replacement.bracket = original.bracket;
-        }
+        let ranges = [
+            [ParamRange::new(0.0, TAU), ParamRange::new(1.8, 1.8)],
+            [ParamRange::new(0.0, TAU), ParamRange::new(-1.25, 0.0)],
+        ];
+        let source = topologies(cylinders, ranges);
         assert_eq!(
             classify(&source, ranges),
+            Err(SkewCylinderOpenSpanFailure::CoincidentOrOverlappingRoots)
+        );
+    }
+
+    #[test]
+    fn expanded_guard_overlap_is_refused_before_range_construction() {
+        let provenance = SkewCylinderAxialBoundProvenance {
+            source_operand: 0,
+            boundary: SkewCylinderAxialBoundary::Lower,
+            value: 1.8,
+        };
+        let root = |cyclic_ordinal, before, after| SkewCylinderAxialRoot {
+            provenance,
+            sheet: SkewCylinderSheet::Upper,
+            cyclic_ordinal,
+            bracket: SkewCylinderHalfAngleRootBracket {
+                chart: SkewCylinderHalfAngleChart::Tangent,
+                lo: 0.25,
+                hi: 0.25,
+            },
+            repeated: false,
+            before,
+            after,
+        };
+        let authored_cut =
+            |root: SkewCylinderAxialRoot, root_parameter, before_parameter, after_parameter| {
+                AuthoredRootCut {
+                    source: RootCut {
+                        topology_index: 0,
+                        cyclic_ordinal: root.cyclic_ordinal,
+                        bracket: root.bracket,
+                        events: [None, Some(root)],
+                    },
+                    root_parameter,
+                    before_parameter,
+                    after_parameter,
+                }
+            };
+        let transitions = [
+            CutTransition {
+                cut: authored_cut(
+                    root(
+                        0,
+                        SkewCylinderAxialRelation::Below,
+                        SkewCylinderAxialRelation::Above,
+                    ),
+                    0.9,
+                    0.8,
+                    2.0,
+                ),
+                before_inside: [false, false],
+                after_inside: [false, true],
+            },
+            CutTransition {
+                cut: authored_cut(
+                    root(
+                        1,
+                        SkewCylinderAxialRelation::Above,
+                        SkewCylinderAxialRelation::Below,
+                    ),
+                    2.1,
+                    1.0,
+                    2.2,
+                ),
+                before_inside: [false, true],
+                after_inside: [false, false],
+            },
+        ];
+
+        assert_eq!(
+            classify_sheet(
+                SkewCylinderSheet::Upper,
+                false,
+                &transitions,
+                ParamRange::new(0.0, TAU),
+            ),
             Err(SkewCylinderOpenSpanFailure::CoincidentOrOverlappingRoots)
         );
     }

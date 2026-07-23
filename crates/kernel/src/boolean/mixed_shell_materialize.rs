@@ -278,6 +278,7 @@ pub(crate) enum MixedShellMaterializationError {
     PersistentSkewScalarPath(usize),
     MissingPersistentSkewInput(usize),
     PersistentSkewEndpointIdentityMismatch(usize),
+    PersistentSkewEndpointSlabMismatch(usize),
     PersistentSkewLineageMismatch {
         fragment: usize,
         face: MixedSourceFaceKey,

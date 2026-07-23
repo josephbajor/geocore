@@ -64,6 +64,8 @@ pub struct PersistentSkewCylinderOpenSpanCertificate {
     residual_bounds: [f64; 2],
     required_edge_tolerance: f64,
     directed_chart_integrals: [SkewCylinderBranchDirectedChartIntegral; 2],
+    finite_window_family_membership:
+        Option<PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate>,
 }
 
 impl PersistentSkewCylinderOpenSpanCertificate {
@@ -115,6 +117,16 @@ impl PersistentSkewCylinderOpenSpanCertificate {
         self.required_edge_tolerance
     }
 
+    /// Complete finite-window family and immutable represented ordinal.
+    ///
+    /// `None` is retained only by the legacy synthetic certifier. Real
+    /// finite-window operation results use the family-aware certifier.
+    pub const fn finite_window_family_membership(
+        self,
+    ) -> Option<PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate> {
+        self.finite_window_family_membership
+    }
+
     /// Exact logical proof work represented by this certificate.
     pub const fn work(self) -> u64 {
         PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
@@ -138,6 +150,46 @@ pub fn certify_persistent_skew_cylinder_open_span(
     root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
     physical_endpoint_points: [Vec3; 2],
     orientation: PersistentSkewCylinderOpenSpanOrientation,
+) -> Result<PersistentSkewCylinderOpenSpanCertificate, IntersectionCertificateError> {
+    certify_persistent_skew_cylinder_open_span_impl(
+        residual,
+        root_corridors,
+        physical_endpoint_points,
+        orientation,
+        None,
+    )
+}
+
+/// Certify one persistent logical open span bound to its complete family.
+pub fn certify_persistent_skew_cylinder_open_span_in_family(
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+    physical_endpoint_points: [Vec3; 2],
+    orientation: PersistentSkewCylinderOpenSpanOrientation,
+    membership: PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+) -> Result<PersistentSkewCylinderOpenSpanCertificate, IntersectionCertificateError> {
+    persistent_family::validate_finite_window_family_membership(
+        membership,
+        residual,
+        root_corridors,
+    )?;
+    certify_persistent_skew_cylinder_open_span_impl(
+        residual,
+        root_corridors,
+        physical_endpoint_points,
+        orientation,
+        Some(membership),
+    )
+}
+
+fn certify_persistent_skew_cylinder_open_span_impl(
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+    physical_endpoint_points: [Vec3; 2],
+    orientation: PersistentSkewCylinderOpenSpanOrientation,
+    finite_window_family_membership: Option<
+        PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    >,
 ) -> Result<PersistentSkewCylinderOpenSpanCertificate, IntersectionCertificateError> {
     let canonical_representatives =
         validate_composite_inputs(residual, root_corridors, physical_endpoint_points)?;
@@ -173,6 +225,7 @@ pub fn certify_persistent_skew_cylinder_open_span(
         residual_bounds,
         required_edge_tolerance,
         directed_chart_integrals,
+        finite_window_family_membership,
     })
 }
 

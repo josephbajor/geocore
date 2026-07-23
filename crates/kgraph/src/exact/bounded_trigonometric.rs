@@ -12,7 +12,7 @@ use super::bounded_polynomial::{
     EndpointSide, ExactPolynomial, RootBracket, RootIsolation, RootIsolationFailure,
 };
 
-pub(super) use super::bounded_polynomial::ExactScalar as ExactTrigScalar;
+pub use super::bounded_polynomial::ExactScalar as ExactTrigScalar;
 
 const CHART_BOUND: f64 = 2.0;
 const OWNERSHIP_BOUND: f64 = 1.0;
@@ -24,12 +24,12 @@ const OWNERSHIP_BOUND: f64 = 1.0;
 /// checked before quartic construction, so an undersized request cannot
 /// publish a partial chart result. The polynomial authority retains its own
 /// fixed arithmetic, Sturm-chain, subdivision, and expansion bounds.
-pub(super) const CYCLIC_SECOND_HARMONIC_EXACT_WORK: u64 = 64;
+pub const CYCLIC_SECOND_HARMONIC_EXACT_WORK: u64 = 64;
 
 /// Exact coefficients of
 /// `a0 + a1 cos(u) + b1 sin(u) + a2 cos(2u) + b2 sin(2u)`.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct SecondHarmonicCoefficients {
+pub struct SecondHarmonicCoefficients {
     a0: ExactTrigScalar,
     a1: ExactTrigScalar,
     b1: ExactTrigScalar,
@@ -38,7 +38,7 @@ pub(super) struct SecondHarmonicCoefficients {
 }
 
 impl SecondHarmonicCoefficients {
-    pub(super) fn new(
+    pub fn new(
         a0: ExactTrigScalar,
         a1: ExactTrigScalar,
         b1: ExactTrigScalar,
@@ -71,7 +71,7 @@ impl SecondHarmonicCoefficients {
 
 /// A strict exact sign on an open cyclic cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StrictSign {
+pub enum StrictSign {
     Negative,
     Positive,
 }
@@ -96,7 +96,7 @@ impl StrictSign {
 
 /// The projective half-angle chart owning a canonical root bracket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HalfAngleChart {
+pub enum HalfAngleChart {
     /// `t = tan(u / 2)`, owning `|t| <= 1`.
     Tangent,
     /// `s = cot(u / 2)`, owning `|s| < 1`.
@@ -105,22 +105,22 @@ pub(super) enum HalfAngleChart {
 
 /// One canonical closed bracket containing exactly one cyclic root.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct CyclicRootBracket {
-    pub(super) chart: HalfAngleChart,
-    pub(super) lo: f64,
-    pub(super) hi: f64,
+pub struct CyclicRootBracket {
+    pub chart: HalfAngleChart,
+    pub lo: f64,
+    pub hi: f64,
 }
 
 /// One distinct cyclic root and its exact repeated-root state.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct CyclicRoot {
-    pub(super) bracket: CyclicRootBracket,
-    pub(super) repeated: bool,
+pub struct CyclicRoot {
+    pub bracket: CyclicRootBracket,
+    pub repeated: bool,
 }
 
 /// Complete topology of one exact cyclic second harmonic.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum CyclicSecondHarmonicTopology {
+pub enum CyclicSecondHarmonicTopology {
     /// All five source coefficients are exactly zero.
     IdenticallyZero,
     /// A nonzero function with canonical roots and exact cyclic cell signs.
@@ -136,7 +136,7 @@ pub(super) enum CyclicSecondHarmonicTopology {
 
 impl CyclicSecondHarmonicTopology {
     /// Return a strict whole-cycle sign exactly when no root exists.
-    pub(super) fn strict_full_cycle_sign(&self) -> Option<StrictSign> {
+    pub fn strict_full_cycle_sign(&self) -> Option<StrictSign> {
         match self {
             Self::Nonzero {
                 roots,
@@ -149,7 +149,7 @@ impl CyclicSecondHarmonicTopology {
 
 /// Stable fail-closed causes for cyclic topology construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CyclicSecondHarmonicFailure {
+pub enum CyclicSecondHarmonicFailure {
     /// The caller did not reserve the fixed complete-query allowance.
     WorkLimit { required: u64, provided: u64 },
     /// Exact scalar, Sturm, subdivision, or parameter isolation failed.
@@ -179,7 +179,7 @@ enum OwnershipPosition {
 }
 
 /// Classify all distinct roots and open-cell signs over one projective cycle.
-pub(super) fn classify_cyclic_second_harmonic(
+pub fn classify_cyclic_second_harmonic(
     coefficients: &SecondHarmonicCoefficients,
     work_limit: u64,
 ) -> Result<CyclicSecondHarmonicTopology, CyclicSecondHarmonicFailure> {

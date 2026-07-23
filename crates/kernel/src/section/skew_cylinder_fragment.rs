@@ -275,6 +275,7 @@ pub(super) struct CertifiedBoundedSkewCylinderFragment {
 #[derive(Debug, Clone)]
 struct CertifiedBoundedSkewCylinderEnd {
     source_operand: usize,
+    axial_boundary: SkewCylinderAxialBoundaryProof,
     source_face: RawFaceId,
     loop_id: RawLoopId,
     fin: RawFinId,
@@ -578,6 +579,7 @@ fn certify_endpoint(
     }
     Ok(Some(CertifiedBoundedSkewCylinderEnd {
         source_operand,
+        axial_boundary: proof.boundary,
         source_face: raw_faces[source_operand],
         loop_id: ring.loop_id(),
         fin: ring.fin(),
@@ -788,6 +790,15 @@ pub(super) fn publish_fragments(
                 .expect("the source operand was populated");
             let trim = SectionBoundedProceduralTrimProvenance {
                 operand: evidence.source_operand,
+                axial_boundary: match evidence.axial_boundary {
+                    SkewCylinderAxialBoundaryProof::Lower => {
+                        SectionSkewCylinderAxialBoundary::Lower
+                    }
+                    SkewCylinderAxialBoundaryProof::Upper => {
+                        SectionSkewCylinderAxialBoundary::Upper
+                    }
+                },
+                authored_bound: evidence.authored_height,
                 face: FaceId::new(part.clone(), evidence.source_face),
                 loop_id: LoopId::new(part.clone(), evidence.loop_id),
                 fin: FinId::new(part.clone(), evidence.fin),

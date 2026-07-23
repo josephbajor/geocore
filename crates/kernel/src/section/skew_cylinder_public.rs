@@ -30,6 +30,16 @@ pub enum SectionSkewCylinderRootChart {
     CotangentHalfAngle,
 }
 
+/// Caller-authored axial side that owns one physical skew-cylinder root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SectionSkewCylinderAxialBoundary {
+    /// Low end of the source cylinder's axial window.
+    Lower,
+    /// High end of the source cylinder's axial window.
+    Upper,
+}
+
 /// Exact root corridor in the graph carrier's canonical longitude chart.
 ///
 /// This is deliberately separate from the bounded branch's public carrier
@@ -70,6 +80,8 @@ impl SectionSkewCylinderCarrierRootEnclosure {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionBoundedProceduralTrimProvenance {
     pub(super) operand: usize,
+    pub(super) axial_boundary: SectionSkewCylinderAxialBoundary,
+    pub(super) authored_bound: f64,
     pub(super) face: FaceId,
     pub(super) loop_id: LoopId,
     pub(super) fin: FinId,
@@ -82,6 +94,16 @@ impl SectionBoundedProceduralTrimProvenance {
     /// Operand slot whose axial source boundary contributed this root.
     pub const fn operand(&self) -> usize {
         self.operand
+    }
+
+    /// Authored lower/upper axial side whose exact equation owns this root.
+    pub const fn axial_boundary(&self) -> SectionSkewCylinderAxialBoundary {
+        self.axial_boundary
+    }
+
+    /// Bit-exact caller-authored axial bound used by the root equation.
+    pub const fn authored_bound(&self) -> f64 {
+        self.authored_bound
     }
 
     /// Trimmed cylinder side face.

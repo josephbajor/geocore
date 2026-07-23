@@ -13,7 +13,10 @@ use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
 use kgraph::{
-    Curve2dDescriptor, CurveDescriptor, GeometryGraph, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
+    Curve2dDescriptor, CurveDescriptor, GeometryGraph,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK,
+    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PersistentSkewCylinderAxialBoundary,
+    PersistentSkewCylinderFiniteWindowSheetOccupancy, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
     SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
     SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchGuardedEnd, SkewCylinderSheet,
 };
@@ -342,6 +345,17 @@ fn assert_open_span_pcurve_transport(
     );
     let expected_operands = residual.traces().map(|trace| trace.pcurve().operand());
     let [lower, upper] = certificate.root_corridors();
+    let membership = certificate
+        .finite_window_family_membership()
+        .expect("every published bounded skew branch must name its complete family member");
+    let member = membership.member();
+    assert_eq!(member.sheet(), residual.sheet());
+    assert_eq!(member.guarded_range(), residual.carrier_range());
+    assert_eq!(
+        member.root_parameter_enclosures(),
+        [lower.root_parameter(), upper.root_parameter()]
+    );
+    assert_eq!(member.tolerance().to_bits(), residual.tolerance().to_bits());
     assert_eq!(lower.guarded_end(), SkewCylinderBranchGuardedEnd::Lower);
     assert_eq!(upper.guarded_end(), SkewCylinderBranchGuardedEnd::Upper);
     assert!(lower.root_parameter().hi() < edge.carrier_range.lo);
@@ -526,6 +540,7 @@ fn assert_four_upper_open_spans(
     assert_eq!(result.branch_graph.vertices.len(), 8);
 
     let mut endpoint_vertices = Vec::with_capacity(8);
+    let mut expected_family = None;
     for (ordinal, (raw_branch, edge)) in result
         .raw
         .curves
@@ -573,6 +588,46 @@ fn assert_four_upper_open_spans(
         );
         let tolerance = certificate.tolerance();
         assert_open_span_pcurve_transport(edge, false);
+        let branch_certificate = edge
+            .certificate
+            .as_skew_cylinder_open_span_branch()
+            .expect("bounded branch must retain its root corridors");
+        let membership = branch_certificate
+            .finite_window_family_membership()
+            .expect("bounded branch must retain complete-family membership");
+        let family = membership.family();
+        assert_eq!(membership.ordinal(), ordinal);
+        assert_eq!(family.member_count(), 4);
+        assert_eq!(
+            family.work(),
+            PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK
+                + 4 * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
+        );
+        assert_eq!(
+            family.sheet_occupancy(SkewCylinderSheet::Lower),
+            PersistentSkewCylinderFiniteWindowSheetOccupancy::Outside
+        );
+        assert_eq!(
+            family.sheet_occupancy(SkewCylinderSheet::Upper),
+            PersistentSkewCylinderFiniteWindowSheetOccupancy::Open {
+                first_member_ordinal: 0,
+                member_count: 4,
+            }
+        );
+        if let Some(expected) = expected_family {
+            assert_eq!(family, expected);
+        } else {
+            expected_family = Some(family);
+        }
+        let member = membership.member();
+        assert_eq!(member.ordinal(), ordinal);
+        assert_eq!(member.guarded_range(), edge.carrier_range);
+        assert_eq!(
+            member.root_parameter_enclosures(),
+            branch_certificate
+                .root_corridors()
+                .map(|corridor| corridor.root_parameter())
+        );
 
         for endpoint_slot in 0..2 {
             let Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)) =
@@ -624,6 +679,28 @@ fn assert_four_upper_open_spans(
             );
             assert!(proof.half_angle_bracket.into_iter().all(f64::is_finite));
             assert!(proof.half_angle_bracket[0] <= proof.half_angle_bracket[1]);
+            let family_endpoint = member.endpoints()[endpoint_slot];
+            assert_eq!(family_endpoint.tag().source_slot(), proof.source_operand);
+            assert_eq!(
+                family_endpoint.tag().boundary(),
+                match proof.boundary {
+                    SkewCylinderAxialBoundaryProof::Lower => {
+                        PersistentSkewCylinderAxialBoundary::Lower
+                    }
+                    SkewCylinderAxialBoundaryProof::Upper => {
+                        PersistentSkewCylinderAxialBoundary::Upper
+                    }
+                }
+            );
+            assert_eq!(family_endpoint.bound().to_bits(), proof.bound.to_bits());
+            assert_eq!(
+                family_endpoint.inside_parameter().to_bits(),
+                proof.inside_parameter.to_bits()
+            );
+            assert_eq!(
+                family_endpoint.half_angle_bracket().map(f64::to_bits),
+                proof.half_angle_bracket.map(f64::to_bits)
+            );
             assert_eq!(
                 vertex.event,
                 IntersectionBranchVertexEvent::BoundaryEndpoint {

@@ -1,7 +1,5 @@
 //! Geometric intersection algorithms and parameter-rich result contracts.
 
-mod bounded_polynomial;
-mod bounded_trigonometric;
 mod candidate;
 mod circle_circle;
 mod circle_cone;
@@ -67,8 +65,6 @@ mod plane_plane;
 mod plane_sphere;
 mod plane_torus;
 mod result;
-mod skew_cylinder_axial_roots;
-mod skew_cylinder_open_spans;
 mod skew_cylinder_sheet_occupancy;
 mod sphere_nurbs_surface;
 mod sphere_sphere;

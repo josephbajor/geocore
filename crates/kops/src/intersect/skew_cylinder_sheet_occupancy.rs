@@ -7,7 +7,7 @@
 use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
 
-use super::skew_cylinder_axial_roots::{
+use kgraph::{
     SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, SkewCylinderAxialBoundProvenance,
     SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRootFailure,
     classify_skew_cylinder_axial_bound,

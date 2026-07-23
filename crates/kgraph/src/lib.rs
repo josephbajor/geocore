@@ -10,6 +10,8 @@ mod cylinder_cylinder_ruling;
 mod descriptor;
 mod error;
 mod eval;
+#[doc(hidden)]
+pub mod exact;
 mod graph;
 mod intersection;
 #[path = "intersection/plane_cylinder_ruling.rs"]
@@ -88,19 +90,47 @@ pub use plane_cylinder_ruling::{
     PlaneRulingTrace, certify_paired_plane_cylinder_ruling_residuals,
 };
 pub use skew_cylinder_branch::{
+    ExactSkewCylinderDiscriminant, PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_VERSION,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_CELLS_PER_BOUND,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_BOUND,
     PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PairedSkewCylinderBranchResidualCertificate,
-    PersistentSkewCylinderDirectedChartIntegralCertificate, PersistentSkewCylinderOpenSpanCarrier,
-    PersistentSkewCylinderOpenSpanCertificate, PersistentSkewCylinderOpenSpanOrientation,
-    PersistentSkewCylinderOpenSpanPcurve, PersistentSkewCylinderSpanRangeOrder,
+    PersistentSkewCylinderAxialBoundOutcome, PersistentSkewCylinderAxialBoundTag,
+    PersistentSkewCylinderAxialBoundary, PersistentSkewCylinderAxialRelation,
+    PersistentSkewCylinderAxialRootEventInput,
+    PersistentSkewCylinderDirectedChartIntegralCertificate,
+    PersistentSkewCylinderFiniteWindowEndpointProof,
+    PersistentSkewCylinderFiniteWindowFamilyCertificate,
+    PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    PersistentSkewCylinderFiniteWindowMemberCertificate,
+    PersistentSkewCylinderFiniteWindowMemberInput,
+    PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
+    PersistentSkewCylinderOpenSpanCarrier, PersistentSkewCylinderOpenSpanCertificate,
+    PersistentSkewCylinderOpenSpanOrientation, PersistentSkewCylinderOpenSpanPcurve,
+    PersistentSkewCylinderRootInsideSide, PersistentSkewCylinderSpanRangeOrder,
     PersistentSkewCylinderSpanRelationshipCertificate, PersistentSkewCylinderSpanRelationshipError,
     PersistentSkewCylinderSpanRelationshipKind, PersistentSkewCylinderSpanRelationshipRequest,
-    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
-    SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchCarrier, SkewCylinderBranchGuardedEnd,
-    SkewCylinderBranchPcurve, SkewCylinderBranchPcurveCellCertificate,
-    SkewCylinderBranchPcurveEnclosure, SkewCylinderBranchPcurveRootCorridorCertificate,
-    SkewCylinderBranchTrace, SkewCylinderSheet, VerifiedSkewCylinderOpenSpanCurveDescriptor,
-    certify_paired_skew_cylinder_branch_residuals,
+    SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK, SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK, SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS,
+    SkewCylinderAngularRootBracket, SkewCylinderAxialBoundProvenance,
+    SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
+    SkewCylinderAxialRoot, SkewCylinderAxialRootFailure, SkewCylinderBranchCarrier,
+    SkewCylinderBranchGuardedEnd, SkewCylinderBranchPcurve,
+    SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveEnclosure,
+    SkewCylinderBranchPcurveRootCorridorCertificate, SkewCylinderBranchTrace,
+    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
+    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderHalfAngleChart,
+    SkewCylinderHalfAngleRootBracket, SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof,
+    SkewCylinderOpenSpanFailure, SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide,
+    SkewCylinderSheet, SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
+    VerifiedSkewCylinderOpenSpanCurveDescriptor, certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
-    certify_persistent_skew_cylinder_open_span, certify_persistent_skew_cylinder_span_relationship,
+    certify_persistent_skew_cylinder_finite_window_family,
+    certify_persistent_skew_cylinder_open_span,
+    certify_persistent_skew_cylinder_open_span_in_family,
+    certify_persistent_skew_cylinder_span_relationship, classify_skew_cylinder_axial_bound,
+    classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
+    exact_skew_cylinder_discriminant,
 };

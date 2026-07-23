@@ -51,7 +51,48 @@ pub use persistent::{
     PersistentSkewCylinderSpanRelationshipCertificate, PersistentSkewCylinderSpanRelationshipError,
     PersistentSkewCylinderSpanRelationshipKind, PersistentSkewCylinderSpanRelationshipRequest,
     VerifiedSkewCylinderOpenSpanCurveDescriptor, certify_persistent_skew_cylinder_open_span,
+    certify_persistent_skew_cylinder_open_span_in_family,
     certify_persistent_skew_cylinder_span_relationship,
+};
+
+#[path = "skew_cylinder_branch_persistent_family.rs"]
+mod persistent_family;
+pub use persistent_family::{
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_VERSION,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_CELLS_PER_BOUND,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_BOUND,
+    PersistentSkewCylinderAxialBoundOutcome, PersistentSkewCylinderAxialBoundTag,
+    PersistentSkewCylinderAxialBoundary, PersistentSkewCylinderAxialRelation,
+    PersistentSkewCylinderAxialRootEventInput, PersistentSkewCylinderFiniteWindowEndpointProof,
+    PersistentSkewCylinderFiniteWindowFamilyCertificate,
+    PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    PersistentSkewCylinderFiniteWindowMemberCertificate,
+    PersistentSkewCylinderFiniteWindowMemberInput,
+    PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
+    PersistentSkewCylinderRootInsideSide, certify_persistent_skew_cylinder_finite_window_family,
+};
+
+#[path = "skew_cylinder_axial_bound.rs"]
+mod axial_bound;
+pub use axial_bound::{
+    ExactSkewCylinderDiscriminant, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+    SkewCylinderAngularRootBracket, SkewCylinderAxialBoundProvenance,
+    SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
+    SkewCylinderAxialRoot, SkewCylinderAxialRootFailure, SkewCylinderExactDiscriminantTopology,
+    SkewCylinderHalfAngleChart, SkewCylinderHalfAngleRootBracket,
+    SkewCylinderStrictPositiveTwoSheetAdmissionCertificate, classify_skew_cylinder_axial_bound,
+    classify_skew_cylinder_exact_discriminant, exact_skew_cylinder_discriminant,
+};
+
+#[path = "skew_cylinder_finite_window_topology.rs"]
+mod finite_window_topology;
+pub use finite_window_topology::{
+    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowTopologyCertificate,
+    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide,
+    classify_skew_cylinder_open_spans,
 };
 
 #[cfg(test)]
@@ -449,6 +490,10 @@ impl PairedSkewCylinderBranchResidualCertificate {
     /// Ordered quadratic sheet represented by the certificate.
     pub const fn sheet(self) -> SkewCylinderSheet {
         self.sheet
+    }
+
+    pub(super) const fn chart_windows(self) -> [ParamRange; 2] {
+        self.chart_windows
     }
 
     /// Reverse only source trace provenance, retaining the canonical carrier.

@@ -475,6 +475,18 @@ impl MixedShellProofPlan {
             edge.carrier_faces.swap(0, 1);
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn perturb_skew_endpoint_bound_for_test(&mut self, fragment: usize) {
+        let Some(edge) = self
+            .section_edges
+            .iter_mut()
+            .find(|edge| edge.fragment_index == fragment)
+        else {
+            return;
+        };
+        edge.fragment.perturb_bounded_procedural_bound_for_test();
+    }
 }
 
 /// Typed refusal while building the exact intermediate.
@@ -2063,11 +2075,13 @@ fn collect_section_edges(
             fragment.span(),
             SectionCurveFragmentSpan::BoundedProcedural { .. }
         ) {
-            Some(bounded_skew_persistence_input(branch, fragment).ok_or(
-                MixedShellPlanError::InvalidSkewPersistence {
-                    fragment: fragment_index,
-                },
-            )?)
+            Some(
+                bounded_skew_persistence_input(store, branch, fragment).ok_or(
+                    MixedShellPlanError::InvalidSkewPersistence {
+                        fragment: fragment_index,
+                    },
+                )?,
+            )
         } else {
             None
         };

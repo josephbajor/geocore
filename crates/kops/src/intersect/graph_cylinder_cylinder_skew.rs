@@ -23,15 +23,19 @@ use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
 use kgraph::{
     IntersectionCertificateError, PairedSkewCylinderBranchResidualCertificate,
+    PersistentSkewCylinderFiniteWindowMemberInput, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
+    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
+    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
+    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanTopologyInput,
+    SkewCylinderRootInsideSide, SkewCylinderSheet,
+    SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
+    certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
+    certify_persistent_skew_cylinder_finite_window_family,
+    classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
 };
 
-use super::bounded_trigonometric::{
-    CYCLIC_SECOND_HARMONIC_EXACT_WORK, CyclicSecondHarmonicFailure, StrictSign,
-    classify_cyclic_second_harmonic,
-};
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
 use super::graph_branch_certificate::SkewCylinderOpenSpanBranchCertificate;
@@ -44,17 +48,12 @@ use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersecti
 use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
-use super::skew_cylinder_axial_roots::{
-    ExactSkewCylinderDiscriminant, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
-    SkewCylinderAxialRootFailure, SkewCylinderHalfAngleChart, exact_skew_cylinder_discriminant,
-};
-use super::skew_cylinder_open_spans::{
-    SkewCylinderFiniteSheetTopology, SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof,
-    SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide,
-    classify_skew_cylinder_open_spans,
-};
 use super::skew_cylinder_sheet_occupancy::{
     SKEW_CYLINDER_AXIAL_BOUNDS_EXACT_WORK, collect_skew_cylinder_axial_bound_topologies,
+};
+use kgraph::{
+    SkewCylinderAxialBoundary, SkewCylinderAxialRelation, SkewCylinderAxialRootFailure,
+    SkewCylinderHalfAngleChart,
 };
 
 const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires certified contained full-cycle branch carriers";
@@ -76,7 +75,7 @@ pub const SKEW_CYLINDER_DISCRIMINANT_WORK: StageId =
     };
 
 /// Exact atomic work charged by one admitted skew-cylinder classification.
-pub const SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK: u64 = 2 * CYCLIC_SECOND_HARMONIC_EXACT_WORK;
+pub const SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK: u64 = 2 * SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK;
 
 /// Stable work stage for one atomic pair of certified procedural branches.
 pub const SKEW_CYLINDER_TWO_SHEET_WORK: StageId =
@@ -230,7 +229,9 @@ pub(super) fn intersect_certified_skew_cylinders(
 
     let first_admission = classify_one_parameterization(cylinders);
     let (admission, parameterization_reversed) = match first_admission {
-        DiscriminantAdmission::Strict(_) => (first_admission, false),
+        DiscriminantAdmission::StrictPositive(_) | DiscriminantAdmission::StrictNegative => {
+            (first_admission, false)
+        }
         DiscriminantAdmission::NumericResolution => (
             classify_one_parameterization([cylinders[1], cylinders[0]]),
             true,
@@ -241,8 +242,8 @@ pub(super) fn intersect_certified_skew_cylinders(
             // while the reverse chart proves two regular sheets. Conversely,
             // a contradictory reverse miss cannot supersede retained contact.
             match reversed {
-                DiscriminantAdmission::Strict(StrictSign::Positive) => (reversed, true),
-                DiscriminantAdmission::Strict(StrictSign::Negative)
+                DiscriminantAdmission::StrictPositive(_) => (reversed, true),
+                DiscriminantAdmission::StrictNegative
                 | DiscriminantAdmission::Contact
                 | DiscriminantAdmission::NumericResolution => {
                     (DiscriminantAdmission::Contact, false)
@@ -252,20 +253,19 @@ pub(super) fn intersect_certified_skew_cylinders(
     };
 
     match admission {
-        DiscriminantAdmission::Strict(StrictSign::Negative) => {
-            Ok(CertifiedSkewCylinderIntersections {
-                raw: SurfaceSurfaceIntersections::complete_empty(),
-                strict_miss: Some(SkewCylinderStrictDiscriminantMiss::certified()),
-                branches: None,
-            })
-        }
-        DiscriminantAdmission::Strict(StrictSign::Positive) => {
+        DiscriminantAdmission::StrictNegative => Ok(CertifiedSkewCylinderIntersections {
+            raw: SurfaceSurfaceIntersections::complete_empty(),
+            strict_miss: Some(SkewCylinderStrictDiscriminantMiss::certified()),
+            branches: None,
+        }),
+        DiscriminantAdmission::StrictPositive(strict_positive) => {
             let (proof_cylinders, proof_ranges) = if parameterization_reversed {
                 ([cylinders[1], cylinders[0]], [ranges[1], ranges[0]])
             } else {
                 (cylinders, ranges)
             };
             intersect_strict_positive_two_sheet(
+                strict_positive,
                 proof_cylinders,
                 proof_ranges,
                 reversed ^ parameterization_reversed,
@@ -287,12 +287,18 @@ pub(super) fn intersect_certified_skew_cylinders(
 }
 
 fn intersect_strict_positive_two_sheet(
+    strict_positive: SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     cylinders: [Cylinder; 2],
     ranges: [[ParamRange; 2]; 2],
     reversed: bool,
     tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    if strict_positive.formula_cylinders() != cylinders {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
     scope.ledger_mut().charge(
         SKEW_CYLINDER_TWO_SHEET_WORK,
         SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
@@ -351,9 +357,33 @@ fn intersect_strict_positive_two_sheet(
                 });
             }
         };
-    let open_span_count = finite_topology
-        .iter()
-        .map(|topology| match topology {
+    publish_finite_window_topology(
+        strict_positive,
+        finite_topology,
+        certified,
+        cylinders,
+        ranges,
+        reversed,
+        tolerance,
+        scope,
+    )
+}
+
+fn publish_finite_window_topology(
+    strict_positive: SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
+    finite_topology: SkewCylinderFiniteWindowTopologyCertificate,
+    certified: [Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError>;
+        2],
+    cylinders: [Cylinder; 2],
+    ranges: [[ParamRange; 2]; 2],
+    reversed: bool,
+    tolerance: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    let sheets = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper];
+    let open_span_count = sheets
+        .into_iter()
+        .map(|sheet| match finite_topology.sheet(sheet) {
             SkewCylinderFiniteSheetTopology::Open(spans) => spans.len(),
             SkewCylinderFiniteSheetTopology::Outside | SkewCylinderFiniteSheetTopology::Whole => 0,
         })
@@ -365,14 +395,10 @@ fn intersect_strict_positive_two_sheet(
         )?;
     }
 
-    let sheets = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper];
     let mut branches = Vec::with_capacity(2 + open_span_count);
-    for ((sheet, topology), whole_certificate) in sheets
-        .into_iter()
-        .zip(finite_topology)
-        .zip(certified.iter())
-    {
-        match topology {
+    let mut family_members = Vec::with_capacity(open_span_count);
+    for (sheet, whole_certificate) in sheets.into_iter().zip(certified.iter()) {
+        match finite_topology.sheet(sheet) {
             SkewCylinderFiniteSheetTopology::Outside => {}
             SkewCylinderFiniteSheetTopology::Whole => match whole_certificate {
                 Ok(certificate) => branches.push(CertifiedSkewCylinderBranch {
@@ -386,7 +412,7 @@ fn intersect_strict_positive_two_sheet(
                 Err(failure) => return Ok(single_branch_certificate_failure(failure, scope)),
             },
             SkewCylinderFiniteSheetTopology::Open(spans) => {
-                for span in spans {
+                for span in spans.iter().copied() {
                     if span.sheet != sheet {
                         return Ok(CertifiedSkewCylinderIntersections {
                             raw: numeric_resolution(scope, SKEW_CYLINDER_AXIAL_CLIP_WORK),
@@ -402,6 +428,10 @@ fn intersect_strict_positive_two_sheet(
                             return Ok(open_span_certificate_failure(&failure, scope));
                         }
                     };
+                    family_members.push(PersistentSkewCylinderFiniteWindowMemberInput {
+                        residual: open_span.residual_certificate(),
+                        root_corridors: open_span.root_corridors(),
+                    });
                     branches.push(CertifiedSkewCylinderBranch {
                         proof: CertifiedSkewCylinderBranchProof::OpenSpan(Box::new(open_span)),
                         endpoint_proofs: [span.start, span.end]
@@ -409,6 +439,36 @@ fn intersect_strict_positive_two_sheet(
                     });
                 }
             }
+        }
+    }
+    if open_span_count > 0 {
+        let family = match certify_persistent_skew_cylinder_finite_window_family(
+            strict_positive,
+            &finite_topology,
+            &family_members,
+            tolerance,
+        ) {
+            Ok(family) => family,
+            Err(failure) => return Ok(open_span_certificate_failure(&failure, scope)),
+        };
+        let mut ordinal = 0;
+        for branch in &mut branches {
+            if let CertifiedSkewCylinderBranchProof::OpenSpan(certificate) = &mut branch.proof {
+                let membership = family.membership(ordinal).ok_or(
+                    GraphSurfaceIntersectionError::BranchCertificate(
+                        IntersectionCertificateError::InvalidTraceFamily,
+                    ),
+                )?;
+                **certificate = certificate
+                    .bind_finite_window_family(membership)
+                    .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
+                ordinal += 1;
+            }
+        }
+        if ordinal != family.member_count() {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
         }
     }
     publish_skew_branches(branches)
@@ -635,40 +695,25 @@ fn raw_skew_curve(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum DiscriminantAdmission {
-    Strict(StrictSign),
+    StrictPositive(SkewCylinderStrictPositiveTwoSheetAdmissionCertificate),
+    StrictNegative,
     Contact,
     NumericResolution,
 }
 
 fn classify_one_parameterization(cylinders: [Cylinder; 2]) -> DiscriminantAdmission {
-    let Ok(classification) = exact_skew_cylinder_discriminant(cylinders) else {
-        return DiscriminantAdmission::NumericResolution;
-    };
-    let (discriminant, cardinal_contact) = match classification {
-        ExactSkewCylinderDiscriminant::Strict(sign) => {
-            return DiscriminantAdmission::Strict(sign);
+    match classify_skew_cylinder_exact_discriminant(cylinders, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK)
+    {
+        Ok(SkewCylinderExactDiscriminantTopology::StrictPositive(certificate)) => {
+            DiscriminantAdmission::StrictPositive(certificate)
         }
-        ExactSkewCylinderDiscriminant::Contact => return DiscriminantAdmission::Contact,
-        ExactSkewCylinderDiscriminant::Harmonic {
-            coefficients,
-            cardinal_contact,
-        } => (coefficients, cardinal_contact),
-    };
-    if cardinal_contact {
-        return DiscriminantAdmission::Contact;
-    }
-    match classify_cyclic_second_harmonic(&discriminant, CYCLIC_SECOND_HARMONIC_EXACT_WORK) {
-        Ok(topology) => topology.strict_full_cycle_sign().map_or(
-            DiscriminantAdmission::Contact,
-            DiscriminantAdmission::Strict,
-        ),
-        Err(
-            CyclicSecondHarmonicFailure::ExactArithmetic(_)
-            | CyclicSecondHarmonicFailure::InconsistentChartTopology
-            | CyclicSecondHarmonicFailure::WorkLimit { .. },
-        ) => DiscriminantAdmission::NumericResolution,
+        Ok(SkewCylinderExactDiscriminantTopology::StrictNegative) => {
+            DiscriminantAdmission::StrictNegative
+        }
+        Ok(SkewCylinderExactDiscriminantTopology::Contact) => DiscriminantAdmission::Contact,
+        Err(_) => DiscriminantAdmission::NumericResolution,
     }
 }
 
@@ -799,7 +844,7 @@ mod tests {
         );
         assert_eq!(
             classify_one_parameterization([second, first]),
-            DiscriminantAdmission::Strict(StrictSign::Negative)
+            DiscriminantAdmission::StrictNegative
         );
     }
 }

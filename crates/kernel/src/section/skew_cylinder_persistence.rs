@@ -7,18 +7,48 @@
 //! residual proof, root corridors, traversal orientation, and topology points.
 
 use kcore::interval::Interval;
+use kgeom::surface::Cylinder;
 use kgeom::vec::Point3;
 use kgraph::{
-    PairedSkewCylinderBranchResidualCertificate, SkewCylinderBranchGuardedEnd,
-    SkewCylinderBranchPcurveRootCorridorCertificate,
+    PairedSkewCylinderBranchResidualCertificate, PersistentSkewCylinderAxialBoundary,
+    PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    PersistentSkewCylinderHalfAngleChart, PersistentSkewCylinderRootInsideSide,
+    SkewCylinderBranchGuardedEnd, SkewCylinderBranchPcurveRootCorridorCertificate,
 };
+use ktopo::geom::SurfaceGeom;
+use ktopo::store::Store;
 
 use super::skew_cylinder_public::orient_parameter_interval;
 use super::{
     SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralPhysicalRoot, SectionBranch,
     SectionBranchTopology, SectionCarrier, SectionCurveFragment, SectionCurveFragmentSpan,
-    SectionSkewCylinderInterval, SectionUvCurve,
+    SectionSkewCylinderAxialBoundary, SectionSkewCylinderInterval, SectionUvCurve,
 };
+
+/// Exact caller-authored slab identity retained in graph canonical end order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SectionSkewCylinderEndpointSlab {
+    source_operand: usize,
+    boundary: SectionSkewCylinderAxialBoundary,
+    bound: f64,
+}
+
+impl SectionSkewCylinderEndpointSlab {
+    /// Source cylinder slot in current Section operand order.
+    pub(crate) const fn source_operand(self) -> usize {
+        self.source_operand
+    }
+
+    /// Authored lower/upper axial side.
+    pub(crate) const fn boundary(self) -> SectionSkewCylinderAxialBoundary {
+        self.boundary
+    }
+
+    /// Bit-exact axial bound used by the source root equation.
+    pub(crate) const fn bound(self) -> f64 {
+        self.bound
+    }
+}
 
 /// Sealed persistence handoff for one bounded skew-cylinder Section fragment.
 ///
@@ -30,8 +60,10 @@ use super::{
 pub(crate) struct SectionSkewCylinderPersistenceInput {
     residual: PairedSkewCylinderBranchResidualCertificate,
     root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+    family_membership: PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
     reversed: bool,
     physical_roots: [SectionBoundedProceduralPhysicalRoot; 2],
+    endpoint_slabs: [SectionSkewCylinderEndpointSlab; 2],
 }
 
 impl SectionSkewCylinderPersistenceInput {
@@ -45,6 +77,13 @@ impl SectionSkewCylinderPersistenceInput {
         self,
     ) -> [SkewCylinderBranchPcurveRootCorridorCertificate; 2] {
         self.root_corridors
+    }
+
+    /// Complete finite-window family and immutable represented ordinal.
+    pub(crate) const fn family_membership(
+        self,
+    ) -> PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate {
+        self.family_membership
     }
 
     /// Whether Section traversal reverses graph canonical longitude.
@@ -67,6 +106,11 @@ impl SectionSkewCylinderPersistenceInput {
             self.physical_roots[1].point(),
         ]
     }
+
+    /// Exact source-window tags in graph canonical `[lower, upper]` order.
+    pub(crate) const fn endpoint_slabs(self) -> [SectionSkewCylinderEndpointSlab; 2] {
+        self.endpoint_slabs
+    }
 }
 
 /// Rejoin one bounded procedural fragment with its graph-owned skew proof.
@@ -80,7 +124,10 @@ impl SectionSkewCylinderPersistenceInput {
 /// `fragment.branch()`. A standalone [`SectionBranch`] intentionally carries no
 /// graph index, so this value-level adapter cannot prove that index association;
 /// mixed-plan adoption must establish it before calling this function.
+/// `store` re-resolves the retained source side face so the authored lower/
+/// upper tag and bit-exact bound cannot be replaced after Section publication.
 pub(crate) fn bounded_skew_persistence_input(
+    store: &Store,
     branch: &SectionBranch,
     fragment: &SectionCurveFragment,
 ) -> Option<SectionSkewCylinderPersistenceInput> {
@@ -92,6 +139,7 @@ pub(crate) fn bounded_skew_persistence_input(
     let source = embedding.source_certificate();
     let residual = source.residual_certificate();
     let root_corridors = source.root_corridors();
+    let family_membership = source.finite_window_family_membership()?;
     let range = branch.range();
     let reversed = embedding.reversed();
 
@@ -141,14 +189,20 @@ pub(crate) fn bounded_skew_persistence_input(
         return None;
     }
     for (section_end, end) in ends.iter().enumerate() {
+        let trim_operand = end.trim().operand();
+        if trim_operand > 1 {
+            return None;
+        }
         let graph_end = if reversed {
             1 - section_end
         } else {
             section_end
         };
         if !valid_section_end(
+            store,
             branch,
             carrier,
+            traces[trim_operand].surface(),
             range,
             reversed,
             section_end,
@@ -164,12 +218,98 @@ pub(crate) fn bounded_skew_persistence_input(
     } else {
         section_roots
     };
+    let section_slabs = ends.each_ref().map(|end| {
+        let trim = end.trim();
+        SectionSkewCylinderEndpointSlab {
+            source_operand: trim.operand(),
+            boundary: trim.axial_boundary(),
+            bound: trim.authored_bound(),
+        }
+    });
+    let endpoint_slabs = if reversed {
+        [section_slabs[1], section_slabs[0]]
+    } else {
+        section_slabs
+    };
+    let graph_ends = if reversed {
+        [&ends[1], &ends[0]]
+    } else {
+        [&ends[0], &ends[1]]
+    };
+    if !valid_family_member(
+        family_membership,
+        residual,
+        root_corridors,
+        range,
+        graph_ends,
+    ) {
+        return None;
+    }
     Some(SectionSkewCylinderPersistenceInput {
         residual,
         root_corridors,
+        family_membership,
         reversed,
         physical_roots,
+        endpoint_slabs,
     })
+}
+
+fn valid_family_member(
+    membership: PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+    range: kgeom::param::ParamRange,
+    graph_ends: [&SectionBoundedProceduralFragmentEnd; 2],
+) -> bool {
+    let member = membership.member();
+    if member.sheet() != residual.sheet()
+        || member.guarded_range() != range
+        || member.root_parameter_enclosures()
+            != root_corridors.map(|corridor| corridor.root_parameter())
+        || member.tolerance().to_bits() != residual.tolerance().to_bits()
+        || membership.family().source_cylinders() != residual.traces().map(|trace| trace.surface())
+    {
+        return false;
+    }
+
+    for (graph_end, (proof, section_end)) in
+        member.endpoints().into_iter().zip(graph_ends).enumerate()
+    {
+        let trim = section_end.trim();
+        let projective = trim.carrier_root();
+        let expected_boundary = match trim.axial_boundary() {
+            SectionSkewCylinderAxialBoundary::Lower => PersistentSkewCylinderAxialBoundary::Lower,
+            SectionSkewCylinderAxialBoundary::Upper => PersistentSkewCylinderAxialBoundary::Upper,
+        };
+        let expected_chart = match projective.chart() {
+            super::SectionSkewCylinderRootChart::TangentHalfAngle => {
+                PersistentSkewCylinderHalfAngleChart::Tangent
+            }
+            super::SectionSkewCylinderRootChart::CotangentHalfAngle => {
+                PersistentSkewCylinderHalfAngleChart::Cotangent
+            }
+        };
+        let expected_inside_side = if graph_end == 0 {
+            PersistentSkewCylinderRootInsideSide::After
+        } else {
+            PersistentSkewCylinderRootInsideSide::Before
+        };
+        let expected_inside_parameter = if graph_end == 0 { range.lo } else { range.hi };
+        let bracket = proof.half_angle_bracket();
+        if proof.sheet() != residual.sheet()
+            || proof.tag().source_slot() != trim.operand()
+            || proof.tag().boundary() != expected_boundary
+            || proof.bound().to_bits() != trim.authored_bound().to_bits()
+            || proof.inside_side() != expected_inside_side
+            || proof.inside_parameter().to_bits() != expected_inside_parameter.to_bits()
+            || proof.root().half_angle_chart != expected_chart
+            || bracket.map(f64::to_bits) != [projective.lo(), projective.hi()].map(f64::to_bits)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn valid_raw_corridors(
@@ -223,8 +363,10 @@ fn valid_raw_corridors(
 
 #[allow(clippy::too_many_arguments)]
 fn valid_section_end(
+    store: &Store,
     branch: &SectionBranch,
     carrier: super::SectionSkewCylinderBranchCarrier,
+    source_cylinder: Cylinder,
     range: kgeom::param::ParamRange,
     reversed: bool,
     section_end: usize,
@@ -239,10 +381,26 @@ fn valid_section_end(
     let inside_point = end.inside_point();
     let trim = end.trim();
     let trim_operand = trim.operand();
+    if trim_operand > 1 {
+        return false;
+    }
     let source_parameter = trim.source_parameter();
     let source_enclosure = source_parameter.root_parameter_enclosure();
     let edge_enclosure = trim.edge_parameter();
     let projective_root = trim.carrier_root();
+    let source_face = store.get(trim.face().raw()).ok();
+    let source_domain = source_face.and_then(|face| face.domain());
+    let source_surface = source_face
+        .and_then(|face| store.surface(face.surface()).ok())
+        .and_then(|surface| match surface {
+            SurfaceGeom::Cylinder(cylinder) => Some(*cylinder),
+            _ => None,
+        });
+    let authored_bound = source_domain.map(|domain| match trim.axial_boundary() {
+        SectionSkewCylinderAxialBoundary::Lower => domain.v.lo,
+        SectionSkewCylinderAxialBoundary::Upper => domain.v.hi,
+    });
+    let root_height = graph_corridor.root_pcurves()[trim_operand];
 
     section_enclosure == expected_enclosure
         && finite_section_interval(section_enclosure)
@@ -250,8 +408,11 @@ fn valid_section_end(
         && finite_point(physical.point())
         && finite_point(inside_point)
         && same_point_bits(inside_point, carrier.eval(expected_guard))
-        && trim_operand < 2
         && trim.face() == branch.faces()[trim_operand]
+        && source_surface == Some(source_cylinder)
+        && authored_bound.is_some_and(|bound| bound.to_bits() == trim.authored_bound().to_bits())
+        && root_height.stored_uv()[1].contains(trim.authored_bound())
+        && root_height.source_uv()[1].contains(trim.authored_bound())
         && source_parameter.root_parameter().is_finite()
         && source_enclosure.lo().is_finite()
         && source_enclosure.hi().is_finite()
@@ -287,9 +448,9 @@ mod tests {
     use kgeom::frame::Frame;
 
     use super::*;
-    use crate::{BodySectionGraph, CylinderRequest, Kernel, SectionBodiesRequest};
+    use crate::{BodySectionGraph, CylinderRequest, Kernel, PartId, SectionBodiesRequest, Session};
 
-    fn bounded_skew_graph(swapped: bool) -> BodySectionGraph {
+    fn bounded_skew_fixture(swapped: bool) -> (Session, PartId, BodySectionGraph) {
         let frame = Frame::world();
         let mut session = Kernel::new().create_session();
         let part = session.create_part();
@@ -322,8 +483,8 @@ mod tests {
         } else {
             [first, second]
         };
-        session
-            .part(part)
+        let graph = session
+            .part(part.clone())
             .unwrap()
             .section_bodies(SectionBodiesRequest::new(
                 bodies[0].clone(),
@@ -331,23 +492,39 @@ mod tests {
             ))
             .unwrap()
             .into_result()
-            .unwrap()
+            .unwrap();
+        (session, part, graph)
     }
 
     #[test]
     fn persistence_input_preserves_graph_root_order_across_section_reversal() {
         let mut saw_orientation = [false; 2];
         for swapped in [false, true] {
-            let graph = bounded_skew_graph(swapped);
+            let (session, part_id, graph) = bounded_skew_fixture(swapped);
+            let part = session.part(part_id).unwrap();
+            let mut observed_family = None;
+            let mut observed_ordinals = Vec::new();
             for fragment in graph.curve_fragments() {
                 let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = fragment.span()
                 else {
                     continue;
                 };
                 let branch = &graph.branches()[fragment.branch()];
-                let input = bounded_skew_persistence_input(branch, fragment)
+                let input = bounded_skew_persistence_input(&part.state.store, branch, fragment)
                     .expect("published bounded skew evidence must rejoin");
                 saw_orientation[usize::from(input.reversed())] = true;
+
+                let membership = input.family_membership();
+                let family = membership.family();
+                if let Some(expected) = observed_family {
+                    assert_eq!(
+                        family, expected,
+                        "all fragments must share one complete family"
+                    );
+                } else {
+                    observed_family = Some(family);
+                }
+                observed_ordinals.push(membership.ordinal());
 
                 let residual = input.residual_certificate();
                 let corridors = input.root_corridors();
@@ -368,11 +545,57 @@ mod tests {
                 } else {
                     section_roots
                 };
+                let section_slabs = endpoints.each_ref().map(|endpoint| {
+                    let trim = endpoint.trim();
+                    SectionSkewCylinderEndpointSlab {
+                        source_operand: trim.operand(),
+                        boundary: trim.axial_boundary(),
+                        bound: trim.authored_bound(),
+                    }
+                });
+                let expected_graph_slabs = if input.reversed() {
+                    [section_slabs[1], section_slabs[0]]
+                } else {
+                    section_slabs
+                };
                 assert_eq!(input.physical_roots(), expected_graph_roots);
+                assert_eq!(input.endpoint_slabs(), expected_graph_slabs);
+                for (endpoint, slab) in membership
+                    .member()
+                    .endpoints()
+                    .into_iter()
+                    .zip(expected_graph_slabs)
+                {
+                    let expected_boundary = match slab.boundary() {
+                        SectionSkewCylinderAxialBoundary::Lower => {
+                            PersistentSkewCylinderAxialBoundary::Lower
+                        }
+                        SectionSkewCylinderAxialBoundary::Upper => {
+                            PersistentSkewCylinderAxialBoundary::Upper
+                        }
+                    };
+                    assert_eq!(endpoint.tag().source_slot(), slab.source_operand());
+                    assert_eq!(endpoint.tag().boundary(), expected_boundary);
+                    assert_eq!(endpoint.bound().to_bits(), slab.bound().to_bits());
+                }
                 assert_eq!(
                     input.physical_endpoint_points(),
                     expected_graph_roots.map(|root| root.point())
                 );
+                for endpoint in endpoints.iter() {
+                    let trim = endpoint.trim();
+                    let face = part.state.store.get(trim.face().raw()).unwrap();
+                    let domain = face.domain().expect("cylinder side face must be bounded");
+                    let expected = match trim.axial_boundary() {
+                        SectionSkewCylinderAxialBoundary::Lower => domain.v.lo,
+                        SectionSkewCylinderAxialBoundary::Upper => domain.v.hi,
+                    };
+                    assert_eq!(
+                        trim.authored_bound().to_bits(),
+                        expected.to_bits(),
+                        "Section must retain the authored slab side and exact local bound"
+                    );
+                }
                 for (graph_end, physical) in input.physical_roots().into_iter().enumerate() {
                     assert_eq!(
                         physical.carrier_parameter(),
@@ -384,6 +607,13 @@ mod tests {
                     );
                 }
             }
+            let family = observed_family.expect("fixture must publish bounded family members");
+            observed_ordinals.sort_unstable();
+            assert_eq!(
+                observed_ordinals,
+                (0..family.member_count()).collect::<Vec<_>>(),
+                "Section must publish every admitted family ordinal exactly once"
+            );
         }
         assert_eq!(
             saw_orientation,
@@ -394,7 +624,9 @@ mod tests {
 
     #[test]
     fn malformed_branch_and_endpoint_splices_are_rejected() {
-        let graph = bounded_skew_graph(false);
+        let (session, part_id, graph) = bounded_skew_fixture(false);
+        let part = session.part(part_id).unwrap();
+        let store = &part.state.store;
         let bounded = graph
             .curve_fragments()
             .iter()
@@ -414,9 +646,9 @@ mod tests {
             .expect("fixture must retain distinct bounded branches");
         let other_branch = &graph.branches()[other_fragment.branch()];
 
-        assert!(bounded_skew_persistence_input(first_branch, first_fragment).is_some());
+        assert!(bounded_skew_persistence_input(store, first_branch, first_fragment).is_some());
         assert!(
-            bounded_skew_persistence_input(first_branch, other_fragment).is_none(),
+            bounded_skew_persistence_input(store, first_branch, other_fragment).is_none(),
             "an end pair from another branch must not splice into this proof"
         );
 
@@ -426,15 +658,19 @@ mod tests {
             unreachable!()
         };
         endpoints.swap(0, 1);
-        assert!(bounded_skew_persistence_input(first_branch, &swapped_ends).is_none());
+        assert!(bounded_skew_persistence_input(store, first_branch, &swapped_ends).is_none());
 
         let mut mismatched_embedding = first_branch.clone();
         mismatched_embedding.skew_cylinder_embedding = other_branch.skew_cylinder_embedding.clone();
-        assert!(bounded_skew_persistence_input(&mismatched_embedding, first_fragment).is_none());
+        assert!(
+            bounded_skew_persistence_input(store, &mismatched_embedding, first_fragment).is_none()
+        );
 
         let mut mismatched_pcurves = first_branch.clone();
         mismatched_pcurves.pcurves.swap(0, 1);
-        assert!(bounded_skew_persistence_input(&mismatched_pcurves, first_fragment).is_none());
+        assert!(
+            bounded_skew_persistence_input(store, &mismatched_pcurves, first_fragment).is_none()
+        );
 
         let mut nonfinite_point = first_fragment.clone();
         let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = &mut nonfinite_point.span
@@ -447,7 +683,7 @@ mod tests {
             root.carrier_parameter(),
             Point3::new(f64::NAN, root.point().y, root.point().z),
         );
-        assert!(bounded_skew_persistence_input(first_branch, &nonfinite_point).is_none());
+        assert!(bounded_skew_persistence_input(store, first_branch, &nonfinite_point).is_none());
 
         let mut mismatched_trim = first_fragment.clone();
         let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = &mut mismatched_trim.span
@@ -456,6 +692,49 @@ mod tests {
         };
         let trim_operand = endpoints[0].trim.operand;
         endpoints[0].trim.face = first_branch.faces()[1 - trim_operand].clone();
-        assert!(bounded_skew_persistence_input(first_branch, &mismatched_trim).is_none());
+        assert!(bounded_skew_persistence_input(store, first_branch, &mismatched_trim).is_none());
+
+        let mut mismatched_bound = first_fragment.clone();
+        let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = &mut mismatched_bound.span
+        else {
+            unreachable!()
+        };
+        endpoints[0].trim.authored_bound = endpoints[0].trim.authored_bound.next_up();
+        assert!(bounded_skew_persistence_input(store, first_branch, &mismatched_bound).is_none());
+
+        let mut mismatched_boundary = first_fragment.clone();
+        let SectionCurveFragmentSpan::BoundedProcedural { endpoints } =
+            &mut mismatched_boundary.span
+        else {
+            unreachable!()
+        };
+        endpoints[0].trim.axial_boundary = match endpoints[0].trim.axial_boundary {
+            SectionSkewCylinderAxialBoundary::Lower => SectionSkewCylinderAxialBoundary::Upper,
+            SectionSkewCylinderAxialBoundary::Upper => SectionSkewCylinderAxialBoundary::Lower,
+        };
+        assert!(
+            bounded_skew_persistence_input(store, first_branch, &mismatched_boundary).is_none()
+        );
+
+        let mut mismatched_source = first_fragment.clone();
+        let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = &mut mismatched_source.span
+        else {
+            unreachable!()
+        };
+        endpoints[0].trim.operand = 1 - endpoints[0].trim.operand;
+        assert!(bounded_skew_persistence_input(store, first_branch, &mismatched_source).is_none());
+
+        let mut mismatched_projective_root = first_fragment.clone();
+        let SectionCurveFragmentSpan::BoundedProcedural { endpoints } =
+            &mut mismatched_projective_root.span
+        else {
+            unreachable!()
+        };
+        endpoints[0].trim.carrier_root.lo = endpoints[0].trim.carrier_root.lo.next_down();
+        assert!(
+            bounded_skew_persistence_input(store, first_branch, &mismatched_projective_root)
+                .is_none(),
+            "Section projective-root identity must match the sealed family member"
+        );
     }
 }

@@ -1,6 +1,3 @@
-use super::bounded_polynomial::{
-    ExactPolynomial, ExactScalar, RootBracket, RootIsolation, RootIsolationFailure,
-};
 use super::conic::{fit_periodic_parameter, polynomial_derivative, real_polynomial_roots};
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfacePoint, accept_curve_surface_candidate,
@@ -13,6 +10,9 @@ use kgeom::curve::Line;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Surface, Torus};
 use kgeom::vec::Vec3;
+use kgraph::exact::bounded_polynomial::{
+    ExactPolynomial, ExactScalar, RootBracket, RootIsolation, RootIsolationFailure,
+};
 
 const ROOT_TOPOLOGY_INDETERMINATE: &str = "line/torus quartic root topology could not be certified";
 

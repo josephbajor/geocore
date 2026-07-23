@@ -27,7 +27,7 @@ const EXACT_PRODUCT_MAX: f64 = f64::from_bits(((1023 + 400) as u64) << 52);
 /// A stable reason why exact construction or bounded isolation could not
 /// finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RootIsolationFailure {
+pub enum RootIsolationFailure {
     /// A source coefficient, scale, evaluation point, or range was non-finite.
     NonFiniteInput,
     /// The supplied polynomial exceeded the supported quartic degree.
@@ -54,41 +54,41 @@ pub(super) enum RootIsolationFailure {
 /// primitives intentionally assume that intermediate `f64` operations remain
 /// finite.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct ExactScalar {
+pub struct ExactScalar {
     components: Vec<f64>,
 }
 
 impl ExactScalar {
-    pub(super) fn from_f64(value: f64) -> Result<Self, RootIsolationFailure> {
+    pub fn from_f64(value: f64) -> Result<Self, RootIsolationFailure> {
         if !value.is_finite() {
             return Err(RootIsolationFailure::NonFiniteInput);
         }
         checked_components(vec![value])
     }
 
-    pub(super) fn zero() -> Self {
+    pub fn zero() -> Self {
         Self {
             components: vec![0.0],
         }
     }
 
-    pub(super) fn add(&self, rhs: &Self) -> Result<Self, RootIsolationFailure> {
+    pub fn add(&self, rhs: &Self) -> Result<Self, RootIsolationFailure> {
         checked_sum(&self.components, &rhs.components)
     }
 
-    pub(super) fn sub(&self, rhs: &Self) -> Result<Self, RootIsolationFailure> {
+    pub fn sub(&self, rhs: &Self) -> Result<Self, RootIsolationFailure> {
         let negated = checked_negate(&rhs.components)?;
         checked_sum(&self.components, &negated)
     }
 
-    pub(super) fn mul(&self, rhs: &Self) -> Result<Self, RootIsolationFailure> {
+    pub fn mul(&self, rhs: &Self) -> Result<Self, RootIsolationFailure> {
         if self.is_zero() || rhs.is_zero() {
             return Ok(Self::zero());
         }
         checked_mul(&self.components, &rhs.components)
     }
 
-    pub(super) fn scale(&self, factor: f64) -> Result<Self, RootIsolationFailure> {
+    pub fn scale(&self, factor: f64) -> Result<Self, RootIsolationFailure> {
         if !factor.is_finite() {
             return Err(RootIsolationFailure::NonFiniteInput);
         }
@@ -104,27 +104,27 @@ impl ExactScalar {
         checked_components(expansion::scale(&self.components, factor))
     }
 
-    pub(super) fn negate(&self) -> Result<Self, RootIsolationFailure> {
+    pub fn negate(&self) -> Result<Self, RootIsolationFailure> {
         checked_components(checked_negate(&self.components)?)
     }
 
-    pub(super) fn sign(&self) -> i8 {
+    pub fn sign(&self) -> i8 {
         expansion::sign(&self.components)
     }
 
-    pub(super) fn is_zero(&self) -> bool {
+    pub fn is_zero(&self) -> bool {
         self.sign() == 0
     }
 }
 
 /// Exact polynomial with coefficients in ascending power order.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct ExactPolynomial {
+pub struct ExactPolynomial {
     coefficients: Vec<ExactScalar>,
 }
 
 impl ExactPolynomial {
-    pub(super) fn new(coefficients: Vec<ExactScalar>) -> Result<Self, RootIsolationFailure> {
+    pub fn new(coefficients: Vec<ExactScalar>) -> Result<Self, RootIsolationFailure> {
         let polynomial = Self::from_coefficients_allow_zero(coefficients)?;
         if polynomial.is_zero() {
             Err(RootIsolationFailure::ZeroPolynomial)
@@ -133,7 +133,7 @@ impl ExactPolynomial {
         }
     }
 
-    pub(super) fn derivative(&self) -> Result<Self, RootIsolationFailure> {
+    pub fn derivative(&self) -> Result<Self, RootIsolationFailure> {
         if self.degree() == 0 {
             return Ok(Self::zero());
         }
@@ -149,7 +149,7 @@ impl ExactPolynomial {
     /// Repeated roots appear once.  Point brackets are produced for exactly
     /// representable roots; all other brackets are refined to adjacent `f64`
     /// values (or until the deterministic depth/work bound is exhausted).
-    pub(super) fn isolate(&self, lo: f64, hi: f64) -> RootIsolation {
+    pub fn isolate(&self, lo: f64, hi: f64) -> RootIsolation {
         match self.try_isolate(lo, hi) {
             Ok(roots) => RootIsolation::Complete(roots),
             Err(
@@ -169,7 +169,7 @@ impl ExactPolynomial {
     /// positive scaling of `gcd(P, P')`. A constant gcd proves that all roots
     /// are simple; otherwise its bounded roots are exactly the repeated roots
     /// of `P`.
-    pub(super) fn isolate_repeated_roots(&self, lo: f64, hi: f64) -> RootIsolation {
+    pub fn isolate_repeated_roots(&self, lo: f64, hi: f64) -> RootIsolation {
         if self.is_zero() {
             return RootIsolation::Ambiguous(RootIsolationFailure::ZeroPolynomial);
         }
@@ -200,7 +200,7 @@ impl ExactPolynomial {
     /// `RootBracket` endpoints are either the exact root itself or certified
     /// non-roots, so isolating `gcd(P, P')` over the same closed bracket cannot
     /// accidentally select a neighboring root at a shared numeric boundary.
-    pub(super) fn root_is_repeated(&self, root: RootBracket) -> Result<bool, RootIsolationFailure> {
+    pub fn root_is_repeated(&self, root: RootBracket) -> Result<bool, RootIsolationFailure> {
         if self.is_zero() {
             return Err(RootIsolationFailure::ZeroPolynomial);
         }
@@ -258,7 +258,7 @@ impl ExactPolynomial {
             .expect("a polynomial always has a coefficient")
     }
 
-    pub(super) fn evaluate(&self, parameter: f64) -> Result<ExactScalar, RootIsolationFailure> {
+    pub fn evaluate(&self, parameter: f64) -> Result<ExactScalar, RootIsolationFailure> {
         if !parameter.is_finite() {
             return Err(RootIsolationFailure::NonFiniteInput);
         }
@@ -269,7 +269,7 @@ impl ExactPolynomial {
         Ok(value)
     }
 
-    pub(super) fn side_sign(
+    pub fn side_sign(
         &self,
         parameter: f64,
         side: EndpointSide,
@@ -603,13 +603,13 @@ impl ExactPolynomial {
 
 /// A closed interval containing exactly one distinct root.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct RootBracket {
-    pub(super) lo: f64,
-    pub(super) hi: f64,
+pub struct RootBracket {
+    pub lo: f64,
+    pub hi: f64,
 }
 
 impl RootBracket {
-    pub(super) fn representative(self) -> f64 {
+    pub fn representative(self) -> f64 {
         if self.lo == self.hi {
             self.lo
         } else {
@@ -619,13 +619,13 @@ impl RootBracket {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum RootIsolation {
+pub enum RootIsolation {
     Complete(Vec<RootBracket>),
     Ambiguous(RootIsolationFailure),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EndpointSide {
+pub enum EndpointSide {
     Left,
     Right,
 }

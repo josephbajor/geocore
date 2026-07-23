@@ -7,7 +7,8 @@
 use kgraph::{
     IntersectionCertificateError, PairedCylinderCylinderRulingResidualCertificate,
     PairedPlaneCylinderCircleResidualCertificate, PairedPlaneCylinderRulingResidualCertificate,
-    PairedSkewCylinderBranchResidualCertificate, SkewCylinderBranchGuardedEnd,
+    PairedSkewCylinderBranchResidualCertificate,
+    PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate, SkewCylinderBranchGuardedEnd,
     SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveRootCorridorCertificate,
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
 };
@@ -24,6 +25,8 @@ use kgraph::{
 pub struct SkewCylinderOpenSpanBranchCertificate {
     residual: PairedSkewCylinderBranchResidualCertificate,
     root_corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+    finite_window_family_membership:
+        Option<PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate>,
 }
 
 impl SkewCylinderOpenSpanBranchCertificate {
@@ -55,7 +58,29 @@ impl SkewCylinderOpenSpanBranchCertificate {
         Ok(Self {
             residual,
             root_corridors,
+            finite_window_family_membership: None,
         })
+    }
+
+    pub(super) fn bind_finite_window_family(
+        mut self,
+        membership: PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    ) -> Result<Self, IntersectionCertificateError> {
+        let member = membership.member();
+        if member.sheet() != self.residual.sheet()
+            || member.guarded_range() != self.residual.carrier_range()
+            || member.root_parameter_enclosures()
+                != self
+                    .root_corridors
+                    .map(|corridor| corridor.root_parameter())
+            || member.residual_bounds()
+                != combined_residual_bounds(self.residual, self.root_corridors)
+            || member.tolerance().to_bits() != self.residual.tolerance().to_bits()
+        {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        self.finite_window_family_membership = Some(membership);
+        Ok(self)
     }
 
     /// Compact paired residual proof for the guarded open span.
@@ -68,6 +93,13 @@ impl SkewCylinderOpenSpanBranchCertificate {
         self.root_corridors
     }
 
+    /// Complete finite-window family and immutable member ordinal.
+    pub const fn finite_window_family_membership(
+        self,
+    ) -> Option<PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate> {
+        self.finite_window_family_membership
+    }
+
     /// Reissue one sealed guarded pcurve cell by its fixed partition index.
     pub fn certify_pcurve_cell(
         &self,
@@ -75,6 +107,20 @@ impl SkewCylinderOpenSpanBranchCertificate {
     ) -> Result<SkewCylinderBranchPcurveCellCertificate, IntersectionCertificateError> {
         self.residual.certify_pcurve_cell(index)
     }
+}
+
+fn combined_residual_bounds(
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    corridors: [SkewCylinderBranchPcurveRootCorridorCertificate; 2],
+) -> [f64; 2] {
+    let mut bounds = residual.residual_bounds();
+    for corridor in corridors {
+        for (bound, corridor_bound) in bounds.iter_mut().zip(corridor.corridor().residual_bounds())
+        {
+            *bound = bound.max(corridor_bound);
+        }
+    }
+    bounds
 }
 
 /// Active-range proof retained by one operation-local branch.

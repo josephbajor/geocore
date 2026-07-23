@@ -4,7 +4,8 @@ use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kgraph::{
     PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PersistentSkewCylinderOpenSpanCertificate,
-    PersistentSkewCylinderOpenSpanOrientation, certify_persistent_skew_cylinder_open_span,
+    PersistentSkewCylinderOpenSpanOrientation,
+    certify_persistent_skew_cylinder_open_span_in_family,
 };
 use ktopo::analytic_shell::{
     AnalyticEdgeKey, AnalyticPcurveUse, AnalyticShellSkewCylinderOpenSpan, AnalyticVertexKey,
@@ -12,6 +13,7 @@ use ktopo::analytic_shell::{
 use ktopo::entity::PcurveChart;
 
 use super::{MixedShellMaterializationError, PhysicalCarrier, PhysicalEdge, section_edge};
+use crate::SectionCurveFragmentSpan;
 use crate::boolean::mixed_shell_plan::{
     MixedPcurveLineage, MixedSectionEdgePlan, MixedShellProofPlan, MixedSourceFaceKey,
 };
@@ -83,16 +85,34 @@ pub(super) fn certify(
             MixedShellMaterializationError::PersistentSkewEndpointIdentityMismatch(fragment),
         );
     }
+    let canonical_slabs = input.endpoint_slabs();
+    let logical_slabs = if input.reversed() {
+        [canonical_slabs[1], canonical_slabs[0]]
+    } else {
+        canonical_slabs
+    };
+    let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = edge.fragment().span() else {
+        return Err(MixedShellMaterializationError::PersistentSkewEndpointSlabMismatch(fragment));
+    };
+    if endpoints.iter().zip(logical_slabs).any(|(endpoint, slab)| {
+        let trim = endpoint.trim();
+        trim.operand() != slab.source_operand()
+            || trim.axial_boundary() != slab.boundary()
+            || trim.authored_bound().to_bits() != slab.bound().to_bits()
+    }) {
+        return Err(MixedShellMaterializationError::PersistentSkewEndpointSlabMismatch(fragment));
+    }
     let orientation = if input.reversed() {
         PersistentSkewCylinderOpenSpanOrientation::Reversed
     } else {
         PersistentSkewCylinderOpenSpanOrientation::Forward
     };
-    let certificate = certify_persistent_skew_cylinder_open_span(
+    let certificate = certify_persistent_skew_cylinder_open_span_in_family(
         input.residual_certificate(),
         input.root_corridors(),
         input.physical_endpoint_points(),
         orientation,
+        input.family_membership(),
     )
     .map_err(MixedShellMaterializationError::PersistentSkewCertificate)?;
     if certificate.work() != PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
