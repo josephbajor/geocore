@@ -420,6 +420,133 @@ fn assert_upper_open_span_lifts(
     }
 }
 
+fn assert_four_upper_open_spans(
+    result: &kops::intersect::GraphSurfaceSurfaceIntersections,
+    sources: [kgraph::SurfaceHandle; 2],
+    source_cylinders: [Cylinder; 2],
+    boundary_surfaces: [bool; 2],
+) {
+    assert_eq!(result.branch_graph.source_surfaces, sources);
+    assert!(result.raw.is_complete(), "{:#?}", result.raw);
+    assert!(result.raw.points.is_empty());
+    assert!(result.raw.regions.is_empty());
+    assert!(result.raw.incomplete_evidence().is_empty());
+    assert_eq!(result.raw.curves.len(), 4);
+    assert_eq!(result.branch_graph.edges.len(), 4);
+    assert_eq!(result.branch_graph.vertices.len(), 8);
+
+    let mut endpoint_vertices = Vec::with_capacity(8);
+    for (ordinal, (raw_branch, edge)) in result
+        .raw
+        .curves
+        .iter()
+        .zip(&result.branch_graph.edges)
+        .enumerate()
+    {
+        let SurfaceIntersectionCurve::SkewCylinder(raw_carrier) = raw_branch.curve else {
+            panic!("bounded retained sheet must use the procedural skew carrier");
+        };
+        let CurveDescriptor::SkewCylinderBranch(carrier) = edge.carrier else {
+            panic!("verified bounded sheet must preserve the procedural carrier");
+        };
+        assert_eq!(carrier, raw_carrier);
+        assert_eq!(carrier.sheet(), SkewCylinderSheet::Upper);
+        assert_eq!(edge.source_surfaces, sources);
+        assert_eq!(edge.carrier_range, raw_branch.curve_range);
+        assert_eq!(edge.topology, IntersectionBranchTopology::Open);
+        assert!(0.0 < edge.carrier_range.lo);
+        assert!(edge.carrier_range.hi < core::f64::consts::TAU);
+        assert!(0.0 < edge.carrier_range.width());
+        if ordinal > 0 {
+            assert!(
+                result.branch_graph.edges[ordinal - 1].carrier_range.hi < edge.carrier_range.lo
+            );
+        }
+        assert_eq!(
+            edge.endpoint_events,
+            [IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
+                surfaces: boundary_surfaces,
+            }; 2]
+        );
+        endpoint_vertices.extend(edge.endpoint_vertices);
+
+        let certificate = edge
+            .certificate
+            .as_skew_cylinder_open_span()
+            .expect("each clipped branch must retain an independent subrange proof");
+        assert_eq!(certificate.carrier(), carrier);
+        assert_eq!(certificate.carrier_range(), edge.carrier_range);
+        assert_eq!(certificate.sheet(), SkewCylinderSheet::Upper);
+        assert_eq!(
+            certificate.traces().map(|trace| trace.surface()),
+            source_cylinders
+        );
+        let tolerance = certificate.tolerance();
+
+        for endpoint_slot in 0..2 {
+            let Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)) =
+                edge.endpoint_proofs[endpoint_slot]
+            else {
+                panic!("bounded skew endpoint must retain its exact axial root proof");
+            };
+            let vertex = &result.branch_graph.vertices[edge.endpoint_vertices[endpoint_slot]];
+            let inside_parameter = if endpoint_slot == 0 {
+                edge.carrier_range.lo
+            } else {
+                edge.carrier_range.hi
+            };
+            let lower_boundary = (ordinal + endpoint_slot) % 2 == 1;
+            assert_eq!(
+                proof.source_operand,
+                boundary_surfaces.iter().position(|flag| *flag).unwrap()
+            );
+            assert_eq!(proof.cyclic_ordinal, ordinal);
+            assert_eq!(proof.sheet, SkewCylinderSheet::Upper);
+            assert_eq!(
+                (proof.boundary, proof.bound),
+                if lower_boundary {
+                    (SkewCylinderAxialBoundaryProof::Lower, 1.8)
+                } else {
+                    (SkewCylinderAxialBoundaryProof::Upper, 1.9)
+                }
+            );
+            assert_eq!(proof.inside_parameter, inside_parameter);
+            assert_eq!(
+                proof.inside_side,
+                if endpoint_slot == 0 {
+                    SkewCylinderRootInsideSideProof::After
+                } else {
+                    SkewCylinderRootInsideSideProof::Before
+                }
+            );
+            assert_eq!(
+                if endpoint_slot == 0 {
+                    proof.after
+                } else {
+                    proof.before
+                },
+                if lower_boundary {
+                    SkewCylinderAxialRelationProof::Above
+                } else {
+                    SkewCylinderAxialRelationProof::Below
+                }
+            );
+            assert!(proof.half_angle_bracket.into_iter().all(f64::is_finite));
+            assert!(proof.half_angle_bracket[0] <= proof.half_angle_bracket[1]);
+            assert_eq!(
+                vertex.event,
+                IntersectionBranchVertexEvent::BoundaryEndpoint {
+                    surfaces: boundary_surfaces,
+                }
+            );
+            assert!(vertex.point.dist(carrier.eval(inside_parameter)) <= tolerance);
+        }
+    }
+    endpoint_vertices.sort_unstable();
+    endpoint_vertices.dedup();
+    assert_eq!(endpoint_vertices.len(), 8);
+}
+
 #[test]
 fn root_free_axial_windows_prove_empty_without_an_infinite_support_miss() {
     let cylinders = perpendicular_pair();
@@ -589,6 +716,73 @@ fn nonwrapping_axial_clip_publishes_one_open_upper_span_replay_and_swap_stably()
             reversed_edge.certificate.residual_bounds()[0],
         ]
     );
+}
+
+#[test]
+fn two_axial_bounds_publish_four_nonwrapping_upper_spans() {
+    let cylinders = perpendicular_pair();
+    let windows = [
+        cylinder_window(range(1.8, 1.9)),
+        cylinder_window(range(-1.25, 1.25)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+
+    let forward = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let replay = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[1],
+        windows[1],
+        handles[0],
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(forward, replay);
+    assert_four_upper_open_spans(&forward, handles, cylinders, [true, false]);
+    assert_four_upper_open_spans(
+        &reversed,
+        [handles[1], handles[0]],
+        [cylinders[1], cylinders[0]],
+        [false, true],
+    );
+    assert_eq!(reversed.raw, forward.raw.clone().swapped());
+
+    for (forward_edge, reversed_edge) in forward
+        .branch_graph
+        .edges
+        .iter()
+        .zip(&reversed.branch_graph.edges)
+    {
+        assert_eq!(forward_edge.carrier, reversed_edge.carrier);
+        assert_eq!(forward_edge.carrier_range, reversed_edge.carrier_range);
+        assert_eq!(forward_edge.pcurves[0], reversed_edge.pcurves[1]);
+        assert_eq!(forward_edge.pcurves[1], reversed_edge.pcurves[0]);
+        assert_eq!(
+            forward_edge.certificate.residual_bounds(),
+            [
+                reversed_edge.certificate.residual_bounds()[1],
+                reversed_edge.certificate.residual_bounds()[0],
+            ]
+        );
+    }
 }
 
 #[test]
@@ -799,5 +993,99 @@ fn open_span_certificate_work_has_exact_n_and_atomic_n_minus_one_boundary() {
         ),
         graph_counts,
         "N-1 refusal must leave the source graph untouched"
+    );
+}
+
+#[test]
+fn four_open_span_certificates_are_one_atomic_work_debit() {
+    let required_work = 4 * SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH;
+    let cylinders = perpendicular_pair();
+    let windows = [
+        cylinder_window(range(1.8, 1.9)),
+        cylinder_window(range(-1.25, 1.25)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+    let graph_counts = (
+        graph.surface_count(),
+        graph.curve_count(),
+        graph.curve2d_count(),
+    );
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+
+    let exact_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_OPEN_SPAN_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        required_work,
+    )])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &exact_context,
+    );
+    let exact_result = exact.result();
+    let exact_result = exact_result.as_ref().unwrap();
+    assert!(exact_result.raw.is_complete());
+    assert_eq!(exact_result.raw.curves.len(), 4);
+    assert_eq!(exact_result.branch_graph.edges.len(), 4);
+    assert_eq!(exact_result.branch_graph.vertices.len(), 8);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        required_work
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_OPEN_SPAN_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        required_work - 1,
+    )])
+    .unwrap();
+    let denied_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(denied_plan);
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: required_work,
+        allowed: required_work - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0,
+        "the rejected four-branch debit must not consume a prefix"
+    );
+    assert_eq!(
+        (
+            graph.surface_count(),
+            graph.curve_count(),
+            graph.curve2d_count(),
+        ),
+        graph_counts,
+        "N-1 refusal must not publish a prefix or mutate the source graph"
     );
 }

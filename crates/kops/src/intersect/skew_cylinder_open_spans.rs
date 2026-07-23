@@ -22,9 +22,10 @@ use super::skew_cylinder_axial_roots::{
 };
 
 const TAU: f64 = core::f64::consts::TAU;
-// Deterministic interval-rounding headroom. The merged-corridor checks below
-// still refuse any authored chart where these steps could cross another root.
-const ENDPOINT_GUARD_STEPS: usize = kgraph::SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS;
+// Deterministic interval-rounding headroom for both the stored and exact-source
+// residual enclosures. The merged-corridor checks below still refuse any
+// authored chart where these steps could cross another root.
+const ENDPOINT_GUARD_STEPS: usize = 2 * kgraph::SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS;
 
 /// Four exact bound topologies and the authored windows they must describe.
 ///
@@ -737,6 +738,51 @@ mod tests {
         assert!(!span.start.root.repeated && !span.end.root.repeated);
         assert_ne!(span.start.root.before, span.start.root.after);
         assert_ne!(span.end.root.before, span.end.root.after);
+    }
+
+    #[test]
+    fn two_active_axial_windows_have_four_upper_nonwrapping_spans() {
+        let cylinders = perpendicular_pair(0.0);
+        let ranges = [
+            [ParamRange::new(0.0, TAU), ParamRange::new(1.8, 1.9)],
+            [ParamRange::new(0.0, TAU), ParamRange::new(-1.25, 1.25)],
+        ];
+        let mut source = topologies(cylinders, ranges);
+        let result = classify(&source, ranges).unwrap();
+        source.reverse();
+        assert_eq!(classify(&source, ranges).unwrap(), result);
+
+        assert_eq!(result[0], SkewCylinderFiniteSheetTopology::Outside);
+        let SkewCylinderFiniteSheetTopology::Open(spans) = &result[1] else {
+            panic!("{result:?}");
+        };
+        assert_eq!(spans.len(), 4);
+        for (ordinal, span) in spans.iter().enumerate() {
+            assert_eq!(span.sheet, SkewCylinderSheet::Upper);
+            assert!(0.0 < span.range.lo && span.range.hi < TAU);
+            assert!(0.0 < span.range.width() && span.range.width() < TAU);
+            assert_eq!(span.start.root.cyclic_ordinal, ordinal);
+            assert_eq!(span.end.root.cyclic_ordinal, ordinal);
+            assert_eq!(
+                span.start.root.provenance.source_operand,
+                span.end.root.provenance.source_operand
+            );
+            assert_eq!(span.start.root.provenance.source_operand, 0);
+            assert_ne!(
+                span.start.root.provenance.boundary,
+                span.end.root.provenance.boundary
+            );
+            assert_eq!(span.start.carrier_parameter, span.range.lo);
+            assert_eq!(span.end.carrier_parameter, span.range.hi);
+            assert_eq!(span.start.inside_side, SkewCylinderRootInsideSide::After);
+            assert_eq!(span.end.inside_side, SkewCylinderRootInsideSide::Before);
+            assert!(!span.start.root.repeated && !span.end.root.repeated);
+            assert_ne!(span.start.root.before, span.start.root.after);
+            assert_ne!(span.end.root.before, span.end.root.after);
+        }
+        for pair in spans.windows(2) {
+            assert!(pair[0].range.hi < pair[1].range.lo);
+        }
     }
 
     #[test]
