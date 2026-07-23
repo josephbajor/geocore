@@ -42,6 +42,8 @@ mod curved_source;
 #[allow(dead_code)]
 mod curved_support_separation;
 #[allow(dead_code)]
+mod cylinder_pair_boundary;
+#[allow(dead_code)]
 mod disk_face_arrangement;
 #[allow(dead_code)]
 mod dispatch;
