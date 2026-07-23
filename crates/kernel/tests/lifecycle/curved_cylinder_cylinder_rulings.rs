@@ -1370,7 +1370,7 @@ fn bounded_skew_section_work_accepts_n_and_refuses_n_minus_one_atomically() {
         .find(|usage| usage.stage == SECTION_WORK && usage.resource == ResourceKind::Work)
         .expect("bounded-skew Section must retain exact work usage");
     assert_eq!(
-        usage.consumed, 65_731,
+        usage.consumed, 67_811,
         "bounded-skew Section work drifted from its exact facade frontier"
     );
 

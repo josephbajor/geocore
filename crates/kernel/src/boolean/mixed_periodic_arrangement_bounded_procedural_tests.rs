@@ -110,24 +110,59 @@ fn face_local_path_discovery_retains_a_bounded_procedural_fragment() {
 }
 
 #[test]
-fn uncertified_procedural_embeddings_still_fail_closed() {
+fn bounded_procedural_embeddings_are_certified_and_arrangeable() {
     for swapped in [false, true] {
         let graph = bounded_skew_graph(swapped);
         assert_eq!(graph.completion(), SectionCompletion::Complete);
         assert_eq!(graph.periodic_face_embeddings().len(), 2);
         for evidence in graph.periodic_face_embeddings() {
-            let gap = evidence
-                .gap()
-                .expect("Section has not yet certified nonlinear periodic embedding")
-                .clone();
-            assert!(matches!(
-                &gap,
-                SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve { .. }
-            ));
-            assert_eq!(
-                arrange_mixed_periodic_face(&graph, evidence.face(), evidence.operand()),
-                Err(MixedPeriodicArrangementError::EmbeddingIndeterminate(gap))
-            );
+            let SectionPeriodicFaceEmbeddingEvidence::Certified(certified) = evidence else {
+                panic!(
+                    "bounded procedural cylinder side must retain certified embedding evidence: {:?}",
+                    evidence.gap()
+                )
+            };
+            let embedded = certified
+                .components()
+                .iter()
+                .flat_map(|component| component.fragments())
+                .chain(
+                    certified
+                        .boundary_traces()
+                        .iter()
+                        .flat_map(|trace| trace.fragments()),
+                )
+                .collect::<Vec<_>>();
+            let procedural = embedded
+                .iter()
+                .filter(|embedded| {
+                    matches!(
+                        graph.curve_fragments()[embedded.fragment()].span(),
+                        SectionCurveFragmentSpan::BoundedProcedural { .. }
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(procedural.len(), 4);
+            for embedded in procedural {
+                let endpoints = fragment_endpoints(
+                    embedded.fragment(),
+                    &graph.curve_fragments()[embedded.fragment()],
+                )
+                .unwrap();
+                assert_eq!(
+                    [
+                        embedded.trim_scalars()[0].endpoint(),
+                        embedded.trim_scalars()[1].endpoint(),
+                    ],
+                    endpoints
+                );
+            }
+            let arrangement =
+                arrange_mixed_periodic_face(&graph, evidence.face(), evidence.operand())
+                    .expect("certified nonlinear embedding must satisfy the arrangement adapter");
+            let replay = arrange_mixed_periodic_face(&graph, evidence.face(), evidence.operand())
+                .expect("certified nonlinear arrangement must replay");
+            assert_eq!(arrangement, replay);
         }
     }
 }

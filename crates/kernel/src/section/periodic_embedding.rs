@@ -21,6 +21,23 @@ use super::{
 use crate::error::{Error, Result as KernelResult};
 use crate::{BodySectionGraph, FaceId, LoopId, PartId, Point3};
 
+#[path = "periodic_embedding/procedural.rs"]
+mod procedural;
+#[cfg(test)]
+#[path = "periodic_embedding/procedural_tests.rs"]
+mod procedural_tests;
+#[cfg(test)]
+#[path = "periodic_embedding/test_support.rs"]
+mod test_support;
+#[path = "periodic_embedding/work.rs"]
+mod work;
+#[cfg(test)]
+use test_support::certify_component_separation;
+pub(crate) use work::periodic_face_fragment_subset_work;
+use work::{bounded_procedural_face_uses, charge_pair_candidates};
+#[cfg(test)]
+use work::{periodic_embedding_work, periodic_pair_candidate_work, unordered_pairs};
+
 const PERIOD: f64 = core::f64::consts::TAU;
 
 /// Outward enclosure of one cylinder surface parameter.
@@ -445,6 +462,22 @@ pub enum SectionPeriodicEmbeddingGap {
         /// Graph fragment index.
         fragment: usize,
     },
+    /// A bounded procedural fragment lost its sealed Section-oriented proof.
+    ProceduralPcurveEvidenceUnavailable {
+        /// Graph fragment index.
+        fragment: usize,
+    },
+    /// Indexed cells or root corridors did not form one complete proof path.
+    ProceduralPcurveEvidenceMalformed {
+        /// Graph fragment index.
+        fragment: usize,
+    },
+    /// No fixed derivative coordinate retained one strict sign over the
+    /// complete physical-root-to-physical-root fragment.
+    ProceduralPcurveMonotonicityIndeterminate {
+        /// Graph fragment index.
+        fragment: usize,
+    },
     /// Shared endpoint intervals do not select one unique chart lift.
     EndpointChartMismatch {
         /// Graph component index.
@@ -544,6 +577,7 @@ struct LiftedFragment {
     pcurve: SectionUvLine,
     parameters: [Interval; 2],
     representatives: [f64; 2],
+    procedural: Option<procedural::ProceduralFragmentProof>,
 }
 
 #[derive(Clone, Copy)]
@@ -569,7 +603,14 @@ struct PendingBoundaryTrace {
     trace: usize,
     component_ordinals: Vec<usize>,
     fragments: Vec<SectionPeriodicFragmentEmbedding>,
+    lifted: Vec<LiftedFragment>,
     terminals: [PendingBoundaryRoot; 2],
+}
+
+#[derive(Clone)]
+struct PendingComponent {
+    embedding: SectionPeriodicComponentEmbedding,
+    lifted: Vec<LiftedFragment>,
 }
 
 struct UnstitchedFragmentPaths {
@@ -619,7 +660,15 @@ pub(super) fn certify_periodic_faces(
             }
         }
     }
-    if !charge_pair_candidates(fragments.len(), components.len(), faces.len(), scope)? {
+    let procedural_face_uses =
+        bounded_procedural_face_uses(branches, fragments, &faces).unwrap_or(usize::MAX);
+    if !charge_pair_candidates(
+        fragments.len(),
+        components.len(),
+        faces.len(),
+        procedural_face_uses,
+        scope,
+    )? {
         return Ok(faces
             .into_iter()
             .map(
@@ -651,69 +700,6 @@ pub(super) fn certify_periodic_faces(
             },
         )
         .collect())
-}
-
-/// Precharge the geometry-independent ceiling for all pairwise simplicity
-/// and separation candidates. Every published fragment participates,
-/// including bounded fragments retained outside the globally certified
-/// components. Every unordered fragment pair is owned exactly once by a
-/// simplicity or separation proof. Closed-component bounds add one candidate
-/// per unordered component pair. Multiplication by the discovered
-/// periodic-face count covers each face-local embedding attempt without
-/// depending on an early geometric exit.
-fn charge_pair_candidates(
-    fragment_count: usize,
-    component_count: usize,
-    periodic_faces: usize,
-    scope: &mut OperationScope<'_, '_>,
-) -> KernelResult<bool> {
-    let Some(amount) =
-        periodic_pair_candidate_work(fragment_count, component_count, periodic_faces)
-    else {
-        return Ok(false);
-    };
-    scope
-        .ledger_mut()
-        .charge(SECTION_WORK, amount)
-        .map_err(Error::from)?;
-    Ok(true)
-}
-
-fn periodic_pair_candidate_work(
-    fragment_count: usize,
-    component_count: usize,
-    periodic_faces: usize,
-) -> Option<u64> {
-    let fragment_uses = u64::try_from(fragment_count).ok()?;
-    let component_count = u64::try_from(component_count).ok()?;
-    let face_count = u64::try_from(periodic_faces).ok()?;
-    unordered_pairs(fragment_uses)?
-        .checked_add(unordered_pairs(component_count)?)?
-        .checked_mul(face_count)
-}
-
-fn unordered_pairs(count: u64) -> Option<u64> {
-    if count < 2 {
-        return Some(0);
-    }
-    let predecessor = count.checked_sub(1)?;
-    let (left, right) = if count.is_multiple_of(2) {
-        (count / 2, predecessor)
-    } else {
-        (count, predecessor / 2)
-    };
-    left.checked_mul(right)
-}
-
-/// Exact operation-local work ceiling for recertifying one face-local
-/// fragment subset. Two units own the topology-backed source rings, one unit
-/// owns each selected fragment, and every unordered fragment pair is examined
-/// once by the simplicity/separation proofs.
-pub(crate) fn periodic_face_fragment_subset_work(fragment_count: usize) -> Option<u64> {
-    let fragments = u64::try_from(fragment_count).ok()?;
-    2_u64
-        .checked_add(fragments)?
-        .checked_add(unordered_pairs(fragments)?)
 }
 
 /// Re-run the ordinary periodic-face theorem over an operation-owned subset
@@ -750,6 +736,14 @@ pub(crate) fn certify_periodic_face_fragment_subset(
                 fragment: fragment_index,
             },
         )?;
+        if matches!(
+            fragment.span(),
+            SectionCurveFragmentSpan::BoundedProcedural { .. }
+        ) {
+            return Err(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve {
+                fragment: fragment_index,
+            });
+        }
         let branch = graph.branches().get(fragment.branch()).ok_or(
             SectionPeriodicEmbeddingGap::UnstitchedFragmentPath {
                 fragment: fragment_index,
@@ -814,14 +808,18 @@ fn certify_face(
     let annulus = source_annulus::certify_source_annulus_topology(store, &face, linear)
         .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
     let rings = annulus.face_order();
-    let (certified, pending_traces) = certify_face_paths(
+    let (pending_components, pending_traces) = certify_face_paths(
         branches, endpoints, fragments, components, operand, &face, rings,
     )?;
-    certify_component_separation(&certified)?;
+    certify_pending_component_separation(&pending_components)?;
     certify_trace_separation(&pending_traces)?;
-    certify_trace_component_separation(&certified, &pending_traces)?;
+    certify_trace_component_separation(&pending_components, &pending_traces)?;
     let (source_loop_roots, boundary_traces) =
         finish_boundary_traces(endpoints, operand, rings, pending_traces)?;
+    let certified = pending_components
+        .into_iter()
+        .map(|component| component.embedding)
+        .collect();
     Ok(CertifiedSectionPeriodicFaceEmbedding {
         operand,
         face,
@@ -844,13 +842,7 @@ fn certify_face_paths(
     operand: usize,
     face: &FaceId,
     rings: &[CertifiedSourceRing; 2],
-) -> Result<
-    (
-        Vec<SectionPeriodicComponentEmbedding>,
-        Vec<PendingBoundaryTrace>,
-    ),
-    SectionPeriodicEmbeddingGap,
-> {
+) -> Result<(Vec<PendingComponent>, Vec<PendingBoundaryTrace>), SectionPeriodicEmbeddingGap> {
     let mut certified = Vec::new();
     let mut pending_traces = Vec::new();
     let unstitched = collect_unstitched_fragment_paths(fragments, components, endpoints.len());
@@ -1052,7 +1044,7 @@ fn certify_component(
     component_index: usize,
     component: &SectionCurveComponent,
     operand: usize,
-) -> Result<SectionPeriodicComponentEmbedding, SectionPeriodicEmbeddingGap> {
+) -> Result<PendingComponent, SectionPeriodicEmbeddingGap> {
     let mut lifted = lift_fragment_path(
         branches,
         fragments,
@@ -1082,12 +1074,15 @@ fn certify_component(
     certify_simple_cycle(component_index, &lifted)?;
     let orientation = cycle_orientation(component_index, &lifted)?;
     let public_fragments = publish_lifted_fragments(&lifted)?;
-    Ok(SectionPeriodicComponentEmbedding {
-        component: component_index,
-        fragments: public_fragments,
-        winding,
-        orientation,
-        parent: None,
+    Ok(PendingComponent {
+        embedding: SectionPeriodicComponentEmbedding {
+            component: component_index,
+            fragments: public_fragments,
+            winding,
+            orientation,
+            parent: None,
+        },
+        lifted,
     })
 }
 
@@ -1197,11 +1192,12 @@ fn certify_boundary_trace_fragments(
                 fragment: fragment_index,
                 end: terminal_ordinal,
             })?;
-        let scalar = if end == 0 {
-            &public_fragments[0].trim_scalars[0]
+        let embedded = if end == 0 {
+            &public_fragments[0]
         } else {
-            &public_fragments[public_fragments.len() - 1].trim_scalars[1]
+            &public_fragments[public_fragments.len() - 1]
         };
+        let scalar = &embedded.trim_scalars[end];
         if scalar.endpoint != endpoint {
             return Err(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
                 component: trace_group,
@@ -1223,7 +1219,7 @@ fn certify_boundary_trace_fragments(
             endpoint,
             ring_ordinal,
             source_parameter,
-            scalar.lifted_uv.map(public_uv_interval),
+            embedded.endpoints[end].map(public_uv_interval),
             &rings[ring_ordinal],
         )?);
     }
@@ -1238,6 +1234,7 @@ fn certify_boundary_trace_fragments(
         trace,
         component_ordinals,
         fragments: public_fragments,
+        lifted,
         terminals: [start, end],
     })
 }
@@ -1260,7 +1257,12 @@ fn fragment_terminal(
             let trim = endpoint.trims().get(operand)?.as_ref()?;
             Some((endpoint.endpoint(), trim.loop_id(), trim.source_parameter()))
         }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
+        SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
+            let endpoint = endpoints.get(end)?;
+            let trim = endpoint.trim();
+            (trim.operand() == operand)
+                .then(|| (endpoint.endpoint(), trim.loop_id(), trim.source_parameter()))
+        }
     }
 }
 
@@ -1352,6 +1354,40 @@ fn lift_fragment_path(
                 fragment: fragment_index,
             },
         )?;
+        if matches!(
+            fragment.span(),
+            SectionCurveFragmentSpan::BoundedProcedural { .. }
+        ) {
+            let proof = procedural::ProceduralFragmentProof::certify(
+                fragment_index,
+                fragment,
+                branch,
+                operand,
+            )?;
+            let endpoint_ids = proof.endpoint_ids();
+            let physical_uv = proof.physical_uv();
+            let endpoints = core::array::from_fn(|end| EndpointBox {
+                endpoint: endpoint_ids[end],
+                uv: physical_uv[end],
+            });
+            let representatives = proof.guarded_parameters();
+            lifted.push(LiftedFragment {
+                fragment: fragment_index,
+                endpoints,
+                shift: 0,
+                direction: [0.0; 2],
+                origin: endpoints[0].uv,
+                carrier: branch.carrier(),
+                pcurve: SectionUvLine {
+                    origin: crate::Point2::new(0.0, 0.0),
+                    direction: crate::Point2::new(0.0, 0.0),
+                },
+                parameters: representatives.map(Interval::point),
+                representatives,
+                procedural: Some(proof),
+            });
+            continue;
+        }
         let SectionUvCurve::Line(pcurve) = branch.pcurves()[operand] else {
             return Err(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve {
                 fragment: fragment_index,
@@ -1385,6 +1421,7 @@ fn lift_fragment_path(
             pcurve,
             parameters,
             representatives,
+            procedural: None,
         });
     }
     if lifted.is_empty() {
@@ -1412,7 +1449,11 @@ fn align_fragment_path(
                 component: component_index,
             },
         )?;
-        shift_fragment(&mut lifted[index], shift);
+        if !shift_fragment(&mut lifted[index], shift) {
+            return Err(SectionPeriodicEmbeddingGap::EndpointChartMismatch {
+                component: component_index,
+            });
+        }
     }
     Ok(())
 }
@@ -1443,13 +1484,20 @@ fn fragment_endpoint_representatives(fragment: &SectionCurveFragment) -> Option<
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
         }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
+        SectionCurveFragmentSpan::BoundedProcedural { endpoints } => Some(
+            endpoints
+                .each_ref()
+                .map(|end| end.inside_carrier_parameter()),
+        ),
     }
 }
 
 fn certify_fragment_trim_scalars(
     fragment: &LiftedFragment,
 ) -> Result<[SectionCarrierTrimScalarEvidence; 2], SectionPeriodicEmbeddingGap> {
+    if let Some(proof) = &fragment.procedural {
+        return proof.trim_scalars();
+    }
     Ok([
         certify_trim_scalar(fragment, 0)?,
         certify_trim_scalar(fragment, 1)?,
@@ -1541,7 +1589,9 @@ fn fragment_endpoint_ids(fragment: &SectionCurveFragment) -> Option<[usize; 2]> 
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|end| end.endpoint()))
         }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
+        SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
+            Some(endpoints.each_ref().map(|end| end.endpoint()))
+        }
     }
 }
 
@@ -1677,13 +1727,24 @@ fn unique_period_shift(target: Interval, source: Interval) -> Option<i64> {
         .then_some(shift)
 }
 
-fn shift_fragment(fragment: &mut LiftedFragment, shift: i64) {
-    let delta = integer_period_interval(shift).expect("certified period shift stays in range");
+fn shift_fragment(fragment: &mut LiftedFragment, shift: i64) -> bool {
+    let Some(delta) = integer_period_interval(shift) else {
+        return false;
+    };
+    let Some(total_shift) = fragment.shift.checked_add(shift) else {
+        return false;
+    };
+    if let Some(proof) = &mut fragment.procedural
+        && !proof.shift(shift)
+    {
+        return false;
+    }
     for endpoint in &mut fragment.endpoints {
         endpoint.uv[0] = endpoint.uv[0] + delta;
     }
     fragment.origin[0] = fragment.origin[0] + delta;
-    fragment.shift += shift;
+    fragment.shift = total_shift;
+    true
 }
 
 fn valid_unique_integer(lower: f64, upper: f64) -> bool {
@@ -1712,6 +1773,22 @@ fn strictly_disjoint(first: Bounds2, second: Bounds2) -> bool {
         || second.v.hi() < first.v.lo()
 }
 
+fn lifted_fragments_strictly_disjoint(
+    first: &LiftedFragment,
+    second: &LiftedFragment,
+    periodic: bool,
+) -> bool {
+    match (&first.procedural, &second.procedural) {
+        (Some(left), Some(right)) => left.strictly_disjoint(right, periodic),
+        (Some(left), None) => left.strictly_disjoint_line(fragment_bounds(second), periodic),
+        (None, Some(right)) => right.strictly_disjoint_line(fragment_bounds(first), periodic),
+        (None, None) if periodic => {
+            periodically_strictly_disjoint(fragment_bounds(first), fragment_bounds(second))
+        }
+        (None, None) => strictly_disjoint(fragment_bounds(first), fragment_bounds(second)),
+    }
+}
+
 fn certify_simple_cycle(
     component: usize,
     fragments: &[LiftedFragment],
@@ -1720,22 +1797,16 @@ fn certify_simple_cycle(
         for second in (first + 1)..fragments.len() {
             let adjacent = second == first + 1 || (first == 0 && second + 1 == fragments.len());
             if adjacent {
-                let (left_end, right_start) = if second == first + 1 {
-                    (
-                        fragments[first].endpoints[1],
-                        fragments[second].endpoints[0],
-                    )
+                let (left, right) = if second == first + 1 {
+                    (&fragments[first], &fragments[second])
                 } else {
-                    (
-                        fragments[second].endpoints[1],
-                        fragments[first].endpoints[0],
-                    )
+                    (&fragments[second], &fragments[first])
                 };
                 if !carriers_cross_at_shared_endpoint(
-                    &fragments[first],
-                    &fragments[second],
-                    left_end,
-                    right_start,
+                    left,
+                    right,
+                    left.endpoints[1],
+                    right.endpoints[0],
                 ) {
                     return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired {
                         component,
@@ -1743,10 +1814,7 @@ fn certify_simple_cycle(
                 }
                 continue;
             }
-            if !strictly_disjoint(
-                fragment_bounds(&fragments[first]),
-                fragment_bounds(&fragments[second]),
-            ) {
+            if !lifted_fragments_strictly_disjoint(&fragments[first], &fragments[second], false) {
                 return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired {
                     component,
                 });
@@ -1760,14 +1828,19 @@ fn certify_simple_path(
     component: usize,
     fragments: &[LiftedFragment],
 ) -> Result<(), SectionPeriodicEmbeddingGap> {
-    let mut bounds = fragment_bounds(&fragments[0]);
-    for fragment in &fragments[1..] {
-        let next = fragment_bounds(fragment);
-        bounds.u = hull(bounds.u, next.u);
-        bounds.v = hull(bounds.v, next.v);
-    }
-    if bounds.u.width() >= PERIOD {
-        return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired { component });
+    if fragments
+        .iter()
+        .all(|fragment| fragment.procedural.is_none())
+    {
+        let mut bounds = fragment_bounds(&fragments[0]);
+        for fragment in &fragments[1..] {
+            let next = fragment_bounds(fragment);
+            bounds.u = hull(bounds.u, next.u);
+            bounds.v = hull(bounds.v, next.v);
+        }
+        if bounds.u.width() >= PERIOD {
+            return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired { component });
+        }
     }
     for first in 0..fragments.len() {
         for second in (first + 1)..fragments.len() {
@@ -1782,9 +1855,10 @@ fn certify_simple_path(
                         component,
                     });
                 }
-            } else if !strictly_disjoint(
-                fragment_bounds(&fragments[first]),
-                fragment_bounds(&fragments[second]),
+            } else if !lifted_fragments_strictly_disjoint(
+                &fragments[first],
+                &fragments[second],
+                false,
             ) {
                 return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired {
                     component,
@@ -1803,6 +1877,29 @@ fn carriers_cross_at_shared_endpoint(
 ) -> bool {
     if first_endpoint.endpoint != second_endpoint.endpoint {
         return false;
+    }
+    if first.procedural.is_some() || second.procedural.is_some() {
+        let globally_unique = match (&first.procedural, &second.procedural) {
+            (Some(left), Some(right)) => left.certifies_forward_join(right),
+            (Some(left), None) => left.certifies_unique_line_intersection(second.direction),
+            (None, Some(right)) => right.certifies_unique_line_intersection(first.direction),
+            (None, None) => unreachable!("guarded by nonlinear participation"),
+        };
+        if !globally_unique {
+            return false;
+        }
+        let Some(first_direction) = endpoint_direction(first, 1) else {
+            return false;
+        };
+        let Some(second_direction) = endpoint_direction(second, 0) else {
+            return false;
+        };
+        // Nonlinear/nonlinear uniqueness uses the common strict coordinate;
+        // nonlinear/line uniqueness uses a strict complete-domain line-
+        // equation derivative. The determinant separately proves exact
+        // transversality at the topology-owned shared root.
+        return !cross2(first_direction, second_direction).contains_zero()
+            && (0..2).all(|axis| first_endpoint.uv[axis].intersects(second_endpoint.uv[axis]));
     }
     let first_direction = first.direction.map(Interval::point);
     let second_direction = second.direction.map(Interval::point);
@@ -1845,6 +1942,13 @@ fn carriers_cross_at_shared_endpoint(
     })
 }
 
+fn endpoint_direction(fragment: &LiftedFragment, end: usize) -> Option<[Interval; 2]> {
+    match &fragment.procedural {
+        Some(proof) => proof.endpoint_derivative(end),
+        None => Some(fragment.direction.map(Interval::point)),
+    }
+}
+
 fn cross2(first: [Interval; 2], second: [Interval; 2]) -> Interval {
     first[0] * second[1] - first[1] * second[0]
 }
@@ -1855,8 +1959,15 @@ fn cycle_orientation(
 ) -> Result<SectionPeriodicCycleOrientation, SectionPeriodicEmbeddingGap> {
     let mut twice_area = Interval::point(0.0);
     for fragment in fragments {
-        let [start, end] = fragment.endpoints;
-        twice_area = twice_area + start.uv[0] * end.uv[1] - start.uv[1] * end.uv[0];
+        if let Some(proof) = &fragment.procedural {
+            twice_area = twice_area
+                + proof
+                    .orientation_integral()
+                    .ok_or(SectionPeriodicEmbeddingGap::OrientationIndeterminate { component })?;
+        } else {
+            let [start, end] = fragment.endpoints;
+            twice_area = twice_area + start.uv[0] * end.uv[1] - start.uv[1] * end.uv[0];
+        }
     }
     if twice_area.lo() > 0.0 {
         Ok(SectionPeriodicCycleOrientation::Counterclockwise)
@@ -1867,97 +1978,92 @@ fn cycle_orientation(
     }
 }
 
-fn component_bounds(component: &SectionPeriodicComponentEmbedding) -> Bounds2 {
-    let mut fragments = component.fragments.iter();
-    let first = fragments.next().expect("certified component is nonempty");
-    let mut bounds = public_fragment_bounds(first);
-    for fragment in fragments {
-        let next = public_fragment_bounds(fragment);
-        bounds.u = hull(bounds.u, next.u);
-        bounds.v = hull(bounds.v, next.v);
-    }
-    bounds
-}
-
-fn public_fragment_bounds(fragment: &SectionPeriodicFragmentEmbedding) -> Bounds2 {
-    let endpoints = fragment.endpoints();
-    let start_u = Interval::new(endpoints[0][0].lo(), endpoints[0][0].hi());
-    let end_u = Interval::new(endpoints[1][0].lo(), endpoints[1][0].hi());
-    let start_v = Interval::new(endpoints[0][1].lo(), endpoints[0][1].hi());
-    let end_v = Interval::new(endpoints[1][1].lo(), endpoints[1][1].hi());
-    Bounds2 {
-        u: hull(start_u, end_u),
-        v: hull(start_v, end_v),
-    }
-}
-
 fn hull(first: Interval, second: Interval) -> Interval {
     Interval::new(first.lo().min(second.lo()), first.hi().max(second.hi()))
 }
 
-fn certify_component_separation(
-    components: &[SectionPeriodicComponentEmbedding],
+fn lifted_fragment_ordered_before(
+    first: &LiftedFragment,
+    second: &LiftedFragment,
+    axis: usize,
+) -> bool {
+    match (&first.procedural, &second.procedural) {
+        (Some(left), Some(right)) => left.ordered_before(right, axis),
+        (Some(left), None) => left.ordered_before_line(fragment_bounds(second), axis),
+        (None, Some(right)) => right.ordered_after_line(fragment_bounds(first), axis),
+        (None, None) => {
+            let first = if axis == 0 {
+                fragment_bounds(first).u
+            } else {
+                fragment_bounds(first).v
+            };
+            let second = if axis == 0 {
+                fragment_bounds(second).u
+            } else {
+                fragment_bounds(second).v
+            };
+            first.hi() < second.lo()
+        }
+    }
+}
+
+fn lifted_paths_uniformly_ordered(first: &[LiftedFragment], second: &[LiftedFragment]) -> bool {
+    (0..2).any(|axis| {
+        first.iter().all(|left| {
+            second
+                .iter()
+                .all(|right| lifted_fragment_ordered_before(left, right, axis))
+        }) || second.iter().all(|right| {
+            first
+                .iter()
+                .all(|left| lifted_fragment_ordered_before(right, left, axis))
+        })
+    })
+}
+
+fn lifted_paths_disjoint(
+    first: &[LiftedFragment],
+    second: &[LiftedFragment],
+    periodic: bool,
+) -> bool {
+    first.iter().all(|left| {
+        second
+            .iter()
+            .all(|right| lifted_fragments_strictly_disjoint(left, right, periodic))
+    })
+}
+
+fn certify_pending_component_separation(
+    components: &[PendingComponent],
 ) -> Result<(), SectionPeriodicEmbeddingGap> {
     for first in 0..components.len() {
         for second in (first + 1)..components.len() {
-            let first_bounds = component_bounds(&components[first]);
-            let second_bounds = component_bounds(&components[second]);
-            if strictly_disjoint(first_bounds, second_bounds) {
-                continue;
+            if !lifted_paths_disjoint(&components[first].lifted, &components[second].lifted, false)
+            {
+                return Err(
+                    SectionPeriodicEmbeddingGap::ComponentIntersectionProofRequired {
+                        first: components[first].embedding.component,
+                        second: components[second].embedding.component,
+                    },
+                );
             }
-            for left in &components[first].fragments {
-                for right in &components[second].fragments {
-                    if !strictly_disjoint(
-                        public_fragment_bounds(left),
-                        public_fragment_bounds(right),
-                    ) {
-                        return Err(
-                            SectionPeriodicEmbeddingGap::ComponentIntersectionProofRequired {
-                                first: components[first].component,
-                                second: components[second].component,
-                            },
-                        );
-                    }
-                }
+            // A fixed strict coordinate ordering across every proof cell
+            // excludes both intersection and nesting without collapsing a
+            // nonlinear path into an aggregate AABB.
+            if !lifted_paths_uniformly_ordered(
+                &components[first].lifted,
+                &components[second].lifted,
+            ) {
+                return Err(
+                    SectionPeriodicEmbeddingGap::ContainmentClassificationRequired {
+                        first: components[first].embedding.component,
+                        second: components[second].embedding.component,
+                    },
+                );
             }
-            return Err(
-                SectionPeriodicEmbeddingGap::ContainmentClassificationRequired {
-                    first: components[first].component,
-                    second: components[second].component,
-                },
-            );
         }
     }
     Ok(())
-}
-
-fn public_path_bounds(fragments: &[SectionPeriodicFragmentEmbedding]) -> Bounds2 {
-    let mut iter = fragments.iter();
-    let first = iter.next().expect("certified path is nonempty");
-    let mut bounds = public_fragment_bounds(first);
-    for fragment in iter {
-        let next = public_fragment_bounds(fragment);
-        bounds.u = hull(bounds.u, next.u);
-        bounds.v = hull(bounds.v, next.v);
-    }
-    bounds
-}
-
-fn public_paths_periodically_disjoint(
-    first: &[SectionPeriodicFragmentEmbedding],
-    second: &[SectionPeriodicFragmentEmbedding],
-) -> bool {
-    if periodically_strictly_disjoint(public_path_bounds(first), public_path_bounds(second)) {
-        return true;
-    }
-    first.iter().all(|left| {
-        second.iter().all(|right| {
-            periodically_strictly_disjoint(
-                public_fragment_bounds(left),
-                public_fragment_bounds(right),
-            )
-        })
-    })
 }
 
 fn periodically_strictly_disjoint(first: Bounds2, second: Bounds2) -> bool {
@@ -1977,10 +2083,7 @@ fn certify_trace_separation(
 ) -> Result<(), SectionPeriodicEmbeddingGap> {
     for first in 0..traces.len() {
         for second in (first + 1)..traces.len() {
-            if !public_paths_periodically_disjoint(
-                &traces[first].fragments,
-                &traces[second].fragments,
-            ) {
+            if !lifted_paths_disjoint(&traces[first].lifted, &traces[second].lifted, true) {
                 return Err(
                     SectionPeriodicEmbeddingGap::BoundaryTraceIntersectionProofRequired {
                         first_component: traces[first].trace_group,
@@ -1996,15 +2099,15 @@ fn certify_trace_separation(
 }
 
 fn certify_trace_component_separation(
-    components: &[SectionPeriodicComponentEmbedding],
+    components: &[PendingComponent],
     traces: &[PendingBoundaryTrace],
 ) -> Result<(), SectionPeriodicEmbeddingGap> {
     for component in components {
         for trace in traces {
-            if !public_paths_periodically_disjoint(&component.fragments, &trace.fragments) {
+            if !lifted_paths_disjoint(&component.lifted, &trace.lifted, true) {
                 return Err(
                     SectionPeriodicEmbeddingGap::ComponentTraceIntersectionProofRequired {
-                        component: component.component,
+                        component: component.embedding.component,
                         trace_component: trace.trace_group,
                         trace: trace.trace,
                     },
@@ -2385,6 +2488,7 @@ mod tests {
             pcurve,
             parameters,
             representatives,
+            procedural: None,
         }
     }
 
@@ -2499,6 +2603,7 @@ mod tests {
             pcurve,
             parameters,
             representatives: [representative, representative],
+            procedural: None,
         };
         let evidence = certify_fragment_trim_scalars(&fragment).unwrap();
         assert_eq!(evidence[1].carrier_parameter().to_bits(), lifted.to_bits());
@@ -2578,11 +2683,20 @@ mod tests {
         // Three globally unstitched fragments still own all three unordered
         // simplicity/separation candidates on each attempted periodic face.
         assert_eq!(periodic_pair_candidate_work(3, 0, 2), Some(6));
+        assert_eq!(
+            periodic_embedding_work(8, 2, 2, 8),
+            periodic_pair_candidate_work(8, 2, 2)
+                .and_then(|base| base.checked_add(8 * procedural::FRAGMENT_WORK))
+        );
+        assert_eq!(
+            periodic_embedding_work(usize::MAX, usize::MAX, usize::MAX, usize::MAX),
+            None
+        );
         assert_eq!(unordered_pairs(u64::MAX), None);
 
         let policy = SessionPolicy::v1();
         let tolerances = Tolerances::default();
-        let run = |allowed| {
+        let run = |allowed, procedural_face_uses| {
             let overrides = BudgetPlan::new([LimitSpec::new(
                 SECTION_WORK,
                 ResourceKind::Work,
@@ -2595,15 +2709,25 @@ mod tests {
                 .with_family_budget_defaults(super::super::BodySectionBudgetProfile::v1_defaults())
                 .with_budget_overrides(overrides);
             let mut scope = OperationScope::new(&context);
-            charge_pair_candidates(fragment_count, components.len(), 1, &mut scope)
+            charge_pair_candidates(
+                fragment_count,
+                components.len(),
+                1,
+                procedural_face_uses,
+                &mut scope,
+            )
         };
-        assert!(run(exact).unwrap());
-        let error = run(exact - 1).unwrap_err();
+        assert!(run(exact, 0).unwrap());
+        let error = run(exact - 1, 0).unwrap_err();
         let crossing = error.limit().expect("N-1 must retain limit evidence");
         assert_eq!(crossing.stage, SECTION_WORK);
         assert_eq!(crossing.resource, ResourceKind::Work);
         assert_eq!(crossing.consumed, exact);
         assert_eq!(crossing.allowed, exact - 1);
+        let procedural_exact = exact + 2 * procedural::FRAGMENT_WORK;
+        assert!(run(procedural_exact, 2).unwrap());
+        let error = run(procedural_exact - 1, 2).unwrap_err();
+        assert_eq!(error.limit().unwrap().consumed, procedural_exact);
     }
 
     #[test]
@@ -2633,6 +2757,7 @@ mod tests {
             },
             parameters: [Interval::point(0.0), Interval::point(1.0)],
             representatives: [0.0, 1.0],
+            procedural: None,
         };
         let crossing = vec![
             fragment(0, [0.0, 0.0], [2.0, 2.0]),
@@ -2673,6 +2798,7 @@ mod tests {
             },
             parameters: [Interval::point(0.0), Interval::point(1.0)],
             representatives: [0.0, 1.0],
+            procedural: None,
         };
         let overlapping = vec![
             fragment(0, [0.0, 0.0], [2.0, 0.0]),
