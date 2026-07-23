@@ -83,6 +83,8 @@ impl SkewCylinderBranchPcurveEnclosure {
 pub struct SkewCylinderBranchPcurveCellCertificate {
     parameter: Interval,
     pcurves: [SkewCylinderBranchPcurveEnclosure; 2],
+    carrier_box: Aabb3,
+    residual_bounds: [f64; 2],
 }
 
 impl SkewCylinderBranchPcurveCellCertificate {
@@ -94,6 +96,16 @@ impl SkewCylinderBranchPcurveCellCertificate {
     /// Pcurve enclosures in the certificate's current trace order.
     pub const fn pcurves(self) -> [SkewCylinderBranchPcurveEnclosure; 2] {
         self.pcurves
+    }
+
+    /// Conservative model-space carrier box over this complete interval.
+    pub const fn carrier_box(self) -> Aabb3 {
+        self.carrier_box
+    }
+
+    /// Paired model-space residual bounds in current trace order.
+    pub const fn residual_bounds(self) -> [f64; 2] {
+        self.residual_bounds
     }
 
     /// Fixed caller work debit for this cell.
@@ -234,6 +246,8 @@ struct RootJetIntervals {
 struct PcurvePairIntervals {
     canonical: SkewCylinderBranchPcurveEnclosure,
     opposite: SkewCylinderBranchPcurveEnclosure,
+    carrier_box: Aabb3,
+    residual_bounds: [f64; 2],
 }
 
 fn certify_interval(
@@ -254,7 +268,15 @@ fn certify_interval(
     let pcurves = certificate
         .traces
         .map(|trace| canonical[trace.pcurve.operand as usize]);
-    Ok(SkewCylinderBranchPcurveCellCertificate { parameter, pcurves })
+    let residual_bounds = certificate
+        .traces
+        .map(|trace| pair.residual_bounds[trace.pcurve.operand as usize]);
+    Ok(SkewCylinderBranchPcurveCellCertificate {
+        parameter,
+        pcurves,
+        carrier_box: pair.carrier_box,
+        residual_bounds,
+    })
 }
 
 fn enclose_pair(
@@ -354,9 +376,125 @@ fn enclose_pair(
             "skew Cylinder/Cylinder pcurve cell has no strict source/evaluator first-derivative margin",
         ));
     }
+    let (carrier_box, residual_bounds) = certify_pair_metric_proof(
+        certificate,
+        algebra,
+        coefficients,
+        roots,
+        stored_root,
+        source_root,
+        stored_dual,
+        canonical,
+        opposite,
+        cosine,
+        sine,
+    )?;
     Ok(PcurvePairIntervals {
         canonical,
         opposite,
+        carrier_box,
+        residual_bounds,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_pair_metric_proof(
+    certificate: &PairedSkewCylinderBranchResidualCertificate,
+    algebra: BranchAlgebra,
+    coefficients: CoefficientProof,
+    roots: CellRootEnclosures,
+    stored_root: RootJetIntervals,
+    source_root: RootJetIntervals,
+    stored_dual: [[Interval; 2]; 3],
+    canonical: SkewCylinderBranchPcurveEnclosure,
+    opposite: SkewCylinderBranchPcurveEnclosure,
+    cosine: Interval,
+    sine: Interval,
+) -> Result<(Aabb3, [f64; 2]), IntersectionCertificateError> {
+    let carrier_box = canonical_carrier_box(algebra, cosine, sine, stored_root.value)?;
+    let stored_separation = finite_interval(
+        (Interval::point(2.0) * roots.stored_h)
+            .checked_div(Interval::point(algebra.a))
+            .ok_or(IntersectionCertificateError::NonFiniteGeometry)?,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    let exact_separation = finite_interval(
+        (Interval::point(2.0) * roots.exact_h)
+            .checked_div(coefficients.a_true)
+            .ok_or(IntersectionCertificateError::NonFiniteGeometry)?,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    let proof = SheetProof {
+        carrier_box,
+        pcurve_boxes: [
+            pcurve_box(canonical.stored_uv),
+            pcurve_box(opposite.stored_uv),
+        ],
+        longitude_offset: algebra.longitude_offset,
+        radicand_lower: roots.stored_radicand.lo().min(roots.exact_radicand.lo()),
+        sheet_separation_lower: stored_separation.lo().min(exact_separation.lo()).max(0.0),
+        max_v: max_abs(stored_root.value),
+        max_x: max_abs(stored_dual[0][0]),
+        max_y: max_abs(stored_dual[1][0]),
+        max_z: max_abs(stored_dual[2][0]),
+        max_intermediate: [
+            max_abs(roots.stored_m),
+            max_abs(roots.stored_l),
+            max_abs(roots.stored_h),
+            max_abs(roots.exact_h),
+            max_abs(stored_root.value),
+            max_abs(source_root.value),
+            max_abs(stored_dual[0][0]),
+            max_abs(stored_dual[1][0]),
+            max_abs(stored_dual[2][0]),
+        ]
+        .into_iter()
+        .fold(1.0, f64::max),
+    };
+    let second_residual = paired_residual_bound(algebra, proof).ok_or(
+        IntersectionCertificateError::NonFiniteResidualBound {
+            trace: PairedTrace::Second,
+        },
+    )?;
+    if second_residual > certificate.tolerance {
+        return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+            trace: PairedTrace::Second,
+            residual_bound: second_residual,
+            tolerance: certificate.tolerance,
+        });
+    }
+    Ok((carrier_box, [0.0, second_residual]))
+}
+
+fn pcurve_box(uv: [Interval; 2]) -> Aabb2 {
+    Aabb2 {
+        min: Vec2::new(uv[0].lo(), uv[1].lo()),
+        max: Vec2::new(uv[0].hi(), uv[1].hi()),
+    }
+}
+
+fn canonical_carrier_box(
+    algebra: BranchAlgebra,
+    cosine: Interval,
+    sine: Interval,
+    height: Interval,
+) -> Result<Aabb3, IntersectionCertificateError> {
+    let cylinder = algebra.cylinders[0];
+    let frame = cylinder.frame();
+    let coordinates = [0, 1, 2].map(|axis| {
+        finite_interval(
+            Interval::point(frame.origin().to_array()[axis])
+                + Interval::point(cylinder.radius() * frame.x().to_array()[axis]) * cosine
+                + Interval::point(cylinder.radius() * frame.y().to_array()[axis]) * sine
+                + Interval::point(frame.z().to_array()[axis]) * height,
+        )
+    });
+    let [Some(x), Some(y), Some(z)] = coordinates else {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    };
+    Ok(Aabb3 {
+        min: Vec3::new(x.lo(), y.lo(), z.lo()),
+        max: Vec3::new(x.hi(), y.hi(), z.hi()),
     })
 }
 

@@ -12,7 +12,10 @@ use crate::intersection::{
     TransmittedNurbsIntersectionCurveDescriptor, VerifiedIntersectionCurveDescriptor,
     VerifiedNurbsIntersectionCurveDescriptor,
 };
-use crate::{SkewCylinderBranchCarrier, SkewCylinderBranchPcurve};
+use crate::{
+    PersistentSkewCylinderOpenSpanPcurve, SkewCylinderBranchCarrier, SkewCylinderBranchPcurve,
+    VerifiedSkewCylinderOpenSpanCurveDescriptor,
+};
 
 /// Constant signed displacement along a basis surface's natural unit normal.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +68,8 @@ pub enum CurveDescriptor {
     TransmittedIntersection(Box<TransmittedIntersectionCurveDescriptor>),
     /// Verified chordal chart with original NURBS traces retained from interchange.
     TransmittedNurbsIntersection(Box<TransmittedNurbsIntersectionCurveDescriptor>),
+    /// Persistent normalized composite of one bounded skew Cylinder/Cylinder span.
+    PersistentSkewCylinderOpenSpan(Box<VerifiedSkewCylinderOpenSpanCurveDescriptor>),
     /// Operation-local certified procedural skew Cylinder/Cylinder sheet.
     SkewCylinderBranch(SkewCylinderBranchCarrier),
 }
@@ -86,6 +91,7 @@ impl CurveDescriptor {
             Self::VerifiedNurbsIntersection(value) => value.as_ref(),
             Self::TransmittedIntersection(value) => value.as_ref(),
             Self::TransmittedNurbsIntersection(value) => value.as_ref(),
+            Self::PersistentSkewCylinderOpenSpan(value) => value.as_ref(),
             Self::SkewCylinderBranch(value) => value,
         }
     }
@@ -101,6 +107,7 @@ impl CurveDescriptor {
             Self::VerifiedNurbsIntersection(_) => CurveClass::Intersection,
             Self::TransmittedIntersection(_) => CurveClass::Intersection,
             Self::TransmittedNurbsIntersection(_) => CurveClass::Intersection,
+            Self::PersistentSkewCylinderOpenSpan(_) => CurveClass::Intersection,
             Self::SkewCylinderBranch(_) => CurveClass::Intersection,
         }
     }
@@ -186,6 +193,17 @@ impl CurveDescriptor {
         }
     }
 
+    /// Borrow as a persistent normalized skew-cylinder open span.
+    pub fn as_persistent_skew_cylinder_open_span(
+        &self,
+    ) -> Option<&VerifiedSkewCylinderOpenSpanCurveDescriptor> {
+        if let Self::PersistentSkewCylinderOpenSpan(value) = self {
+            Some(value.as_ref())
+        } else {
+            None
+        }
+    }
+
     /// Borrow this descriptor as a verified transmitted original-NURBS chart.
     pub fn as_transmitted_nurbs_intersection(
         &self,
@@ -206,6 +224,7 @@ impl CurveDescriptor {
                 | Self::VerifiedNurbsIntersection(_)
                 | Self::TransmittedIntersection(_)
                 | Self::TransmittedNurbsIntersection(_)
+                | Self::PersistentSkewCylinderOpenSpan(_)
         )
     }
 }
@@ -403,6 +422,8 @@ pub enum Curve2dDescriptor {
     Nurbs(NurbsCurve2d),
     /// Finite certifier-minted inverse sphere chart of a spatial circle.
     SphericalCircle(SphericalCirclePcurve),
+    /// Persistent normalized composite chart of a bounded skew-cylinder span.
+    PersistentSkewCylinderOpenSpan(Box<PersistentSkewCylinderOpenSpanPcurve>),
     /// Operation-local certified procedural skew Cylinder/Cylinder sheet chart.
     SkewCylinderBranch(SkewCylinderBranchPcurve),
 }
@@ -420,6 +441,7 @@ impl Curve2dDescriptor {
             Self::Circle(value) => value,
             Self::Nurbs(value) => value,
             Self::SphericalCircle(value) => value,
+            Self::PersistentSkewCylinderOpenSpan(value) => value.as_ref(),
             Self::SkewCylinderBranch(value) => value,
         }
     }
@@ -431,6 +453,7 @@ impl Curve2dDescriptor {
             Self::Circle(_) => Curve2dClass::Circle,
             Self::Nurbs(_) => Curve2dClass::Nurbs,
             Self::SphericalCircle(_) => Curve2dClass::SphericalCircle,
+            Self::PersistentSkewCylinderOpenSpan(_) => Curve2dClass::PersistentSkewCylinderOpenSpan,
             Self::SkewCylinderBranch(_) => Curve2dClass::SkewCylinderBranch,
         }
     }
@@ -480,6 +503,17 @@ impl Curve2dDescriptor {
             None
         }
     }
+
+    /// Borrow as a persistent normalized skew-cylinder open-span chart.
+    pub fn as_persistent_skew_cylinder_open_span(
+        &self,
+    ) -> Option<&PersistentSkewCylinderOpenSpanPcurve> {
+        if let Self::PersistentSkewCylinderOpenSpan(value) = self {
+            Some(value.as_ref())
+        } else {
+            None
+        }
+    }
 }
 
 impl From<Line2d> for Curve2dDescriptor {
@@ -502,6 +536,11 @@ impl From<SkewCylinderBranchPcurve> for Curve2dDescriptor {
         Self::SkewCylinderBranch(value)
     }
 }
+impl From<PersistentSkewCylinderOpenSpanPcurve> for Curve2dDescriptor {
+    fn from(value: PersistentSkewCylinderOpenSpanPcurve) -> Self {
+        Self::PersistentSkewCylinderOpenSpan(Box::new(value))
+    }
+}
 
 /// Deterministic dependency inspection implemented by every descriptor.
 pub trait GeometryDependencies {
@@ -520,6 +559,9 @@ impl GeometryDependencies for CurveDescriptor {
                 intersection.visit_dependencies(visit);
             }
             Self::TransmittedNurbsIntersection(intersection) => {
+                intersection.visit_dependencies(visit);
+            }
+            Self::PersistentSkewCylinderOpenSpan(intersection) => {
                 intersection.visit_dependencies(visit);
             }
             _ => {}

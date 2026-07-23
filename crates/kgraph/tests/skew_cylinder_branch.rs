@@ -1,6 +1,8 @@
 //! Contract tests for certified procedural skew-cylinder sheet carriers.
 
+use kcore::interval::Interval;
 use kcore::math;
+use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::curve2d::Curve2d;
 use kgeom::frame::Frame;
@@ -8,10 +10,13 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Vec2, Vec3};
 use kgraph::{
-    Curve2dDescriptor, CurveDescriptor, GeometryGraph, GeometryGraphError,
-    IntersectionCertificateError, SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderSheet,
-    certify_paired_skew_cylinder_branch_residuals,
+    Curve2dDescriptor, CurveDescriptor, EvalContext, EvalError, EvalLimits, GeometryGraph,
+    GeometryGraphError, GeometryRef, IntersectionCertificateError,
+    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PersistentSkewCylinderOpenSpanCertificate,
+    PersistentSkewCylinderOpenSpanOrientation, SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS,
+    SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
+    certify_persistent_skew_cylinder_open_span,
 };
 
 const TAU: f64 = core::f64::consts::TAU;
@@ -32,6 +37,276 @@ fn fixture() -> ([Cylinder; 2], [[ParamRange; 2]; 2]) {
             [ParamRange::new(0.0, TAU), ParamRange::new(-2.0, 2.0)],
         ],
     )
+}
+
+fn persistent_fixture(
+    orientation: PersistentSkewCylinderOpenSpanOrientation,
+) -> ([Cylinder; 2], PersistentSkewCylinderOpenSpanCertificate) {
+    let (cylinders, mut ranges) = fixture();
+    ranges[0][1] = ParamRange::new(1.8, 2.1);
+    ranges[1][1] = ParamRange::new(-1.25, 0.0);
+    let roots = [2.082_769_014_844_373_6, 4.200_416_292_335_213];
+    let mut guarded = ParamRange::new(roots[0], roots[1]);
+    for _ in 0..SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS {
+        guarded.lo = guarded.lo.next_up();
+        guarded.hi = guarded.hi.next_down();
+    }
+    let residual = certify_paired_skew_cylinder_branch_subrange_residuals(
+        cylinders,
+        ranges,
+        guarded,
+        SkewCylinderSheet::Upper,
+        1e-8,
+    )
+    .unwrap();
+    let root_intervals = roots.map(|root| Interval::new(root.next_down(), root.next_up()));
+    let corridors = [
+        residual
+            .certify_lower_pcurve_root_corridor(root_intervals[0])
+            .unwrap(),
+        residual
+            .certify_upper_pcurve_root_corridor(root_intervals[1])
+            .unwrap(),
+    ];
+    let endpoint_points = roots.map(|parameter| {
+        let (sine, cosine) = math::sincos(parameter);
+        Vec3::new(cosine, sine, (4.0 - sine * sine).sqrt())
+    });
+    let certificate = certify_persistent_skew_cylinder_open_span(
+        residual,
+        corridors,
+        endpoint_points,
+        orientation,
+    )
+    .unwrap();
+    (cylinders, certificate)
+}
+
+#[test]
+fn persistent_open_span_normalizes_corridors_without_inventing_root_scalars() {
+    let (cylinders, forward) =
+        persistent_fixture(PersistentSkewCylinderOpenSpanOrientation::Forward);
+    let (_, reversed) = persistent_fixture(PersistentSkewCylinderOpenSpanOrientation::Reversed);
+    let logical = ParamRange::new(0.0, 1.0);
+
+    assert_eq!(forward.logical_range(), logical);
+    assert_eq!(forward.carrier().param_range(), logical);
+    assert_eq!(forward.carrier().periodicity(), None);
+    assert_eq!(forward.work(), PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK);
+    assert_eq!(forward.work(), 260);
+    assert_eq!(
+        reversed.endpoint_points(),
+        [forward.endpoint_points()[1], forward.endpoint_points()[0]]
+    );
+    assert_eq!(forward.carrier().eval(0.0), reversed.carrier().eval(1.0));
+    assert_eq!(forward.carrier().eval(1.0), reversed.carrier().eval(0.0));
+    assert!(
+        forward.carrier().eval_derivs(0.37, 1).d[0]
+            .dist(reversed.carrier().eval_derivs(0.63, 1).d[0])
+            < 2e-14
+    );
+    assert!(
+        (forward.carrier().eval_derivs(0.37, 1).d[1]
+            + reversed.carrier().eval_derivs(0.63, 1).d[1])
+            .norm()
+            < 2e-12
+    );
+
+    let guarded = forward.residual_certificate().carrier_range();
+    assert!(forward.pcurves()[0].eval(0.0).x < guarded.lo);
+    assert!(forward.pcurves()[0].eval(1.0).x > guarded.hi);
+    assert!(
+        forward
+            .residual_bounds()
+            .into_iter()
+            .all(|bound| bound <= forward.required_edge_tolerance())
+    );
+    assert!(forward.required_edge_tolerance() <= forward.residual_certificate().tolerance());
+
+    for endpoint in 0..2 {
+        let logical_parameter = endpoint as f64;
+        let root = forward.root_corridors()[endpoint];
+        let carrier_point = forward.carrier().eval(logical_parameter);
+        assert!(
+            forward
+                .carrier()
+                .bounding_box(logical)
+                .contains(carrier_point)
+        );
+        for (trace_index, ((trace, pcurve), enclosure)) in forward
+            .residual_certificate()
+            .traces()
+            .into_iter()
+            .zip(forward.pcurves())
+            .zip(root.root_pcurves())
+            .enumerate()
+        {
+            let uv = pcurve.eval(logical_parameter);
+            assert!(enclosure.stored_uv()[0].contains(uv.x));
+            assert!(enclosure.stored_uv()[1].contains(uv.y));
+            assert!(pcurve.bounding_box(logical).contains(uv));
+            let reconstructed = trace.surface().eval([uv.x, uv.y]);
+            assert!(reconstructed.dist(carrier_point) <= forward.residual_bounds()[trace_index]);
+            assert!(
+                reconstructed.dist(forward.endpoint_points()[endpoint])
+                    <= forward.required_edge_tolerance()
+            );
+        }
+    }
+
+    assert_eq!(
+        forward
+            .residual_certificate()
+            .traces()
+            .map(|trace| trace.surface()),
+        cylinders
+    );
+
+    let canonical_points = forward.endpoint_points();
+    let far_points = [
+        canonical_points[0] + Vec3::new(1.0, 0.0, 0.0),
+        canonical_points[1],
+    ];
+    assert!(matches!(
+        certify_persistent_skew_cylinder_open_span(
+            forward.residual_certificate(),
+            forward.root_corridors(),
+            far_points,
+            PersistentSkewCylinderOpenSpanOrientation::Forward,
+        ),
+        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+    ));
+
+    let swapped_residual = forward.residual_certificate().swapped();
+    let roots = forward
+        .root_corridors()
+        .map(|corridor| corridor.root_parameter());
+    let mixed_corridors = [
+        swapped_residual
+            .certify_lower_pcurve_root_corridor(roots[0])
+            .unwrap(),
+        swapped_residual
+            .certify_upper_pcurve_root_corridor(roots[1])
+            .unwrap(),
+    ];
+    assert_eq!(
+        certify_persistent_skew_cylinder_open_span(
+            forward.residual_certificate(),
+            mixed_corridors,
+            canonical_points,
+            PersistentSkewCylinderOpenSpanOrientation::Forward,
+        ),
+        Err(IntersectionCertificateError::InvalidTraceFamily)
+    );
+}
+
+#[test]
+fn persistent_open_span_graph_binding_is_ordered_atomic_and_protected() {
+    let (cylinders, certificate) =
+        persistent_fixture(PersistentSkewCylinderOpenSpanOrientation::Forward);
+    let mut graph = GeometryGraph::new();
+    let sources = [
+        graph.insert_surface(cylinders[0]).unwrap(),
+        graph.insert_surface(cylinders[1]).unwrap(),
+    ];
+    let pcurve_values = certificate.pcurves();
+    let pcurves = [
+        graph.insert_curve2d(pcurve_values[0]).unwrap(),
+        graph.insert_curve2d(pcurve_values[1]).unwrap(),
+    ];
+    let curve_count = graph.curve_count();
+    let altered_source = graph
+        .insert_surface(Cylinder::new(Frame::world(), 1.125).unwrap())
+        .unwrap();
+
+    assert!(matches!(
+        graph.insert_verified_skew_cylinder_open_span_curve(
+            [sources[1], sources[0]],
+            pcurves,
+            certificate,
+        ),
+        Err(GeometryGraphError::InvalidDescriptor { .. })
+    ));
+    assert!(matches!(
+        graph.insert_verified_skew_cylinder_open_span_curve(
+            [altered_source, sources[1]],
+            pcurves,
+            certificate,
+        ),
+        Err(GeometryGraphError::InvalidDescriptor { .. })
+    ));
+    assert!(matches!(
+        graph.insert_verified_skew_cylinder_open_span_curve(
+            sources,
+            [pcurves[1], pcurves[0]],
+            certificate,
+        ),
+        Err(GeometryGraphError::InvalidDescriptor { .. })
+    ));
+    let stale = graph.insert_curve2d(pcurve_values[0]).unwrap();
+    graph.remove_curve2d(stale).unwrap();
+    assert!(matches!(
+        graph.insert_verified_skew_cylinder_open_span_curve(
+            sources,
+            [stale, pcurves[1]],
+            certificate,
+        ),
+        Err(GeometryGraphError::StaleGeometryHandle { .. })
+    ));
+    assert_eq!(graph.curve_count(), curve_count);
+
+    let curve = graph
+        .insert_verified_skew_cylinder_open_span_curve(sources, pcurves, certificate)
+        .unwrap();
+    assert_eq!(
+        graph
+            .direct_dependencies(GeometryRef::Curve(curve))
+            .unwrap(),
+        vec![
+            GeometryRef::Surface(sources[0]),
+            GeometryRef::Surface(sources[1]),
+            GeometryRef::Curve2d(pcurves[0]),
+            GeometryRef::Curve2d(pcurves[1]),
+        ]
+    );
+    let descriptor = graph
+        .curve(curve)
+        .unwrap()
+        .as_persistent_skew_cylinder_open_span()
+        .copied()
+        .unwrap();
+    assert_eq!(descriptor.source_surfaces(), sources);
+    assert_eq!(descriptor.pcurves(), pcurves);
+    assert_eq!(descriptor.certificate(), certificate);
+
+    let mut eval = EvalContext::new(&graph, EvalLimits::default(), Tolerances::default());
+    assert_eq!(eval.curve_param_range(curve), Ok(ParamRange::new(0.0, 1.0)));
+    assert_eq!(
+        eval.eval_curve(curve, 1.01, 0),
+        Err(EvalError::ParameterOutsideDomain)
+    );
+    for parameter in [0.0, 0.31, 1.0] {
+        assert_eq!(
+            eval.eval_curve(curve, parameter, 1).unwrap(),
+            certificate.carrier().eval_derivs(parameter, 1)
+        );
+    }
+    let dependent = vec![GeometryRef::Curve(curve)];
+    assert_eq!(
+        graph.replace_surface(sources[0], cylinders[0]),
+        Err(GeometryGraphError::HasDependents {
+            geometry: GeometryRef::Surface(sources[0]),
+            dependents: dependent.clone(),
+        })
+    );
+    assert_eq!(
+        graph.replace_curve2d(pcurves[0], pcurve_values[0]),
+        Err(GeometryGraphError::HasDependents {
+            geometry: GeometryRef::Curve2d(pcurves[0]),
+            dependents: dependent,
+        })
+    );
+    graph.validate().unwrap();
 }
 
 #[test]

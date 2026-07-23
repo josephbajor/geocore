@@ -41,6 +41,15 @@ pub use cells::{
     SkewCylinderBranchPcurveRootCorridorCertificate,
 };
 
+#[path = "skew_cylinder_branch_persistent.rs"]
+mod persistent;
+pub use persistent::{
+    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PersistentSkewCylinderOpenSpanCarrier,
+    PersistentSkewCylinderOpenSpanCertificate, PersistentSkewCylinderOpenSpanOrientation,
+    PersistentSkewCylinderOpenSpanPcurve, VerifiedSkewCylinderOpenSpanCurveDescriptor,
+    certify_persistent_skew_cylinder_open_span,
+};
+
 #[cfg(test)]
 #[path = "skew_cylinder_branch_tests.rs"]
 mod tests;
@@ -170,6 +179,10 @@ impl BranchAlgebra {
 
     fn carrier_derivs(self, parameter: f64, order: usize) -> CurveDerivs {
         let parameter = self.parameter(parameter);
+        self.authored_carrier_derivs(parameter, order)
+    }
+
+    fn authored_carrier_derivs(self, parameter: f64, order: usize) -> CurveDerivs {
         let v = self.v_jet(parameter);
         let cylinder = self.cylinders[0];
         let frame = cylinder.frame();
@@ -195,6 +208,10 @@ impl BranchAlgebra {
 
     fn pcurve_derivs(self, operand: usize, parameter: f64, order: usize) -> Curve2dDerivs {
         let parameter = self.bounded_parameter(parameter);
+        self.authored_pcurve_derivs(operand, parameter, order)
+    }
+
+    fn authored_pcurve_derivs(self, operand: usize, parameter: f64, order: usize) -> Curve2dDerivs {
         let mut result = Curve2dDerivs::default();
         if operand == 0 {
             let v = self.v_jet(parameter);

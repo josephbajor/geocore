@@ -398,6 +398,17 @@ impl SectionSkewCylinderEmbeddingCertificate {
         self.reversed
     }
 
+    /// Borrow the graph-owned open-span proof inside the Section boundary.
+    ///
+    /// Persistence consumers outside `section` receive only the validated
+    /// bundle minted by `bounded_skew_persistence_input`; this accessor remains
+    /// restricted to sibling Section adapters so raw branch and endpoint
+    /// evidence cannot be assembled independently.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) const fn source_certificate(&self) -> SkewCylinderOpenSpanBranchCertificate {
+        self.source
+    }
+
     /// Number of fixed indexed guarded cells.
     pub const fn guarded_cell_count(&self) -> usize {
         SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS

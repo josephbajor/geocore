@@ -88,12 +88,16 @@ pub use plane_cylinder_ruling::{
     PlaneRulingTrace, certify_paired_plane_cylinder_ruling_residuals,
 };
 pub use skew_cylinder_branch::{
-    PairedSkewCylinderBranchResidualCertificate, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
-    SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK, SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK,
-    SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK, SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS,
-    SkewCylinderBranchCarrier, SkewCylinderBranchGuardedEnd, SkewCylinderBranchPcurve,
-    SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveEnclosure,
-    SkewCylinderBranchPcurveRootCorridorCertificate, SkewCylinderBranchTrace, SkewCylinderSheet,
+    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PairedSkewCylinderBranchResidualCertificate,
+    PersistentSkewCylinderOpenSpanCarrier, PersistentSkewCylinderOpenSpanCertificate,
+    PersistentSkewCylinderOpenSpanOrientation, PersistentSkewCylinderOpenSpanPcurve,
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
+    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchCarrier, SkewCylinderBranchGuardedEnd,
+    SkewCylinderBranchPcurve, SkewCylinderBranchPcurveCellCertificate,
+    SkewCylinderBranchPcurveEnclosure, SkewCylinderBranchPcurveRootCorridorCertificate,
+    SkewCylinderBranchTrace, SkewCylinderSheet, VerifiedSkewCylinderOpenSpanCurveDescriptor,
     certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
+    certify_persistent_skew_cylinder_open_span,
 };

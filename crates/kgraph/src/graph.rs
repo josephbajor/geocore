@@ -15,9 +15,14 @@ use crate::intersection::{
     VerifiedIntersectionCertificate, VerifiedIntersectionCurveDescriptor,
     VerifiedNurbsIntersectionCertificate, VerifiedNurbsIntersectionCurveDescriptor,
 };
+use crate::skew_cylinder_branch::{
+    PersistentSkewCylinderOpenSpanCertificate, VerifiedSkewCylinderOpenSpanCurveDescriptor,
+};
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
 use kcore::interval::Interval;
+use kgeom::curve::Curve;
+use kgeom::curve2d::Curve2d;
 use kgeom::surface::Surface;
 use std::collections::{HashMap, HashSet};
 
@@ -432,6 +437,20 @@ impl GeometryGraph {
                 pcurves,
                 VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
             ),
+        )))
+    }
+
+    /// Insert one persistent normalized skew-cylinder open span after binding
+    /// its sealed composite proof to exact ordered live Cylinder sources and
+    /// exact ordered persistent pcurve nodes.
+    pub fn insert_verified_skew_cylinder_open_span_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: PersistentSkewCylinderOpenSpanCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_curve(CurveDescriptor::PersistentSkewCylinderOpenSpan(Box::new(
+            VerifiedSkewCylinderOpenSpanCurveDescriptor::new(source_surfaces, pcurves, certificate),
         )))
     }
 
@@ -1113,6 +1132,9 @@ fn validate_curve_references(
             }
         }
     }
+    if let Some(intersection) = descriptor.as_persistent_skew_cylinder_open_span().copied() {
+        validate_persistent_skew_cylinder_open_span_references(graph, intersection)?;
+    }
     if let Some(intersection) = descriptor.as_verified_nurbs_intersection() {
         let certificate = intersection.certificate();
         let max_offset_nurbs_chain_length = match certificate.traces() {
@@ -1313,6 +1335,45 @@ fn validate_curve_references(
                     "transmitted NURBS-chart pcurve does not match its certificate",
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_persistent_skew_cylinder_open_span_references(
+    graph: &GeometryGraph,
+    intersection: VerifiedSkewCylinderOpenSpanCurveDescriptor,
+) -> GeometryGraphResult<()> {
+    let certificate = intersection.certificate();
+    for ((source, pcurve), (trace, certified_pcurve)) in intersection
+        .source_surfaces()
+        .into_iter()
+        .zip(intersection.pcurves())
+        .zip(
+            certificate
+                .residual_certificate()
+                .traces()
+                .into_iter()
+                .zip(certificate.pcurves()),
+        )
+    {
+        let source_geometry = GeometryRef::Surface(source);
+        let actual_source = graph
+            .surface(source)
+            .ok_or_else(|| stale(source_geometry))?;
+        let pcurve_geometry = GeometryRef::Curve2d(pcurve);
+        let actual_pcurve = graph
+            .curve2d(pcurve)
+            .ok_or_else(|| stale(pcurve_geometry))?;
+        if actual_source.as_cylinder().copied() != Some(trace.surface())
+            || actual_pcurve
+                .as_persistent_skew_cylinder_open_span()
+                .copied()
+                != Some(certified_pcurve)
+        {
+            return Err(invalid_intersection_descriptor(
+                "persistent skew-cylinder source or pcurve does not match its ordered composite proof",
+            ));
         }
     }
     Ok(())
@@ -1675,6 +1736,19 @@ fn validate_curve(descriptor: &CurveDescriptor) -> GeometryGraphResult<()> {
                 && v.certificate().carrier_range().is_finite()
                 && v.certificate().carrier_range().width() > 0.0
         }
+        CurveDescriptor::PersistentSkewCylinderOpenSpan(v) => {
+            let certificate = v.certificate();
+            certificate.logical_range() == kgeom::param::ParamRange::new(0.0, 1.0)
+                && certificate.carrier().param_range() == certificate.logical_range()
+                && certificate.carrier().periodicity().is_none()
+                && certificate.endpoint_points().into_iter().all(finite3)
+                && certificate
+                    .residual_bounds()
+                    .into_iter()
+                    .all(|bound| bound.is_finite() && bound >= 0.0)
+                && certificate.required_edge_tolerance().is_finite()
+                && certificate.required_edge_tolerance() >= 0.0
+        }
         CurveDescriptor::SkewCylinderBranch(_) => {
             return Err(invalid_intersection_descriptor(
                 "operation-local skew Cylinder/Cylinder branches have no persistent graph contract",
@@ -1738,6 +1812,14 @@ fn validate_curve2d(descriptor: &Curve2dDescriptor) -> GeometryGraphResult<()> {
                 && v.chart_window()
                     .into_iter()
                     .all(|range| range.is_finite() && range.width() >= 0.0)
+        }
+        Curve2dDescriptor::PersistentSkewCylinderOpenSpan(v) => {
+            v.param_range() == kgeom::param::ParamRange::new(0.0, 1.0)
+                && v.periodicity().is_none()
+                && v.bounding_box(v.param_range()).min.x.is_finite()
+                && v.bounding_box(v.param_range()).min.y.is_finite()
+                && v.bounding_box(v.param_range()).max.x.is_finite()
+                && v.bounding_box(v.param_range()).max.y.is_finite()
         }
         Curve2dDescriptor::SkewCylinderBranch(_) => {
             return Err(GeometryGraphError::InvalidDescriptor {

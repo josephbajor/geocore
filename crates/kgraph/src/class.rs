@@ -102,6 +102,8 @@ pub enum Curve2dClass {
     Nurbs,
     /// Finite certifier-minted inverse sphere chart of a spatial circle.
     SphericalCircle,
+    /// Persistent normalized composite chart of a bounded skew-cylinder span.
+    PersistentSkewCylinderOpenSpan,
     /// Operation-local certified chart of a skew Cylinder/Cylinder sheet.
     SkewCylinderBranch,
 }
@@ -114,6 +116,7 @@ impl Curve2dClass {
             Self::Circle => "kernel.curve2d.circle.v1",
             Self::Nurbs => "kernel.curve2d.nurbs.v1",
             Self::SphericalCircle => "kernel.curve2d.spherical-circle.v1",
+            Self::PersistentSkewCylinderOpenSpan => "kernel.curve2d.skew-cylinder-open-span.v1",
             Self::SkewCylinderBranch => "kernel.curve2d.skew-cylinder-branch.v1",
         })
     }

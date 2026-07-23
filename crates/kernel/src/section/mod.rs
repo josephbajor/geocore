@@ -62,6 +62,8 @@ mod ruling_public;
 mod ruling_publish;
 mod semantic_ruling;
 mod skew_cylinder_fragment;
+#[cfg_attr(not(test), allow(dead_code))]
+mod skew_cylinder_persistence;
 mod skew_cylinder_public;
 mod source_annulus;
 mod stitch;
@@ -75,6 +77,10 @@ pub use periodic_embedding::{
 };
 pub(crate) use periodic_embedding::{
     certify_periodic_face_fragment_subset, periodic_face_fragment_subset_work,
+};
+#[allow(unused_imports)]
+pub(crate) use skew_cylinder_persistence::{
+    SectionSkewCylinderPersistenceInput, bounded_skew_persistence_input,
 };
 pub use skew_cylinder_public::{
     SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralPhysicalRoot,
