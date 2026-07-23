@@ -89,7 +89,11 @@ pub use plane_cylinder_ruling::{
 };
 pub use skew_cylinder_branch::{
     PairedSkewCylinderBranchResidualCertificate, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
-    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchCarrier, SkewCylinderBranchPcurve,
-    SkewCylinderBranchTrace, SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
+    SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK, SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK, SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS,
+    SkewCylinderBranchCarrier, SkewCylinderBranchGuardedEnd, SkewCylinderBranchPcurve,
+    SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveEnclosure,
+    SkewCylinderBranchPcurveRootCorridorCertificate, SkewCylinderBranchTrace, SkewCylinderSheet,
+    certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
 };

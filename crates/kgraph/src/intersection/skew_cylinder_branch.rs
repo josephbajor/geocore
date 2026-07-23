@@ -32,6 +32,15 @@ use jet::Jet;
 mod subrange;
 pub use subrange::certify_paired_skew_cylinder_branch_subrange_residuals;
 
+#[path = "skew_cylinder_branch_cells.rs"]
+mod cells;
+pub use cells::{
+    SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK, SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK, SkewCylinderBranchGuardedEnd,
+    SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveEnclosure,
+    SkewCylinderBranchPcurveRootCorridorCertificate,
+};
+
 #[cfg(test)]
 #[path = "skew_cylinder_branch_tests.rs"]
 mod tests;
@@ -370,6 +379,8 @@ pub struct PairedSkewCylinderBranchResidualCertificate {
     residual_bounds: [f64; 2],
     tolerance: f64,
     sheet: SkewCylinderSheet,
+    chart_windows: [ParamRange; 2],
+    boundary_graded_cells: bool,
 }
 
 impl PairedSkewCylinderBranchResidualCertificate {
@@ -512,6 +523,8 @@ fn certify_validated_branch(
         residual_bounds: [0.0, second_residual],
         tolerance,
         sheet: algebra.sheet,
+        chart_windows: [ranges[0][0], ranges[1][0]],
+        boundary_graded_cells: algebra.carrier_range != ranges[0][0],
     })
 }
 
