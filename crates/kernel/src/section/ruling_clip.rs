@@ -1,15 +1,11 @@
 //! Certified topology-owned clipping of affine ruling carriers.
-//!
 //! The carrier is supplied through one face's already-certified affine
 //! pcurve.  This module reads the face's loops, fins, edges, pcurves, and
 //! whole-fin incidence evidence directly; `FaceDomain` and graph discovery
 //! windows never become trim authority.
-//!
 //! Supported trims are deliberately exact-family and fail closed:
-//!
 //! - polygonal loops (including holes and non-convex loops) on a plane, and
 //! - vertex-less whole-period horizontal ring loops on a cylinder.
-//!
 //! Crossings retain conservative carrier- and source-edge-parameter
 //! enclosures.  Root ordinals are intentionally absent: the section
 //! operation's shared root-identity authority assigns them after both
@@ -178,11 +174,9 @@ fn charge(scope: &mut OperationScope<'_, '_>, amount: u64) -> Result<()> {
 fn finite(value: Interval) -> bool {
     value.lo().is_finite() && value.hi().is_finite()
 }
-
 fn excludes_zero(value: Interval) -> bool {
     value.hi() < 0.0 || value.lo() > 0.0
 }
-
 fn intersect(x: Interval, y: Interval) -> Option<Interval> {
     let lo = x.lo().max(y.lo());
     let hi = x.hi().min(y.hi());
@@ -290,6 +284,11 @@ fn clip_line_to_planar_trim(
     carrier_range: ParamRange,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<RulingClipOutcome> {
+    if let Some(outcome) =
+        super::ruling_disk_clip::try_clip_line_to_disk_trim(store, face, trace, scope)?
+    {
+        return Ok(outcome);
+    }
     let segments = match prepare_plane_segments(store, face, scope)? {
         Ok(segments) => segments,
         Err(gap) => return Ok(RulingClipOutcome::Indeterminate(gap)),

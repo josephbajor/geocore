@@ -16,7 +16,7 @@ use ktopo::geom::Curve2dGeom;
 
 use super::*;
 
-enum CylinderCylinderBranchAdaptation {
+pub(super) enum CylinderCylinderBranchAdaptation {
     Adapted(Box<SectionBranch>),
     OrientationIndeterminate,
     Unsupported,
@@ -330,7 +330,7 @@ fn adapt_branch(
     }))
 }
 
-fn adapt_skew_two_sheet_branch(
+pub(super) fn adapt_skew_two_sheet_branch(
     faces: &[FaceId; 2],
     edge: &IntersectionBranchEdge,
     vertices: &[kops::intersect::IntersectionBranchVertex],
@@ -450,7 +450,7 @@ fn finite_point_and_tangent(point: Point3, tangent: Vec3) -> bool {
 /// transverse closed-sheet invariant make this continuous orientation sign
 /// nonzero over the complete cycle. Its sign is therefore constant, so one
 /// strictly certified seam sign orients the whole loop.
-fn canonical_flip(
+pub(super) fn canonical_flip(
     surface_a: &SurfaceGeom,
     sense_a: Sense,
     surface_b: &SurfaceGeom,
@@ -800,6 +800,11 @@ mod tests {
                 SectionCurveFragmentSpan::LineSegment { endpoints } => {
                     span_counts[2] += 1;
                     endpoints
+                }
+                SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+                    panic!(
+                        "parallel-cylinder fixture unexpectedly published a bounded procedural fragment"
+                    )
                 }
             };
             ruling_count += 1;

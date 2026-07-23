@@ -109,6 +109,7 @@ pub(crate) enum MixedPeriodicArrangementError {
     },
     DuplicateFragment(usize),
     WholeFragment(usize),
+    BoundedProceduralFragment(usize),
     UnknownEndpoint {
         fragment: usize,
         endpoint: usize,

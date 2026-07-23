@@ -12,8 +12,8 @@ use kernel::{
     MutationKind, NumericalPolicy, OperationSettings, ParamRange, PartId, PcurveChart,
     PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion,
     RegionKind, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind,
-    SectionBodiesRequest, SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session,
-    SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
+    SECTION_WORK, SectionBodiesRequest, SectionCompletion, SectionCurveFragmentSpan, SectionRing,
+    Session, SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
     SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
     ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
 };

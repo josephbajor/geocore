@@ -13,6 +13,7 @@
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
+use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::curve::{Curve, Line};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Plane};
@@ -24,6 +25,7 @@ use kops::intersect::{
 };
 use ktopo::entity::{FaceId as RawFaceId, PcurveEndpointKind, Sense, VertexId as RawVertexId};
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use ktopo::store::Store;
 
 use super::{
@@ -91,7 +93,7 @@ pub(super) fn recover(
     super::charge(scope, work)?;
     let tolerance = scope.context().tolerances().linear();
     let angular = scope.context().tolerances().angular();
-    if !certify_axis_containing_face(
+    if !certify_semantic_axis_containing_face(
         store,
         plane_face,
         plane,
@@ -242,6 +244,25 @@ pub(super) fn recertify(
     Some(bounds)
 }
 
+/// Admit either polygon-side incidence or a topology-owned circular cap whose
+/// adjacent source cylinder is exactly perpendicular to the opposing axis.
+fn certify_semantic_axis_containing_face(
+    store: &Store,
+    face_id: RawFaceId,
+    plane: Plane,
+    opposing_axis: Vec3,
+    tolerance: f64,
+    angular: f64,
+) -> Result<bool> {
+    if certify_axis_containing_face(store, face_id, plane, opposing_axis, tolerance, angular)? {
+        return Ok(true);
+    }
+    Ok(
+        certify_circular_cap_source(store, face_id, plane, tolerance)?
+            .is_some_and(|source| source_axis_is_perpendicular(source, opposing_axis)),
+    )
+}
+
 /// Prove the ideal face contains the signed axis through two independent,
 /// whole-fin, tolerance-incidence line uses.
 fn certify_axis_containing_face(
@@ -340,6 +361,132 @@ fn certify_axis_containing_face(
     Ok(axial_vertices[0]
         .iter()
         .all(|vertex| !axial_vertices[1].contains(vertex)))
+}
+
+/// Recover a finite-cylinder source axis only from the cap's complete
+/// Plane/Circle/Circle2d ring and the other manifold fin's Cylinder ownership.
+fn certify_circular_cap_source(
+    store: &Store,
+    face_id: RawFaceId,
+    plane: Plane,
+    tolerance: f64,
+) -> Result<Option<Cylinder>> {
+    let face = store
+        .get(face_id)
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let [loop_id] = face.loops() else {
+        return Ok(None);
+    };
+    let loop_ = store
+        .get(*loop_id)
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let [cap_fin_id] = loop_.fins() else {
+        return Ok(None);
+    };
+    let cap_fin = store
+        .get(*cap_fin_id)
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let edge = store
+        .get(cap_fin.edge())
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let (Some(curve_id), Some(cap_use)) = (edge.curve(), cap_fin.pcurve()) else {
+        return Ok(None);
+    };
+    let (Some(circle), Some(_cap_circle)) = (
+        store
+            .geometry()
+            .curve(curve_id)
+            .and_then(CurveGeom::as_circle),
+        store
+            .geometry()
+            .curve2d(cap_use.curve())
+            .and_then(Curve2dGeom::as_circle),
+    ) else {
+        return Ok(None);
+    };
+    let [first_fin, second_fin] = edge.fins() else {
+        return Ok(None);
+    };
+    let side_fin_id = if first_fin == cap_fin_id {
+        *second_fin
+    } else if second_fin == cap_fin_id {
+        *first_fin
+    } else {
+        return Ok(None);
+    };
+    let side_fin = store
+        .get(side_fin_id)
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let side_loop = store
+        .get(side_fin.parent())
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let side_face = store
+        .get(side_loop.face())
+        .map_err(|source| Error::InconsistentTopology { source })?;
+    let Some(SurfaceGeom::Cylinder(source_cylinder)) =
+        store.geometry().surface(side_face.surface())
+    else {
+        return Ok(None);
+    };
+
+    let active = cap_use.range();
+    let map = cap_use.edge_to_pcurve();
+    let edge_parameters = [map.inverse(active.lo), map.inverse(active.hi)];
+    let circle_range = circle.param_range();
+    let exact_ownership = face.tolerance().is_none()
+        && matches!(
+            store.geometry().surface(face.surface()),
+            Some(SurfaceGeom::Plane(stored)) if *stored == plane
+        )
+        && loop_.face() == face_id
+        && cap_fin.parent() == *loop_id
+        && cap_fin.edge() == side_fin.edge()
+        && side_loop.fins().contains(&side_fin_id)
+        && side_face.shell() == face.shell()
+        && side_loop.face() != face_id
+        && edge.vertices() == [None, None]
+        && edge.bounds().is_none()
+        && edge.tolerance().is_none();
+    let cap_map_is_whole = cap_use.chart().is_identity()
+        && cap_use.endpoint_kinds() == [PcurveEndpointKind::Regular; 2]
+        && cap_use.closure_winding() == Some([0, 0])
+        && cap_use.seam().is_none()
+        && cap_use.edge_to_pcurve().scale().abs() == 1.0
+        && active.width() == circle_range.width()
+        && edge_parameters[0].min(edge_parameters[1]) == circle_range.lo
+        && edge_parameters[0].max(edge_parameters[1]) == circle_range.hi
+        && cap_fin.sense().times(cap_use.sense()) == face.sense();
+    if !exact_ownership
+        || !cap_map_is_whole
+        || certify_whole_fin_incidence(store, face_id, *loop_id, *cap_fin_id, tolerance)
+            != WholeFinIncidence::Certified
+        || certify_whole_fin_incidence(
+            store,
+            side_loop.face(),
+            side_fin.parent(),
+            side_fin_id,
+            tolerance,
+        ) != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    Ok(Some(*source_cylinder))
+}
+
+/// Cross-body perpendicularity is exact dyadic zero or exact identity with
+/// one of the source frame's semantically orthogonal radial basis axes.
+fn source_axis_is_perpendicular(source: Cylinder, opposing_axis: Vec3) -> bool {
+    let source_frame = source.frame();
+    let source_axis = source_frame.z();
+    exactly_perpendicular(source_axis, opposing_axis)
+        || [source_frame.x(), source_frame.y()]
+            .into_iter()
+            .any(|radial| opposing_axis == radial || opposing_axis == -radial)
+}
+
+fn exactly_perpendicular(first: Vec3, second: Vec3) -> bool {
+    affine_dot3(first.to_array(), second.to_array(), [0.0; 3], 0.0)
+        .is_some_and(|dot| dot.sign() == Orientation::Zero)
 }
 
 fn plane_pcurve(line: Line, plane: Plane) -> SectionUvLine {
@@ -496,7 +643,178 @@ fn work_overflow() -> Error {
 
 #[cfg(test)]
 mod tests {
+    use kcore::operation::{OperationContext, OperationScope, SessionPolicy};
+    use kcore::tolerance::Tolerances;
+    use kgeom::frame::Frame;
+    use ktopo::entity::FinPcurve;
+
     use super::*;
+    use crate::section::BodySectionBudgetProfile;
+    use crate::{FaceId, Kernel};
+
+    const TEST_TOLERANCE: f64 = 1.0e-9;
+
+    fn cap_faces(store: &Store, body: ktopo::entity::BodyId) -> Vec<RawFaceId> {
+        store
+            .faces_of_body(body)
+            .unwrap()
+            .into_iter()
+            .filter(|face| {
+                matches!(
+                    store
+                        .geometry()
+                        .surface(store.get(*face).unwrap().surface()),
+                    Some(SurfaceGeom::Plane(_))
+                )
+            })
+            .collect()
+    }
+
+    fn recover_cap_rulings(frame: Frame, top_cap: bool, swapped: bool) -> Vec<SectionBranch> {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (cap_face, opposing_face) = {
+            let edit = session.edit_part(part_id.clone()).unwrap();
+            let store = &mut edit.state.store;
+            let source = ktopo::make::cylinder(store, &frame, 1.0, 0.1).unwrap();
+            let caps = cap_faces(store, source);
+            assert_eq!(caps.len(), 2);
+            let cap_face = caps[usize::from(top_cap)];
+            let cap_plane = match store
+                .geometry()
+                .surface(store.get(cap_face).unwrap().surface())
+                .unwrap()
+            {
+                SurfaceGeom::Plane(plane) => *plane,
+                _ => unreachable!(),
+            };
+            let opposing_frame =
+                Frame::new(cap_plane.frame().origin() - frame.x(), frame.x(), frame.y()).unwrap();
+            let opposing = ktopo::make::cylinder(store, &opposing_frame, 0.5, 2.0).unwrap();
+            let opposing_face = store
+                .faces_of_body(opposing)
+                .unwrap()
+                .into_iter()
+                .find(|face| {
+                    matches!(
+                        store
+                            .geometry()
+                            .surface(store.get(*face).unwrap().surface()),
+                        Some(SurfaceGeom::Cylinder(_))
+                    )
+                })
+                .unwrap();
+            (cap_face, opposing_face)
+        };
+
+        let part = session.part(part_id.clone()).unwrap();
+        let store = &part.state.store;
+        let raw_faces = if swapped {
+            [opposing_face, cap_face]
+        } else {
+            [cap_face, opposing_face]
+        };
+        let face_data = raw_faces.map(|face| store.get(face).unwrap());
+        let surfaces = face_data.map(|face| store.geometry().surface(face.surface()).unwrap());
+        let senses = face_data.map(|face| face.sense());
+        let domains = face_data.map(|face| {
+            let domain = face.domain().unwrap();
+            [domain.u, domain.v]
+        });
+        let facades = raw_faces.map(|face| FaceId::new(part_id.clone(), face));
+        let policy = SessionPolicy::v1();
+        let context = OperationContext::new(&policy, Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(BodySectionBudgetProfile::v1_defaults());
+        let mut scope = OperationScope::new(&context);
+        let error = GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: EXACT_ZERO_GAP,
+            },
+        );
+        recover(
+            store, raw_faces, &facades, surfaces, senses, domains, &error, &mut scope,
+        )
+        .unwrap()
+        .expect("topology-owned cap must recover two strict secant rulings")
+    }
+
+    #[test]
+    fn whole_circle_caps_recover_world_and_rounded_oblique_rulings_under_swap() {
+        let frames = [
+            Frame::world(),
+            Frame::new(
+                Point3::new(2.5, -1.75, 0.625),
+                Vec3::new(0.48, 0.64, 0.6),
+                Vec3::new(0.8, -0.6, 0.0),
+            )
+            .unwrap(),
+        ];
+        assert!(!exactly_perpendicular(frames[1].z(), frames[1].x()));
+        for frame in frames {
+            for top_cap in [false, true] {
+                for swapped in [false, true] {
+                    let branches = recover_cap_rulings(frame, top_cap, swapped);
+                    assert_eq!(branches.len(), 2);
+                    assert!(branches.iter().all(|branch| {
+                        branch.topology == SectionBranchTopology::Open
+                            && matches!(branch.carrier, SectionCarrier::Line { .. })
+                            && branch
+                                .evidence
+                                .residual_bounds
+                                .into_iter()
+                                .all(|bound| bound <= branch.evidence.tolerance)
+                    }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn circular_cap_proof_refuses_malformed_winding_and_nonperpendicular_axes() {
+        let mut store = Store::new();
+        let frame = Frame::world();
+        let body = ktopo::make::cylinder(&mut store, &frame, 1.0, 0.1).unwrap();
+        let cap = cap_faces(&store, body)[0];
+        let plane = match store
+            .geometry()
+            .surface(store.get(cap).unwrap().surface())
+            .unwrap()
+        {
+            SurfaceGeom::Plane(plane) => *plane,
+            _ => unreachable!(),
+        };
+        assert!(
+            !certify_semantic_axis_containing_face(
+                &store,
+                cap,
+                plane,
+                frame.x() + frame.z(),
+                TEST_TOLERANCE,
+                Tolerances::default().angular(),
+            )
+            .unwrap()
+        );
+
+        let loop_id = store.get(cap).unwrap().loops()[0];
+        let fin_id = store.get(loop_id).unwrap().fins()[0];
+        let old = store.get(fin_id).unwrap().pcurve().unwrap();
+        let mut transaction = store.transaction().unwrap();
+        let mut assembly = transaction.assembly();
+        assembly.get_mut(fin_id).unwrap().pcurve =
+            Some(FinPcurve::new(old.curve(), old.range(), old.edge_to_pcurve()).unwrap());
+        assert!(
+            !certify_semantic_axis_containing_face(
+                &assembly,
+                cap,
+                plane,
+                frame.x(),
+                TEST_TOLERANCE,
+                Tolerances::default().angular(),
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn signed_axis_filter_accepts_outward_roundoff_but_rejects_tilt() {

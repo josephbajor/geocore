@@ -3,10 +3,11 @@
 
 use super::*;
 use kernel::{
-    BodySectionGraph, ClassifyPointOnFaceRequest, PointFaceVerdict, SectionBranch,
-    SectionBranchTopology, SectionCarrier, SectionCurveEndpointTopology, SectionCurveFragmentSpan,
-    SectionPeriodicEmbeddingGap, SectionSite, SectionSkewCylinderBranchCarrier,
-    SectionSkewCylinderBranchPcurve, SectionUvCurve, SurfaceEvaluationRequest,
+    BodySectionGraph, ClassifyPointOnFaceRequest, PointFaceVerdict,
+    SectionBoundedProceduralFragmentEnd, SectionBranch, SectionBranchTopology, SectionCarrier,
+    SectionCurveEndpointTopology, SectionCurveFragmentSpan, SectionPeriodicEmbeddingGap,
+    SectionSite, SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve, SectionUvCurve,
+    SurfaceEvaluationRequest,
 };
 
 const RADIUS: f64 = 1.0;
@@ -17,6 +18,8 @@ const SHORT_HALF_HEIGHT: f64 = 1.0;
 const SKEW_FIRST_HALF_HEIGHT: f64 = 2.25;
 const SKEW_SECOND_HALF_HEIGHT: f64 = 1.25;
 const SKEW_SECOND_RADIUS: f64 = 2.0;
+const BOUNDED_SKEW_LOWER: f64 = 1.8;
+const BOUNDED_SKEW_UPPER: f64 = 1.9;
 const TOLERANCE: f64 = 1.0e-9;
 
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +156,52 @@ fn skew_two_sheet_fixture(placement: Placement, narrow_first_height: bool) -> Fi
                 frame.with_origin(frame.point_at(0.0, 0.0, -SKEW_FIRST_HALF_HEIGHT)),
                 RADIUS,
                 first_height,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_frame = Frame::new(
+            frame.point_at(-SKEW_SECOND_HALF_HEIGHT, 0.0, 0.0),
+            frame.x(),
+            frame.y(),
+        )
+        .unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(
+                second_frame,
+                SKEW_SECOND_RADIUS,
+                2.0 * SKEW_SECOND_HALF_HEIGHT,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    let before = source_signature(&session, &part_id, &first, &second);
+    assert_eq!(before, ([3, 2, 0], [3, 2, 0], 2));
+    Fixture {
+        session,
+        part_id,
+        first,
+        second,
+        frame,
+        before,
+    }
+}
+
+fn bounded_skew_fixture(placement: Placement) -> Fixture {
+    let frame = shared_frame(placement);
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, BOUNDED_SKEW_LOWER)),
+                RADIUS,
+                BOUNDED_SKEW_UPPER - BOUNDED_SKEW_LOWER,
             ))
             .unwrap()
             .into_result()
@@ -810,6 +859,465 @@ fn assert_contained_skew_swap_equivalence(forward: &BodySectionGraph, swapped: &
             assert_ne!(original_pcurve.reversed(), exchanged_pcurve.reversed());
         }
     }
+}
+
+fn bounded_procedural_ends(graph: &BodySectionGraph) -> Vec<&SectionBoundedProceduralFragmentEnd> {
+    graph
+        .curve_fragments()
+        .iter()
+        .flat_map(|fragment| match fragment.span() {
+            SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
+                endpoints.iter().collect::<Vec<_>>()
+            }
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn assert_bounded_root_oracle(frame: Frame, point: Point3) {
+    let point = frame.to_local(point);
+    assert!((point.x * point.x + point.y * point.y - RADIUS * RADIUS).abs() <= TOLERANCE);
+    assert!(
+        (point.y * point.y + point.z * point.z - SKEW_SECOND_RADIUS * SKEW_SECOND_RADIUS).abs()
+            <= TOLERANCE
+    );
+    assert!(
+        (point.z - BOUNDED_SKEW_LOWER).abs() <= TOLERANCE
+            || (point.z - BOUNDED_SKEW_UPPER).abs() <= TOLERANCE
+    );
+}
+
+fn assert_bounded_procedural_fragment(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    fragment_index: usize,
+    frame: Frame,
+    bound_operand: usize,
+    incidence: &mut [[usize; 2]],
+    points: &mut [Vec<Point3>],
+) {
+    let fragment = &graph.curve_fragments()[fragment_index];
+    let SectionCurveFragmentSpan::BoundedProcedural { endpoints } = fragment.span() else {
+        panic!("bounded skew assertion received a nonprocedural fragment")
+    };
+    let branch = &graph.branches()[fragment.branch()];
+    let carrier = skew_carrier(branch);
+    assert_eq!(branch.topology(), SectionBranchTopology::Open);
+    assert_eq!(branch.endpoint_sites(), [0, 1]);
+    assert_eq!(branch.fragment_sites().len(), 2);
+    assert_eq!(carrier.range(), branch.range());
+    assert!(branch.range().is_finite() && branch.range().width() < core::f64::consts::TAU);
+    assert_eq!(fragment.source_ordinal(), 0);
+
+    for operand in 0..2 {
+        let pcurve = skew_pcurve(branch, operand);
+        let parameter = branch.range().lerp(0.5);
+        let point = carrier.eval(parameter);
+        let uv = pcurve.eval(parameter);
+        let face = part.face(branch.faces()[operand].clone()).unwrap();
+        let lifted = part
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                face.surface(),
+                [uv.x, uv.y],
+                SurfaceDerivativeOrder::Position,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .position();
+        assert!(point.dist(lifted) <= branch.evidence().tolerance());
+    }
+
+    for (slot, end) in endpoints.iter().enumerate() {
+        incidence[end.endpoint()][1] += 1;
+        points[end.endpoint()].push(end.root_point());
+        let expected_parameter = if slot == 0 {
+            branch.range().lo
+        } else {
+            branch.range().hi
+        };
+        assert_eq!(
+            end.inside_carrier_parameter().to_bits(),
+            expected_parameter.to_bits()
+        );
+        assert!(
+            end.inside_point()
+                .dist(carrier.eval(end.inside_carrier_parameter()))
+                <= branch.evidence().tolerance()
+        );
+        assert_eq!(branch.fragment_sites()[slot].point(), end.inside_point());
+        assert_bounded_root_oracle(frame, end.root_point());
+        assert_on_both_faces(part, branch, end.root_point(), "procedural physical root");
+        assert_on_both_faces(
+            part,
+            branch,
+            end.inside_point(),
+            "procedural guarded endpoint",
+        );
+
+        let trim = end.trim();
+        assert_eq!(trim.operand(), bound_operand);
+        assert_eq!(trim.face(), branch.faces()[bound_operand]);
+        assert!(trim.carrier_root().lo().is_finite());
+        assert!(trim.carrier_root().hi().is_finite());
+        assert!(trim.carrier_root().lo() <= trim.carrier_root().hi());
+        assert!(
+            trim.edge_parameter()
+                .contains(trim.source_parameter().root_parameter())
+        );
+        let public = &graph.curve_endpoints()[end.endpoint()];
+        let SectionCurveEndpointTopology::Trim {
+            sites,
+            source_parameters,
+        } = public.topology()
+        else {
+            panic!("bounded physical root became a parameter seam")
+        };
+        assert_eq!(
+            sites[bound_operand],
+            SectionSite::EdgeInterior(trim.source_parameter().edge())
+        );
+        assert_eq!(
+            sites[1 - bound_operand],
+            SectionSite::FaceInterior(branch.faces()[1 - bound_operand].clone())
+        );
+        assert_eq!(
+            source_parameters[bound_operand].as_ref(),
+            Some(trim.source_parameter())
+        );
+        assert!(source_parameters[1 - bound_operand].is_none());
+        assert!(
+            public.edge_parameters()[bound_operand]
+                .expect("bound-owning endpoint requires an edge enclosure")
+                .contains(trim.source_parameter().root_parameter())
+        );
+        assert!(public.edge_parameters()[1 - bound_operand].is_none());
+    }
+}
+
+fn assert_bounded_ruling_fragment(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    fragment_index: usize,
+    frame: Frame,
+    bound_operand: usize,
+    incidence: &mut [[usize; 2]],
+    points: &mut [Vec<Point3>],
+) {
+    let fragment = &graph.curve_fragments()[fragment_index];
+    let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
+        panic!("bounded skew assertion received a nonlinear ruling")
+    };
+    let branch = &graph.branches()[fragment.branch()];
+    let (origin, direction) = line_carrier(branch);
+    assert_eq!(branch.topology(), SectionBranchTopology::Open);
+    assert_eq!(fragment.source_ordinal(), 0);
+    for end in endpoints.iter() {
+        incidence[end.endpoint()][0] += 1;
+        points[end.endpoint()].push(end.point());
+        assert!(
+            end.point()
+                .dist(origin + direction * end.carrier_parameter())
+                <= TOLERANCE
+        );
+        assert_bounded_root_oracle(frame, end.point());
+        assert_on_both_faces(part, branch, end.point(), "cap ruling root");
+        assert_eq!(end.trims().iter().flatten().count(), 1);
+        let trim = end.trims()[bound_operand]
+            .as_ref()
+            .expect("the bounded cylinder cap must own the ruling root");
+        assert_eq!(trim.operand(), bound_operand);
+        assert_eq!(trim.face(), branch.faces()[bound_operand]);
+        let SectionCurveEndpointTopology::Trim {
+            sites,
+            source_parameters,
+        } = graph.curve_endpoints()[end.endpoint()].topology()
+        else {
+            panic!("cap ruling root became a parameter seam")
+        };
+        assert_eq!(
+            sites[bound_operand],
+            SectionSite::EdgeInterior(trim.source_parameter().edge())
+        );
+        assert_eq!(
+            source_parameters[bound_operand].as_ref(),
+            Some(trim.source_parameter())
+        );
+        assert!(source_parameters[1 - bound_operand].is_none());
+    }
+}
+
+fn assert_bounded_skew_graph(
+    part: &kernel::Part<'_>,
+    graph: &BodySectionGraph,
+    bodies: [BodyId; 2],
+    frame: Frame,
+    bound_operand: usize,
+) {
+    assert_eq!(graph.bodies(), &bodies);
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty(), "{graph:#?}");
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
+    assert!(graph.rings().is_empty());
+    assert_eq!(graph.branches().len(), 8, "{graph:#?}");
+    assert_eq!(graph.curve_endpoints().len(), 8, "{graph:#?}");
+    assert_eq!(graph.curve_fragments().len(), 8, "{graph:#?}");
+    assert_eq!(graph.curve_components().len(), 2, "{graph:#?}");
+    assert_eq!(
+        cylinder_cylinder_branch_indices(part, graph).len(),
+        4,
+        "{graph:#?}"
+    );
+
+    let mut incidence = vec![[0usize; 2]; graph.curve_endpoints().len()];
+    let mut points = vec![Vec::new(); graph.curve_endpoints().len()];
+    let mut procedural = 0usize;
+    let mut rulings = 0usize;
+    for fragment_index in 0..graph.curve_fragments().len() {
+        match graph.curve_fragments()[fragment_index].span() {
+            SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+                procedural += 1;
+                assert_bounded_procedural_fragment(
+                    part,
+                    graph,
+                    fragment_index,
+                    frame,
+                    bound_operand,
+                    &mut incidence,
+                    &mut points,
+                );
+            }
+            SectionCurveFragmentSpan::LineSegment { .. } => {
+                rulings += 1;
+                assert_bounded_ruling_fragment(
+                    part,
+                    graph,
+                    fragment_index,
+                    frame,
+                    bound_operand,
+                    &mut incidence,
+                    &mut points,
+                );
+            }
+            other => panic!("bounded skew cycle retained an unexpected fragment: {other:?}"),
+        }
+    }
+    assert_eq!((procedural, rulings), (4, 4));
+    assert!(incidence.into_iter().all(|count| count == [1, 1]));
+    for occurrences in points {
+        let [first, second] = occurrences.as_slice() else {
+            panic!("each exact root must have one procedural and one ruling representative")
+        };
+        assert!(first.dist(*second) <= 1.0e-8);
+    }
+
+    let mut component_fragments = Vec::new();
+    for component in graph.curve_components() {
+        assert!(component.closed());
+        assert_eq!(component.fragments().len(), 4);
+        for index in 0..component.fragments().len() {
+            let current = &graph.curve_fragments()[component.fragments()[index]];
+            let next = &graph.curve_fragments()
+                [component.fragments()[(index + 1) % component.fragments().len()]];
+            assert_ne!(
+                matches!(
+                    current.span(),
+                    SectionCurveFragmentSpan::BoundedProcedural { .. }
+                ),
+                matches!(
+                    next.span(),
+                    SectionCurveFragmentSpan::BoundedProcedural { .. }
+                )
+            );
+        }
+        component_fragments.extend_from_slice(component.fragments());
+    }
+    component_fragments.sort_unstable();
+    assert_eq!(component_fragments, (0..8).collect::<Vec<_>>());
+
+    let mut edge_roots = Vec::<(kernel::EdgeId, Vec<usize>)>::new();
+    for endpoint in graph.curve_endpoints() {
+        let SectionCurveEndpointTopology::Trim {
+            source_parameters, ..
+        } = endpoint.topology()
+        else {
+            panic!("bounded skew endpoint became a seam")
+        };
+        let root = source_parameters[bound_operand]
+            .as_ref()
+            .expect("bound-owning source root disappeared");
+        if let Some((_, roots)) = edge_roots.iter_mut().find(|(edge, _)| *edge == root.edge()) {
+            roots.push(root.root_ordinal());
+        } else {
+            edge_roots.push((root.edge(), vec![root.root_ordinal()]));
+        }
+    }
+    assert_eq!(edge_roots.len(), 2);
+    for (_, mut roots) in edge_roots {
+        roots.sort_unstable();
+        assert_eq!(roots, vec![0, 1, 2, 3]);
+    }
+}
+
+fn assert_bounded_skew_swap_equivalence(forward: &BodySectionGraph, swapped: &BodySectionGraph) {
+    let forward_ends = bounded_procedural_ends(forward);
+    let swapped_ends = bounded_procedural_ends(swapped);
+    assert_eq!(forward_ends.len(), 8);
+    assert_eq!(swapped_ends.len(), 8);
+    for original in forward_ends {
+        let exchanged = swapped_ends
+            .iter()
+            .copied()
+            .find(|candidate| {
+                candidate.trim().source_parameter() == original.trim().source_parameter()
+            })
+            .expect("operand swap lost an exact source-ring root");
+        assert_eq!(original.trim().operand(), 0);
+        assert_eq!(exchanged.trim().operand(), 1);
+        assert_eq!(original.trim().face(), exchanged.trim().face());
+        assert_eq!(original.trim().loop_id(), exchanged.trim().loop_id());
+        assert_eq!(original.trim().fin(), exchanged.trim().fin());
+        assert_eq!(original.root_point(), exchanged.root_point());
+        assert_eq!(original.inside_point(), exchanged.inside_point());
+        assert_eq!(
+            original.trim().carrier_root(),
+            exchanged.trim().carrier_root()
+        );
+        assert_eq!(
+            original
+                .trim()
+                .source_parameter()
+                .root_parameter()
+                .to_bits(),
+            exchanged
+                .trim()
+                .source_parameter()
+                .root_parameter()
+                .to_bits()
+        );
+        assert_eq!(
+            original
+                .trim()
+                .source_parameter()
+                .root_parameter_enclosure(),
+            exchanged
+                .trim()
+                .source_parameter()
+                .root_parameter_enclosure()
+        );
+    }
+}
+
+#[test]
+fn bounded_skew_spans_close_with_cap_rulings_and_topology_owned_roots() {
+    for placement in [Placement::World, Placement::Oblique] {
+        let fixture = bounded_skew_fixture(placement);
+        let forward = section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let replay = section(&fixture, fixture.first.clone(), fixture.second.clone());
+        let swapped = section(&fixture, fixture.second.clone(), fixture.first.clone());
+        assert_eq!(forward, replay, "serial bounded-skew replay changed");
+
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        assert_bounded_skew_graph(
+            &part,
+            &forward,
+            [fixture.first.clone(), fixture.second.clone()],
+            fixture.frame,
+            0,
+        );
+        assert_bounded_skew_graph(
+            &part,
+            &swapped,
+            [fixture.second.clone(), fixture.first.clone()],
+            fixture.frame,
+            1,
+        );
+        assert_bounded_skew_swap_equivalence(&forward, &swapped);
+        drop(part);
+
+        assert_eq!(
+            source_signature(
+                &fixture.session,
+                &fixture.part_id,
+                &fixture.first,
+                &fixture.second,
+            ),
+            fixture.before,
+            "bounded-skew Section mutated a source body"
+        );
+        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+        for body in [fixture.first.clone(), fixture.second.clone()] {
+            let check = part
+                .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert_eq!(check.outcome(), CheckOutcome::Valid);
+            assert!(check.gaps().is_empty());
+        }
+    }
+}
+
+#[test]
+fn bounded_skew_section_work_accepts_n_and_refuses_n_minus_one_atomically() {
+    let fixture = bounded_skew_fixture(Placement::World);
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    let request = || SectionBodiesRequest::new(fixture.first.clone(), fixture.second.clone());
+    let baseline = part.section_bodies(request()).unwrap();
+    let expected_graph = baseline.result().unwrap().clone();
+    assert_eq!(expected_graph.completion(), SectionCompletion::Complete);
+    let usage = *baseline
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == SECTION_WORK && usage.resource == ResourceKind::Work)
+        .expect("bounded-skew Section must retain exact work usage");
+    assert_eq!(
+        usage.consumed, 65_731,
+        "bounded-skew Section work drifted from its exact facade frontier"
+    );
+
+    let run_at = |allowed| {
+        let plan = BudgetPlan::new([LimitSpec::new(
+            SECTION_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            allowed,
+        )])
+        .unwrap();
+        part.section_bodies(
+            request().with_settings(OperationSettings::new().with_budget_overrides(plan)),
+        )
+        .unwrap()
+    };
+    let admitted = run_at(usage.consumed);
+    assert_eq!(admitted.result().unwrap(), &expected_graph);
+    assert!(admitted.report().limit_events().is_empty());
+
+    let denied = run_at(usage.consumed - 1);
+    let expected = kernel::LimitSnapshot {
+        allowed: usage.consumed - 1,
+        ..usage
+    };
+    assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    drop(part);
+    assert_eq!(
+        source_signature(
+            &fixture.session,
+            &fixture.part_id,
+            &fixture.first,
+            &fixture.second,
+        ),
+        fixture.before,
+        "bounded-skew budget denial mutated a source body"
+    );
 }
 
 #[test]

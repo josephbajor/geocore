@@ -101,5 +101,6 @@ fn bounded_fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize;
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
     }
 }

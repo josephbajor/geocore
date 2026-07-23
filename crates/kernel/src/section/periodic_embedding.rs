@@ -7,16 +7,16 @@
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
-use ktopo::entity::{EdgeId as RawEdgeId, FinPcurve};
-use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
-use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
+use ktopo::geom::SurfaceGeom;
 use ktopo::store::Store;
 
 use super::{
     SECTION_WORK, SectionBranch, SectionCarrier, SectionCarrierParameterInterval,
     SectionCurveComponent, SectionCurveEndpoint, SectionCurveEndpointTopology,
     SectionCurveFragment, SectionCurveFragmentSpan, SectionSite, SectionSourceParameterKey,
-    SectionUvCurve, SectionUvLine, curve_publish::carrier_point,
+    SectionUvCurve, SectionUvLine,
+    curve_publish::carrier_point,
+    source_annulus::{self, CertifiedSourceRing},
 };
 use crate::error::{Error, Result as KernelResult};
 use crate::{BodySectionGraph, FaceId, LoopId, PartId, Point3};
@@ -553,16 +553,6 @@ struct Bounds2 {
 }
 
 #[derive(Clone)]
-struct SourceRing {
-    loop_id: LoopId,
-    edge: RawEdgeId,
-    pcurve: SectionUvLine,
-    use_: FinPcurve,
-    winding: i32,
-    height: f64,
-}
-
-#[derive(Clone)]
 struct PendingBoundaryRoot {
     endpoint: usize,
     source_loop_ordinal: usize,
@@ -821,169 +811,29 @@ fn certify_face(
         components,
         linear,
     } = input;
-    let rings = certify_source_rings(store, part, &face, linear)?;
+    let annulus = source_annulus::certify_source_annulus_topology(store, &face, linear)
+        .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
+    let rings = annulus.face_order();
     let (certified, pending_traces) = certify_face_paths(
-        branches, endpoints, fragments, components, operand, &face, &rings,
+        branches, endpoints, fragments, components, operand, &face, rings,
     )?;
     certify_component_separation(&certified)?;
     certify_trace_separation(&pending_traces)?;
     certify_trace_component_separation(&certified, &pending_traces)?;
     let (source_loop_roots, boundary_traces) =
-        finish_boundary_traces(endpoints, operand, &rings, pending_traces)?;
+        finish_boundary_traces(endpoints, operand, rings, pending_traces)?;
     Ok(CertifiedSectionPeriodicFaceEmbedding {
         operand,
         face,
-        source_loops: [rings[0].loop_id.clone(), rings[1].loop_id.clone()],
-        source_loop_windings: [rings[0].winding, rings[1].winding],
+        source_loops: [
+            LoopId::new(part.clone(), rings[0].loop_id()),
+            LoopId::new(part.clone(), rings[1].loop_id()),
+        ],
+        source_loop_windings: [rings[0].winding(), rings[1].winding()],
         source_loop_roots,
         components: certified,
         boundary_traces,
     })
-}
-
-fn certify_source_rings(
-    store: &Store,
-    part: &PartId,
-    face: &FaceId,
-    linear: f64,
-) -> Result<[SourceRing; 2], SectionPeriodicEmbeddingGap> {
-    let raw = store
-        .get(face.raw())
-        .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
-    let [lower, upper] = raw.loops() else {
-        return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-    };
-    let mut rings = Vec::new();
-    for loop_id in [*lower, *upper] {
-        let loop_ = store
-            .get(loop_id)
-            .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
-        let [fin] = loop_.fins() else {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        };
-        if loop_.face() != face.raw() {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        }
-        let fin_data = store
-            .get(*fin)
-            .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
-        if fin_data.parent() != loop_id
-            || certify_whole_fin_incidence(store, face.raw(), loop_id, *fin, linear)
-                != WholeFinIncidence::Certified
-        {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        }
-        let edge = store
-            .get(fin_data.edge())
-            .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
-        let (Some(curve), Some(use_)) = (edge.curve(), fin_data.pcurve()) else {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        };
-        if edge.vertices() != [None, None]
-            || edge.bounds().is_some()
-            || edge.tolerance().is_some()
-            || edge.fins().len() != 2
-            || !edge.fins().contains(fin)
-            || !matches!(store.get(curve), Ok(CurveGeom::Circle(_)))
-            || use_.seam().is_some()
-            || use_.chart().period_shifts()[1] != 0
-        {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        }
-        let Some(winding) = use_.closure_winding() else {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        };
-        if !matches!(winding, [1 | -1, 0]) {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        }
-        let Ok(Curve2dGeom::Line(boundary)) = store.get(use_.curve()) else {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        };
-        let active = use_.range();
-        let map = use_.edge_to_pcurve();
-        let edge_parameters = [map.inverse(active.lo), map.inverse(active.hi)];
-        let rate = boundary.dir().x * map.scale();
-        if boundary.dir().x == 0.0
-            || boundary.dir().y != 0.0
-            || boundary.dir().x.abs() * active.width() != PERIOD
-            || edge_parameters.into_iter().any(|value| !value.is_finite())
-            || edge_parameters[0].min(edge_parameters[1]) != 0.0
-            || edge_parameters[0].max(edge_parameters[1]) != PERIOD
-            || !(winding[0] == 1 && rate > 0.0 || winding[0] == -1 && rate < 0.0)
-        {
-            return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-        }
-        let topology_winding = if fin_data.sense().is_forward() {
-            winding[0]
-        } else {
-            -winding[0]
-        };
-        rings.push(SourceRing {
-            loop_id: LoopId::new(part.clone(), loop_id),
-            edge: fin_data.edge(),
-            pcurve: SectionUvLine {
-                origin: boundary.origin(),
-                direction: boundary.dir(),
-            },
-            use_,
-            winding: topology_winding,
-            height: boundary.origin().y,
-        });
-    }
-    if rings[0].winding.signum() == rings[1].winding.signum()
-        || !rings.iter().all(|ring| ring.height.is_finite())
-        || rings[0].height == rings[1].height
-    {
-        return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
-    }
-    let Ok([first, second]) = <Vec<SourceRing> as TryInto<[SourceRing; 2]>>::try_into(rings) else {
-        unreachable!("the source face supplied exactly two rings")
-    };
-    Ok([first, second])
-}
-
-/// Prove that one cylinder face is exactly the untrimmed full-period annulus
-/// described by its conservative face domain.
-///
-/// Two work units are charged before inspecting topology, so malformed and
-/// admitted faces consume the same operation-local source-ring ceiling.
-pub(super) fn certify_source_annulus_window(
-    store: &Store,
-    part: &PartId,
-    face: &FaceId,
-    linear: f64,
-    scope: &mut OperationScope<'_, '_>,
-) -> KernelResult<bool> {
-    scope
-        .ledger_mut()
-        .charge(SECTION_WORK, 2)
-        .map_err(Error::from)?;
-    let Ok(rings) = certify_source_rings(store, part, face, linear) else {
-        return Ok(false);
-    };
-    let Ok(raw) = store.get(face.raw()) else {
-        return Ok(false);
-    };
-    let Some(domain) = raw.domain() else {
-        return Ok(false);
-    };
-    if !matches!(store.get(raw.surface()), Ok(SurfaceGeom::Cylinder(_)))
-        || !domain.u.is_finite()
-        || !domain.v.is_finite()
-        || domain.u.width() != PERIOD
-    {
-        return Ok(false);
-    }
-    let [low, high] = if rings[0].height < rings[1].height {
-        [&rings[0], &rings[1]]
-    } else {
-        [&rings[1], &rings[0]]
-    };
-    let expected_low_winding = if raw.sense().is_forward() { 1 } else { -1 };
-    Ok(low.height == domain.v.lo
-        && high.height == domain.v.hi
-        && low.winding == expected_low_winding
-        && high.winding == -expected_low_winding)
 }
 
 fn certify_face_paths(
@@ -993,7 +843,7 @@ fn certify_face_paths(
     components: &[SectionCurveComponent],
     operand: usize,
     face: &FaceId,
-    rings: &[SourceRing; 2],
+    rings: &[CertifiedSourceRing; 2],
 ) -> Result<
     (
         Vec<SectionPeriodicComponentEmbedding>,
@@ -1290,7 +1140,7 @@ fn certify_boundary_trace(
     component: &SectionCurveComponent,
     component_ordinals: Vec<usize>,
     operand: usize,
-    rings: &[SourceRing],
+    rings: &[CertifiedSourceRing],
 ) -> Result<PendingBoundaryTrace, SectionPeriodicEmbeddingGap> {
     let fragment_indices = component_ordinals
         .iter()
@@ -1319,7 +1169,7 @@ fn certify_boundary_trace_fragments(
     component_ordinals: Vec<usize>,
     fragment_indices: Vec<usize>,
     operand: usize,
-    rings: &[SourceRing],
+    rings: &[CertifiedSourceRing],
 ) -> Result<PendingBoundaryTrace, SectionPeriodicEmbeddingGap> {
     let mut lifted = lift_fragment_path(
         branches,
@@ -1361,7 +1211,9 @@ fn certify_boundary_trace_fragments(
         }
         let ring_ordinal = rings
             .iter()
-            .position(|ring| ring.loop_id == loop_id && ring.edge == source_parameter.edge().raw())
+            .position(|ring| {
+                ring.loop_id() == loop_id.raw() && ring.edge() == source_parameter.edge().raw()
+            })
             .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
                 component: trace_group,
                 fragment: fragment_index,
@@ -1408,6 +1260,7 @@ fn fragment_terminal(
             let trim = endpoint.trims().get(operand)?.as_ref()?;
             Some((endpoint.endpoint(), trim.loop_id(), trim.source_parameter()))
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
     }
 }
 
@@ -1416,15 +1269,22 @@ fn map_boundary_root(
     source_loop_ordinal: usize,
     source_parameter: &SectionSourceParameterKey,
     lifted_uv: [Interval; 2],
-    ring: &SourceRing,
+    ring: &CertifiedSourceRing,
 ) -> Result<PendingBoundaryRoot, SectionPeriodicEmbeddingGap> {
     let edge_parameter = public_edge_interval(source_parameter.root_parameter_enclosure());
-    let map = ring.use_.edge_to_pcurve();
+    let map = ring.edge_to_pcurve();
     let pcurve_parameter =
         Interval::point(map.scale()) * edge_parameter + Interval::point(map.offset());
-    let mut source_uv = map_line_interval(ring.pcurve, pcurve_parameter);
+    let pcurve = ring.pcurve();
+    let mut source_uv = map_line_interval(
+        SectionUvLine {
+            origin: pcurve.origin(),
+            direction: pcurve.dir(),
+        },
+        pcurve_parameter,
+    );
     source_uv[0] = source_uv[0]
-        + Interval::point(f64::from(ring.use_.chart().period_shifts()[0]))
+        + Interval::point(f64::from(ring.fin_pcurve().chart().period_shifts()[0]))
             * Interval::point(PERIOD);
     source_uv[0] = canonical_period_interval(source_uv[0]).ok_or(
         SectionPeriodicEmbeddingGap::BoundaryRootOrderIndeterminate {
@@ -1583,6 +1443,7 @@ fn fragment_endpoint_representatives(fragment: &SectionCurveFragment) -> Option<
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
     }
 }
 
@@ -1680,6 +1541,7 @@ fn fragment_endpoint_ids(fragment: &SectionCurveFragment) -> Option<[usize; 2]> 
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|end| end.endpoint()))
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
     }
 }
 
@@ -1690,6 +1552,11 @@ fn fragment_parameter_intervals(
 ) -> Result<[Interval; 2], SectionPeriodicEmbeddingGap> {
     match fragment.span() {
         SectionCurveFragmentSpan::Whole => {
+            Err(SectionPeriodicEmbeddingGap::CarrierIntervalUnavailable {
+                fragment: fragment_index,
+            })
+        }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => {
             Err(SectionPeriodicEmbeddingGap::CarrierIntervalUnavailable {
                 fragment: fragment_index,
             })
@@ -2151,7 +2018,7 @@ fn certify_trace_component_separation(
 fn finish_boundary_traces(
     endpoints: &[SectionCurveEndpoint],
     operand: usize,
-    rings: &[SourceRing],
+    rings: &[CertifiedSourceRing],
     traces: Vec<PendingBoundaryTrace>,
 ) -> Result<
     (
@@ -2170,7 +2037,7 @@ fn finish_boundary_traces(
         let mut expected = Vec::new();
         for (endpoint, evidence) in endpoints.iter().enumerate() {
             if endpoint_source_root(evidence, operand, ring)
-                .is_some_and(|source| source.edge().raw() == ring.edge)
+                .is_some_and(|source| source.edge().raw() == ring.edge())
             {
                 expected.push(endpoint);
             }
@@ -2252,7 +2119,7 @@ fn finish_boundary_traces(
 fn endpoint_source_root<'a>(
     endpoint: &'a SectionCurveEndpoint,
     operand: usize,
-    ring: &SourceRing,
+    ring: &CertifiedSourceRing,
 ) -> Option<&'a SectionSourceParameterKey> {
     let SectionCurveEndpointTopology::Trim {
         sites,
@@ -2262,7 +2129,7 @@ fn endpoint_source_root<'a>(
         return None;
     };
     match sites.get(operand)? {
-        SectionSite::EdgeInterior(edge) if edge.raw() == ring.edge => {
+        SectionSite::EdgeInterior(edge) if edge.raw() == ring.edge() => {
             source_parameters.get(operand)?.as_ref()
         }
         _ => None,

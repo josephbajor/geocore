@@ -55,11 +55,15 @@ mod disk_publish;
 mod mixed_stitch;
 mod periodic_embedding;
 mod root_identity;
+mod root_identity_quartic;
 mod ruling_clip;
+mod ruling_disk_clip;
 mod ruling_public;
 mod ruling_publish;
 mod semantic_ruling;
+mod skew_cylinder_fragment;
 mod skew_cylinder_public;
+mod source_annulus;
 mod stitch;
 
 pub use periodic_embedding::{
@@ -72,7 +76,11 @@ pub use periodic_embedding::{
 pub(crate) use periodic_embedding::{
     certify_periodic_face_fragment_subset, periodic_face_fragment_subset_work,
 };
-pub use skew_cylinder_public::{SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve};
+pub use skew_cylinder_public::{
+    SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralTrimProvenance,
+    SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve,
+    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderRootChart,
+};
 
 #[cfg(test)]
 mod tests;
@@ -680,7 +688,7 @@ impl core::hash::Hash for SectionSourceParameterKey {
     }
 }
 
-/// Exact combinatorial identity of one stitched analytic-fragment endpoint.
+/// Exact combinatorial identity of one stitched section-fragment endpoint.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum SectionCurveEndpointTopology {
@@ -700,13 +708,13 @@ pub enum SectionCurveEndpointTopology {
     },
 }
 
-/// One proof-keyed vertex shared by stitched analytic branch fragments.
+/// One proof-keyed vertex shared by stitched branch fragments.
 ///
 /// Equality and joins are owned by [`SectionCurveEndpointTopology`], never
 /// by a metric point comparison. Every occurrence interval encloses the same
-/// certified analytic source root, whether the incident carriers are lines,
-/// arcs, or a mix of analytic families. Their common evidence is intersected
-/// only after those exact identities match.
+/// certified source root, whether the incident carriers are lines, arcs,
+/// procedural curves, or a mix of those families. Their common evidence is
+/// intersected only after those exact identities match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionCurveEndpoint {
     topology: SectionCurveEndpointTopology,
@@ -805,7 +813,7 @@ impl SectionCurveFragmentEnd {
     }
 }
 
-/// Exact coverage of one public analytic branch fragment.
+/// Exact coverage of one public branch fragment.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum SectionCurveFragmentSpan {
@@ -822,6 +830,14 @@ pub enum SectionCurveFragmentSpan {
     LineSegment {
         /// Start/end occurrences in canonical carrier orientation.
         endpoints: Box<[SectionRulingFragmentEnd; 2]>,
+    },
+    /// Directed bounded procedural carrier between exact source-ring roots.
+    ///
+    /// Each physical root is retained separately from the guarded interior
+    /// point that bounds the branch's active residual certificate.
+    BoundedProcedural {
+        /// Start/end occurrences in canonical Section traversal order.
+        endpoints: Box<[SectionBoundedProceduralFragmentEnd; 2]>,
     },
 }
 
@@ -848,16 +864,16 @@ impl SectionCurveFragment {
         self.source_ordinal
     }
 
-    /// Exact whole-period, bounded-arc, or bounded-line coverage.
+    /// Exact whole-period, bounded-analytic, or bounded-procedural coverage.
     pub const fn span(&self) -> &SectionCurveFragmentSpan {
         &self.span
     }
 }
 
-/// One certified closed component of exact analytic fragments.
+/// One certified component of exact branch fragments.
 ///
-/// A component may contain line fragments, arc fragments, or a deterministic
-/// mix of analytic carrier families joined by shared endpoint identities.
+/// A component may contain line, arc, or procedural fragments joined in a
+/// deterministic traversal by shared endpoint identities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionCurveComponent {
     fragments: Vec<usize>,
@@ -996,23 +1012,24 @@ impl BodySectionGraph {
         &self.edges
     }
 
-    /// Certified analytic carrier branches. [`Self::rings`] identifies the
-    /// branches whose exact trims retained a whole closed component.
+    /// Certified analytic and procedural carrier branches. [`Self::rings`]
+    /// identifies the branches whose exact trims retained a whole closed
+    /// component.
     pub fn branches(&self) -> &[SectionBranch] {
         &self.branches
     }
 
-    /// Proof-keyed endpoints shared by bounded analytic branch fragments.
+    /// Proof-keyed endpoints shared by bounded branch fragments.
     pub fn curve_endpoints(&self) -> &[SectionCurveEndpoint] {
         &self.curve_endpoints
     }
 
-    /// Exact analytic branch fragments in deterministic clipper order.
+    /// Exact branch fragments in deterministic publisher order.
     pub fn curve_fragments(&self) -> &[SectionCurveFragment] {
         &self.curve_fragments
     }
 
-    /// Certified closed analytic-fragment components in discovery order.
+    /// Certified fragment components in discovery order.
     /// Open or ambiguous fragments remain visible through [`Self::curve_fragments`]
     /// alongside an [`SectionCompletion::Indeterminate`] gap.
     pub fn curve_components(&self) -> &[SectionCurveComponent] {
@@ -1089,6 +1106,7 @@ pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
 pub(crate) const GAP_CURVED_TRIM_UNRESOLVED: &str =
     "two independently bounded curved trims cannot yet be intersected in cyclic parameter space";
 pub(crate) const GAP_SKEW_CYLINDER_WHOLE_BAND_UNPROVEN: &str = "strictly contained skew-cylinder sheets require exact untrimmed full-period source bands matching both axial face-domain bounds";
+pub(crate) const GAP_SKEW_CYLINDER_OPEN_SPAN_CAP_ROOT_UNPROVEN: &str = "a graph-certified skew-cylinder open span could not map every exact axial root onto its topology-owned source cap ring";
 pub(crate) const GAP_DISK_CHORD_TRIM_UNRESOLVED: &str =
     "a disk-cap chord is not strictly contained by one opposing planar trim span";
 pub(crate) const GAP_MIXED_FRAGMENT_STITCH: &str =
@@ -1399,6 +1417,7 @@ struct SectionAccumulator {
     closed_fragment_evidence: Vec<ClosedFragmentEvidence>,
     ruling_fragments: Vec<ruling_publish::CertifiedRulingFragment>,
     disk_fragments: Vec<disk_publish::CertifiedDiskCapFragment>,
+    bounded_procedural_fragments: Vec<skew_cylinder_fragment::CertifiedBoundedSkewCylinderFragment>,
     cylinder_cylinder_exterior_radial_separations:
         Vec<SectionCylinderCylinderExteriorRadialSeparation>,
     skew_cylinder_strict_discriminant_misses: Vec<SectionSkewCylinderStrictDiscriminantMiss>,
@@ -2502,6 +2521,7 @@ fn assemble_graph(
         closed_fragment_evidence,
         ruling_fragments,
         disk_fragments,
+        bounded_procedural_fragments,
         cylinder_cylinder_exterior_radial_separations,
         skew_cylinder_strict_discriminant_misses,
         mut gaps,
@@ -2562,6 +2582,7 @@ fn assemble_graph(
         &closed_fragment_evidence,
         &ruling_fragments,
         &disk_fragments,
+        &bounded_procedural_fragments,
         &closed_stitched,
     )?;
     let periodic_face_embeddings = periodic_embedding::certify_periodic_faces(

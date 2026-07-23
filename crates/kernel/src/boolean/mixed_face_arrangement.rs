@@ -302,6 +302,7 @@ pub(crate) enum MixedFaceArrangementError {
     InvalidSourceEdgeBounds(RawEdgeId),
     MissingSectionBranch(usize),
     WholeFragment(MixedCutFragmentKey),
+    BoundedProceduralFragment(MixedCutFragmentKey),
     FragmentMissingFromClosedComponent(MixedCutFragmentKey),
     DuplicateFragmentComponentUse(MixedCutFragmentKey),
     MissingSectionEndpoint(usize),
@@ -535,6 +536,9 @@ fn adapt_fragment(
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+            return Err(MixedFaceArrangementError::BoundedProceduralFragment(key));
+        }
     };
     let occurrences = match fragment.span() {
         SectionCurveFragmentSpan::Whole => {
@@ -563,6 +567,9 @@ fn adapt_fragment(
             });
             (end.endpoint(), root)
         }),
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+            return Err(MixedFaceArrangementError::BoundedProceduralFragment(key));
+        }
     };
 
     let endpoints = occurrences

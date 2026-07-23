@@ -7,9 +7,9 @@
 //! section branch, and operand ordering that observes that query.
 //!
 //! This exact-family slice admits bounded line edges against cylindrical
-//! faces and vertexless whole-period circle edges against planar faces or
-//! cylinders whose axes are exactly parallel to the circle normal. Bounded or
-//! vertex-backed circle edges remain unsupported until periodic copy
+//! faces and vertexless whole-period circle edges against planar or
+//! cylindrical faces, including nonparallel Circle/Cylinder supports. Bounded
+//! or vertex-backed circle edges remain unsupported until periodic copy
 //! enumeration has its own certified integer-range proof. Root coefficients
 //! and enclosures use outward interval arithmetic over authored source values.
 //! Exact affine predicates decide family admission and semantic degeneracies.
@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
-use kcore::predicates::{Orientation, affine_dot3, orient3d};
+use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::curve::{Circle, Line};
 use kgeom::surface::{Cylinder, Plane};
 use kgeom::vec::Vec3;
@@ -34,6 +34,7 @@ use ktopo::store::Store;
 use crate::error::{Error, Result};
 
 use super::SECTION_WORK;
+use super::root_identity_quartic::{CIRCLE_CYLINDER_QUARTIC_WORK, certify_periodic_quartic_roots};
 
 /// One operation-shared source-root identity.
 ///
@@ -480,10 +481,9 @@ fn certify_circle_plane(
     retain_bounded_roots(roots, active)
 }
 
-/// Certify the intrinsic roots of a whole source circle against a cylinder
-/// whose axis is exactly parallel or antiparallel to the circle normal.
+/// Certify the intrinsic roots of a whole source circle against a cylinder.
 ///
-/// In that family the cylinder implicit restricted to the circle is a complete
+/// The cylinder implicit restricted to any source circle is a complete
 /// second-harmonic trigonometric polynomial. Stored [`Frame`] axes satisfy an
 /// orthonormal semantic contract but are rounded binary64 vectors. Cramer's
 /// rule first expresses the source basis in the cylinder's actual stored
@@ -491,21 +491,17 @@ fn certify_circle_plane(
 /// rather than collapsed into a scalar error guard. The tan-half-angle
 /// substitution produces a full quartic. Both real half-angle branches are
 /// compactified onto `[0, 1]`, and interval range plus derivative certificates
-/// prove a complete cover with either zero roots or exactly two unique
-/// transverse roots. Anything near a multiple root, a chart boundary, or a
-/// four-root rounded-frame case fails closed. The source circle's own
-/// `[0, TAU]` parameter order remains the sole root ordinal authority.
+/// prove a complete cover with zero, two, or four unique transverse roots.
+/// Anything near a multiple root or a chart boundary fails closed. The source
+/// circle's own `[0, TAU]` parameter order remains the sole root ordinal
+/// authority.
 fn certify_circle_cylinder(
     circle: Circle,
     cylinder: Cylinder,
 ) -> core::result::Result<Vec<Interval>, RootIdentityGap> {
     let circle_frame = circle.frame();
     let cylinder_frame = cylinder.frame();
-    let circle_axis = circle_frame.z();
     let cylinder_axis = cylinder_frame.z();
-    if !vectors_are_exactly_parallel(circle_axis, cylinder_axis) {
-        return Err(RootIdentityGap::UnsupportedGeometry);
-    }
     if [
         circle.radius(),
         cylinder.radius(),
@@ -602,85 +598,8 @@ fn certify_circle_cylinder(
     certify_periodic_quartic_roots(quartic)
 }
 
-const QUARTIC_ROOT_MAX_DEPTH: usize = 24;
-const QUARTIC_ROOT_MAX_NODES: usize = 16_384;
-// Each compact half-angle branch may visit at most `MAX_NODES`. Precharging
-// both complete covers makes the semantic result independent of early exits
-// while bounding the recursive work below the default Section allowance.
-const CIRCLE_CYLINDER_QUARTIC_WORK: u64 = 2 * QUARTIC_ROOT_MAX_NODES as u64;
-
 fn charge_circle_cylinder_quartic(scope: &mut OperationScope<'_, '_>) -> Result<()> {
     charge(scope, CIRCLE_CYLINDER_QUARTIC_WORK)
-}
-
-/// Certify all roots of a periodic quartic half-angle numerator.
-///
-/// Positive and negative half angles are independently compactified by
-/// `h = +/-s/(1-s)`, `s in [0, 1]`. The transformed polynomial has the same
-/// finite roots because its positive denominator was cleared. A recursive
-/// interval cover discards only cells whose polynomial range excludes zero;
-/// every retained root cell must additionally have a one-signed derivative
-/// and opposite endpoint signs, proving existence and uniqueness. Thus the
-/// accepted two cells are a complete two-root proof, not candidate samples.
-fn certify_periodic_quartic_roots(
-    quartic: [Interval; 5],
-) -> core::result::Result<Vec<Interval>, RootIdentityGap> {
-    if quartic[0].contains_zero() {
-        return Err(RootIdentityGap::ParameterSeamContact);
-    }
-    // `h = +/-infinity` is the ordinary source parameter `PI`, but is a chart
-    // boundary for both compactifications. Do not infer its multiplicity from
-    // a degree drop.
-    if quartic[4].contains_zero() {
-        return Err(RootIdentityGap::TangentialOrUnresolvedMultiplicity);
-    }
-
-    let mut compact_roots = Vec::new();
-    for half_angle_sign in [1_i8, -1_i8] {
-        let compact = compactified_quartic(quartic, half_angle_sign)?;
-        for root in isolate_compact_quartic(compact)? {
-            compact_roots.push((half_angle_sign, root));
-        }
-    }
-    if compact_roots.is_empty() {
-        return Ok(Vec::new());
-    }
-    if compact_roots.len() != 2 {
-        return Err(RootIdentityGap::TangentialOrUnresolvedMultiplicity);
-    }
-
-    let tau = core::f64::consts::TAU;
-    let mut roots = Vec::with_capacity(2);
-    for (half_angle_sign, compact) in compact_roots {
-        if compact.lo() <= 0.0 || compact.hi() >= 1.0 {
-            return Err(RootIdentityGap::ParameterSeamContact);
-        }
-        let magnitude = compact
-            .checked_div(Interval::point(1.0) - compact)
-            .ok_or(RootIdentityGap::ArithmeticGuard)?;
-        let principal = if half_angle_sign > 0 {
-            twice_atan_interval(magnitude)?
-        } else {
-            twice_atan_interval(-magnitude)? + Interval::point(tau)
-        };
-        if principal.lo() <= 0.0 || principal.hi() >= tau {
-            return Err(RootIdentityGap::ParameterSeamContact);
-        }
-        roots.push(principal);
-    }
-    strict_sort(&mut roots)?;
-    Ok(roots)
-}
-
-fn vectors_are_exactly_parallel(first: Vec3, second: Vec3) -> bool {
-    if first == second || first == -second {
-        return true;
-    }
-    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-        .into_iter()
-        .all(|basis| {
-            orient3d(first.to_array(), second.to_array(), basis, [0.0; 3]) == Orientation::Zero
-        })
 }
 
 /// Whether the exact displacement between two authored points is parallel to
@@ -706,219 +625,6 @@ fn points_are_exactly_axis_aligned(
         }
     }
     Ok(true)
-}
-
-fn compactified_quartic(
-    quartic: [Interval; 5],
-    half_angle_sign: i8,
-) -> core::result::Result<[Interval; 5], RootIdentityGap> {
-    const BINOMIAL: [[u8; 5]; 5] = [
-        [1, 0, 0, 0, 0],
-        [1, 1, 0, 0, 0],
-        [1, 2, 1, 0, 0],
-        [1, 3, 3, 1, 0],
-        [1, 4, 6, 4, 1],
-    ];
-    let mut transformed: [Option<Interval>; 5] = [None; 5];
-    for (power, coefficient) in quartic.into_iter().enumerate() {
-        let signed = if half_angle_sign < 0 && power % 2 == 1 {
-            -coefficient
-        } else {
-            coefficient
-        };
-        for (residual_power, binomial) in BINOMIAL[4 - power].iter().enumerate().take(5 - power) {
-            let scalar = f64::from(*binomial);
-            let mut term = signed * Interval::point(scalar);
-            if residual_power % 2 == 1 {
-                term = -term;
-            }
-            let output_power = power + residual_power;
-            transformed[output_power] = Some(match transformed[output_power] {
-                Some(accumulated) => accumulated + term,
-                None => term,
-            });
-        }
-    }
-    let transformed = transformed.map(|coefficient| coefficient.unwrap_or(Interval::point(0.0)));
-    transformed
-        .iter()
-        .all(|coefficient| finite(*coefficient))
-        .then_some(transformed)
-        .ok_or(RootIdentityGap::ArithmeticGuard)
-}
-
-#[derive(Default)]
-struct CompactRootCover {
-    certified: Vec<Interval>,
-    unresolved: Vec<Interval>,
-    visited: usize,
-    exhausted: bool,
-}
-
-fn isolate_compact_quartic(
-    coefficients: [Interval; 5],
-) -> core::result::Result<Vec<Interval>, RootIdentityGap> {
-    let derivative = quartic_derivative(coefficients);
-    let mut cover = CompactRootCover::default();
-    classify_compact_interval(
-        coefficients,
-        derivative,
-        Interval::new(0.0, 1.0),
-        0,
-        &mut cover,
-    );
-    if cover.exhausted {
-        return Err(RootIdentityGap::TangentialOrUnresolvedMultiplicity);
-    }
-
-    let mut unresolved = merge_touching_intervals(cover.unresolved);
-    for candidate in unresolved.drain(..) {
-        let derivative_range = polynomial_value(derivative, candidate);
-        let Some(_) = strict_interval_sign(derivative_range) else {
-            return Err(RootIdentityGap::TangentialOrUnresolvedMultiplicity);
-        };
-        let left = strict_interval_sign(polynomial_value(
-            coefficients,
-            Interval::point(candidate.lo()),
-        ));
-        let right = strict_interval_sign(polynomial_value(
-            coefficients,
-            Interval::point(candidate.hi()),
-        ));
-        match (left, right) {
-            (Some(a), Some(b)) if a != b => {
-                cover
-                    .certified
-                    .push(refine_compact_root(coefficients, candidate, a, b));
-            }
-            (Some(a), Some(b)) if a == b => {}
-            _ => return Err(RootIdentityGap::TangentialOrUnresolvedMultiplicity),
-        }
-    }
-    strict_sort(&mut cover.certified)?;
-    Ok(cover.certified)
-}
-
-fn classify_compact_interval(
-    coefficients: [Interval; 5],
-    derivative: [Interval; 4],
-    domain: Interval,
-    depth: usize,
-    cover: &mut CompactRootCover,
-) {
-    if cover.exhausted {
-        return;
-    }
-    if cover.visited == QUARTIC_ROOT_MAX_NODES {
-        cover.exhausted = true;
-        return;
-    }
-    cover.visited += 1;
-    if excludes_zero(polynomial_value(coefficients, domain)) {
-        return;
-    }
-
-    let derivative_sign = strict_interval_sign(polynomial_value(derivative, domain));
-    let left_sign =
-        strict_interval_sign(polynomial_value(coefficients, Interval::point(domain.lo())));
-    let right_sign =
-        strict_interval_sign(polynomial_value(coefficients, Interval::point(domain.hi())));
-    if derivative_sign.is_some()
-        && let (Some(left), Some(right)) = (left_sign, right_sign)
-    {
-        if left != right {
-            cover
-                .certified
-                .push(refine_compact_root(coefficients, domain, left, right));
-        }
-        return;
-    }
-    if depth == QUARTIC_ROOT_MAX_DEPTH {
-        cover.unresolved.push(domain);
-        return;
-    }
-    let midpoint = 0.5 * domain.lo() + 0.5 * domain.hi();
-    if midpoint <= domain.lo() || midpoint >= domain.hi() {
-        cover.unresolved.push(domain);
-        return;
-    }
-    classify_compact_interval(
-        coefficients,
-        derivative,
-        Interval::new(domain.lo(), midpoint),
-        depth + 1,
-        cover,
-    );
-    classify_compact_interval(
-        coefficients,
-        derivative,
-        Interval::new(midpoint, domain.hi()),
-        depth + 1,
-        cover,
-    );
-}
-
-fn refine_compact_root(
-    coefficients: [Interval; 5],
-    mut bracket: Interval,
-    mut left_sign: i8,
-    right_sign: i8,
-) -> Interval {
-    debug_assert_ne!(left_sign, right_sign);
-    for _ in 0..80 {
-        let midpoint = 0.5 * bracket.lo() + 0.5 * bracket.hi();
-        if midpoint <= bracket.lo() || midpoint >= bracket.hi() {
-            break;
-        }
-        match strict_interval_sign(polynomial_value(coefficients, Interval::point(midpoint))) {
-            Some(sign) if sign == left_sign => {
-                bracket = Interval::new(midpoint, bracket.hi());
-                left_sign = sign;
-            }
-            Some(sign) if sign == right_sign => {
-                bracket = Interval::new(bracket.lo(), midpoint);
-            }
-            _ => break,
-        }
-    }
-    bracket
-}
-
-fn merge_touching_intervals(mut intervals: Vec<Interval>) -> Vec<Interval> {
-    intervals.sort_by(|a, b| a.lo().total_cmp(&b.lo()).then(a.hi().total_cmp(&b.hi())));
-    let mut merged: Vec<Interval> = Vec::with_capacity(intervals.len());
-    for interval in intervals {
-        if let Some(last) = merged.last_mut()
-            && interval.lo() <= last.hi()
-        {
-            *last = Interval::new(last.lo(), last.hi().max(interval.hi()));
-            continue;
-        }
-        merged.push(interval);
-    }
-    merged
-}
-
-fn quartic_derivative(coefficients: [Interval; 5]) -> [Interval; 4] {
-    core::array::from_fn(|power| coefficients[power + 1] * Interval::point((power + 1) as f64))
-}
-
-fn polynomial_value<const N: usize>(coefficients: [Interval; N], argument: Interval) -> Interval {
-    let mut value = coefficients[N - 1];
-    for coefficient in coefficients[..N - 1].iter().rev() {
-        value = value * argument + *coefficient;
-    }
-    value
-}
-
-fn strict_interval_sign(value: Interval) -> Option<i8> {
-    if value.lo() > 0.0 {
-        Some(1)
-    } else if value.hi() < 0.0 {
-        Some(-1)
-    } else {
-        None
-    }
 }
 
 fn transverse_quadratic_roots(
@@ -975,7 +681,7 @@ fn retain_bounded_roots(
     Ok(retained)
 }
 
-fn strict_sort(roots: &mut [Interval]) -> core::result::Result<(), RootIdentityGap> {
+pub(super) fn strict_sort(roots: &mut [Interval]) -> core::result::Result<(), RootIdentityGap> {
     roots.sort_by(|a, b| a.lo().total_cmp(&b.lo()).then(a.hi().total_cmp(&b.hi())));
     if roots.windows(2).any(|pair| pair[0].hi() >= pair[1].lo()) {
         return Err(RootIdentityGap::UnorderedRoots);
@@ -997,7 +703,9 @@ fn resolve_order(edge: RawEdgeId, roots: &[Interval], observed: Interval) -> Roo
     RootResolution::Resolved(SourceRootKey { edge, ordinal })
 }
 
-fn twice_atan_interval(value: Interval) -> core::result::Result<Interval, RootIdentityGap> {
+pub(super) fn twice_atan_interval(
+    value: Interval,
+) -> core::result::Result<Interval, RootIdentityGap> {
     if !finite(value) {
         return Err(RootIdentityGap::ArithmeticGuard);
     }
@@ -1061,11 +769,11 @@ fn affine_dot_interval(normal: Vec3, point: Vec3, origin: Vec3) -> Interval {
     )
 }
 
-fn excludes_zero(value: Interval) -> bool {
+pub(super) fn excludes_zero(value: Interval) -> bool {
     value.hi() < 0.0 || value.lo() > 0.0
 }
 
-fn finite(value: Interval) -> bool {
+pub(super) fn finite(value: Interval) -> bool {
     value.lo().is_finite() && value.hi().is_finite()
 }
 
@@ -1200,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_cylinder_miss_tangent_coincidence_and_nonparallel_fail_closed() {
+    fn circle_cylinder_miss_tangent_and_coincidence_are_typed() {
         let circle = Circle::new(Frame::world(), 1.0).unwrap();
         let cylinder_at = |x, y, radius| {
             Cylinder::new(Frame::world().with_origin(Point3::new(x, y, 0.0)), radius).unwrap()
@@ -1223,26 +931,65 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let nonparallel = Cylinder::new(
-            Frame::from_z(Point3::new(0.5, 0.0, 0.0), Vec3::new(0.0, 1.0, 1.0)).unwrap(),
+    }
+
+    #[test]
+    fn perpendicular_circle_cylinder_certifies_four_source_ordered_roots_and_replays() {
+        // The source circle is `(2 cos u, 2 sin u, 0)`. Against the unit
+        // cylinder about the x axis, the exact restriction is
+        // `4 sin(u)^2 = 1`, whose four simple roots provide an independent
+        // source-parameter oracle.
+        let circle = Circle::new(Frame::world(), 2.0).unwrap();
+        let cylinder = Cylinder::new(
+            Frame::from_z(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
             1.0,
         )
         .unwrap();
-        assert_eq!(
-            certify_circle_cylinder(circle, nonparallel),
-            Err(RootIdentityGap::UnsupportedGeometry)
+        let roots = certify_circle_cylinder(circle, cylinder).unwrap();
+        let replay = certify_circle_cylinder(circle, cylinder).unwrap();
+        assert_eq!(roots, replay);
+        let expected = [
+            core::f64::consts::PI / 6.0,
+            5.0 * core::f64::consts::PI / 6.0,
+            7.0 * core::f64::consts::PI / 6.0,
+            11.0 * core::f64::consts::PI / 6.0,
+        ];
+        assert_eq!(roots.len(), expected.len());
+        for (root, exact) in roots.iter().zip(expected) {
+            assert!(root.contains(exact), "{root:?} must enclose {exact}");
+        }
+        assert!(roots.windows(2).all(|pair| pair[0].hi() < pair[1].lo()));
+
+        let nonparallel_miss = Cylinder::new(*cylinder.frame(), 3.0).unwrap();
+        assert!(
+            certify_circle_cylinder(circle, nonparallel_miss)
+                .unwrap()
+                .is_empty()
         );
     }
 
     #[test]
-    fn circle_cylinder_parallel_admission_uses_exact_predicates() {
-        let first = Vec3::new(1.0, -2.0, 3.0);
-        let parallel = first * 4.0;
-        let near_parallel = Vec3::new(4.0, -8.0, 12.0_f64.next_up());
-        assert_ne!(first, parallel);
-        assert!(vectors_are_exactly_parallel(first, parallel));
-        assert!(vectors_are_exactly_parallel(first, -parallel));
-        assert!(!vectors_are_exactly_parallel(first, near_parallel));
+    fn nonparallel_circle_cylinder_certifies_two_source_ordered_roots() {
+        // Translating the same radius-two source circle by +2 in cylinder
+        // radial y leaves only `2 + 2 sin(u) = 1`; the other radial branch is
+        // unreachable. Its two simple roots are intrinsic source parameters.
+        let circle =
+            Circle::new(Frame::world().with_origin(Point3::new(0.0, 2.0, 0.0)), 2.0).unwrap();
+        let cylinder = Cylinder::new(
+            Frame::from_z(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            1.0,
+        )
+        .unwrap();
+        let roots = certify_circle_cylinder(circle, cylinder).unwrap();
+        let expected = [
+            7.0 * core::f64::consts::PI / 6.0,
+            11.0 * core::f64::consts::PI / 6.0,
+        ];
+        assert_eq!(roots.len(), expected.len());
+        for (root, exact) in roots.iter().zip(expected) {
+            assert!(root.contains(exact), "{root:?} must enclose {exact}");
+        }
+        assert!(roots[0].hi() < roots[1].lo());
     }
 
     #[test]
@@ -1359,7 +1106,7 @@ mod tests {
         // affine point-origin predicate retains those stored-point bits.
         let rounded = circle_origin - cylinder_origin;
         assert_eq!(rounded, Vec3::new(large, large, large));
-        assert!(vectors_are_exactly_parallel(rounded, cylinder_frame.z()));
+        assert_eq!(rounded.cross(cylinder_frame.z()), Vec3::default());
         assert!(
             !points_are_exactly_axis_aligned(circle_origin, cylinder_origin, cylinder_frame.z(),)
                 .unwrap()
@@ -1397,6 +1144,7 @@ mod tests {
             let mut scope = OperationScope::new(&context);
             charge_circle_cylinder_quartic(&mut scope)
         };
+        assert_eq!(CIRCLE_CYLINDER_QUARTIC_WORK, 32_768);
         assert!(run(CIRCLE_CYLINDER_QUARTIC_WORK).is_ok());
         let error = run(CIRCLE_CYLINDER_QUARTIC_WORK - 1).unwrap_err();
         let crossing = error.limit().expect("N-1 must retain limit evidence");
@@ -1407,16 +1155,30 @@ mod tests {
     }
 
     #[test]
-    fn periodic_quartic_refuses_four_distinct_transverse_roots() {
+    fn periodic_quartic_certifies_four_distinct_transverse_roots() {
         // `(h^2 - 1)(h^2 - 4)` has the four simple real roots
-        // `-2, -1, 1, 2`. Every root is individually certifiable, but a
-        // Circle/Cylinder source-root order may publish only the proven
-        // zero-or-two exact family.
+        // `-2, -1, 1, 2`, so completeness requires four source roots.
+        let roots = certify_periodic_quartic_roots([
+            Interval::point(4.0),
+            Interval::point(0.0),
+            Interval::point(-5.0),
+            Interval::point(0.0),
+            Interval::point(1.0),
+        ])
+        .unwrap();
+        assert_eq!(roots.len(), 4);
+        assert!(roots.windows(2).all(|pair| pair[0].hi() < pair[1].lo()));
+    }
+
+    #[test]
+    fn periodic_quartic_repeated_root_retains_typed_multiplicity_refusal() {
+        // `(h^2 - 1)^2` has repeated roots at `h = +/-1`; cardinality
+        // admission must not weaken the derivative certificate.
         assert_eq!(
             certify_periodic_quartic_roots([
-                Interval::point(4.0),
+                Interval::point(1.0),
                 Interval::point(0.0),
-                Interval::point(-5.0),
+                Interval::point(-2.0),
                 Interval::point(0.0),
                 Interval::point(1.0),
             ]),

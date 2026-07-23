@@ -650,6 +650,18 @@ pub(super) fn intern_endpoint(
     endpoints: &mut Vec<SectionCurveEndpoint>,
 ) -> Result<usize> {
     let candidate = adapt_endpoint(part, certified, root_scalars)?;
+    intern_endpoint_candidate(candidate, endpoints)
+}
+
+/// Intern an already-adapted endpoint by exact topology/root identity.
+///
+/// Bounded procedural fragments use this seam to share source-ring roots with
+/// adjacent ruling fragments without comparing their distinct metric
+/// representatives.
+pub(super) fn intern_endpoint_candidate(
+    candidate: SectionCurveEndpoint,
+    endpoints: &mut Vec<SectionCurveEndpoint>,
+) -> Result<usize> {
     if let Some(index) = endpoints
         .iter()
         .position(|endpoint| endpoint.topology == candidate.topology)

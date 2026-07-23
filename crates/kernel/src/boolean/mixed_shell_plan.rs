@@ -1258,6 +1258,7 @@ fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize; 2]> {
         SectionCurveFragmentSpan::LineSegment { endpoints } => {
             Some([endpoints[0].endpoint(), endpoints[1].endpoint()])
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => None,
     }
 }
 

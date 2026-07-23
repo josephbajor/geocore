@@ -1,4 +1,4 @@
-//! Deterministic directed assembly of published analytic section fragments.
+//! Deterministic directed assembly of published section fragments.
 //!
 //! Exact endpoint interning happens before this module runs.  Consequently an
 //! endpoint index, rather than a rounded point or metric interval, is the sole
@@ -34,7 +34,7 @@ pub(crate) struct MixedStitchResult {
     pub(crate) defects: Vec<MixedStitchDefect>,
 }
 
-/// Assemble all published whole, arc, and line fragments by exact endpoint ID.
+/// Assemble every published fragment family by exact endpoint ID.
 pub(crate) fn stitch_curve_fragments(
     fragments: &[SectionCurveFragment],
     endpoint_count: usize,
@@ -264,6 +264,10 @@ fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<DirectedEndpoin
             arrival: endpoints[1].endpoint(),
         }),
         SectionCurveFragmentSpan::LineSegment { endpoints } => Some(DirectedEndpointPair {
+            departure: endpoints[0].endpoint(),
+            arrival: endpoints[1].endpoint(),
+        }),
+        SectionCurveFragmentSpan::BoundedProcedural { endpoints } => Some(DirectedEndpointPair {
             departure: endpoints[0].endpoint(),
             arrival: endpoints[1].endpoint(),
         }),

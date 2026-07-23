@@ -1374,6 +1374,9 @@ fn mixed_fragment_family(fragment: &SectionCurveFragment) -> MixedFragmentFamily
         SectionCurveFragmentSpan::Whole => {
             panic!("mixed slab fixture must not publish a whole branch")
         }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+            panic!("mixed slab fixture must not publish a procedural branch")
+        }
     }
 }
 
@@ -1387,6 +1390,9 @@ fn fragment_endpoint_indices(fragment: &SectionCurveFragment) -> [usize; 2] {
         }
         SectionCurveFragmentSpan::Whole => {
             panic!("mixed slab fixture must not publish a whole branch")
+        }
+        SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+            panic!("mixed slab fixture must not publish a procedural branch")
         }
     }
 }
@@ -1527,6 +1533,9 @@ fn collect_mixed_endpoint_occurrences(
             }
             SectionCurveFragmentSpan::Whole => {
                 panic!("mixed slab fixture must not publish a whole branch")
+            }
+            SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+                panic!("mixed slab fixture must not publish a procedural branch")
             }
         }
     }
