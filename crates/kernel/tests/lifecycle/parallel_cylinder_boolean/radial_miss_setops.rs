@@ -32,7 +32,6 @@ enum RadialRelation {
     StrictInternal,
     Tangent,
     RoundedTangent,
-    InternalTangent,
     Coincident,
 }
 
@@ -414,13 +413,6 @@ fn assert_radial_relation(
                 0.0,
                 "{name}: radius sum must retain a nonzero exact residual"
             );
-        }
-        RadialRelation::InternalTangent => {
-            assert_eq!(
-                distance_squared.to_bits(),
-                difference_squared.to_bits(),
-                "{name}"
-            )
         }
         RadialRelation::Coincident => {
             assert_eq!(distance_squared.to_bits(), 0.0_f64.to_bits(), "{name}");
@@ -1496,7 +1488,7 @@ fn exact_external_tangency_is_not_inferred_from_one_ulp_or_resolution_near_suppo
 }
 
 #[test]
-fn positive_overlap_external_tangency_is_not_inferred_from_near_or_internal_supports() {
+fn positive_overlap_external_tangency_is_not_inferred_from_near_supports() {
     let boundary = 2.0_f64;
     let exterior = radial_overlap_boundary_case(
         "positive overlap with one ULP exterior radial support",
@@ -1510,12 +1502,6 @@ fn positive_overlap_external_tangency_is_not_inferred_from_near_or_internal_supp
         boundary.next_down(),
         RadialRelation::StrictSecant,
     );
-    let internal_tangent = radial_overlap_boundary_case(
-        "positive overlap with exact internal tangency",
-        [3.0, 1.0],
-        2.0,
-        RadialRelation::InternalTangent,
-    );
     let rounded_radius_sum = 1.0 + 0.2;
     let rounded_sum = radial_overlap_boundary_case(
         "positive overlap with unrepresentable radius-sum equality",
@@ -1523,7 +1509,7 @@ fn positive_overlap_external_tangency_is_not_inferred_from_near_or_internal_supp
         rounded_radius_sum,
         RadialRelation::RoundedTangent,
     );
-    for case in [exterior, interior, internal_tangent, rounded_sum] {
+    for case in [exterior, interior, rounded_sum] {
         assert_certified_relation(case);
     }
 
@@ -1535,11 +1521,11 @@ fn positive_overlap_external_tangency_is_not_inferred_from_near_or_internal_supp
             reversed_axes,
             assert_success,
         );
-        for refused in [interior, internal_tangent, rounded_sum] {
+        for refused in [interior, rounded_sum] {
             executions += assert_refusal_matrix_with_directions(refused, reversed_axes);
         }
     }
-    assert_eq!(executions, 192);
+    assert_eq!(executions, 144);
 
     // This all-nonzero authored frame is tangent over real arithmetic, but
     // normalization stores a rounded dyadic support with a tiny radial

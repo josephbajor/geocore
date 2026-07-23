@@ -4,7 +4,8 @@
 //! recognizes the proof-complete relations needed by the first Cylinder/Cylinder
 //! Boolean slices: strict axial separation or exact axial contact of exactly
 //! parallel or antiparallel finite sources, exact external radial tangency over
-//! a strictly positive axial overlap, and the strict finite lens-prism relation.
+//! a strictly positive axial overlap, exact internal radial tangency with its
+//! directed containment, and the strict finite lens-prism relation.
 //! Both authored boundary orders are normalized onto one certified common axial
 //! coordinate before gap, contact, or overlap ownership is decided. Every
 //! retained boundary is topology-owned; rounded points are never used as
@@ -38,6 +39,9 @@ pub(super) use coincident_caps::{
 #[path = "parallel_cylinder_relation/common_support.rs"]
 mod common_support;
 pub(super) use common_support::CertifiedParallelCylinderCommonSupport;
+#[path = "parallel_cylinder_relation/internal_tangency.rs"]
+mod internal_tangency;
+pub(super) use internal_tangency::CertifiedParallelCylinderInternalRadialTangency;
 
 /// Fixed proof work charged before the first semantic exit.
 ///
@@ -285,6 +289,10 @@ pub(super) enum ParallelCylinderRelationOutcome {
     /// Exact common radial support and all four live source boundaries prove a
     /// strict positive axial-overlap interval relation.
     CertifiedCommonSupport(Box<CertifiedParallelCylinderCommonSupport>),
+    /// Exact unequal-radius internal tangency, directed radial containment,
+    /// and all four live source boundaries prove a strict positive finite
+    /// axial-overlap relation.
+    CertifiedInternalRadialTangency(Box<CertifiedParallelCylinderInternalRadialTangency>),
     /// Every analytic, topology, and provenance obligation was discharged.
     Certified(Box<CertifiedParallelCylinderLensRelation>),
     /// The operation-local incomplete-Section theorem for one or two shared
@@ -343,6 +351,17 @@ pub(super) fn certify_parallel_cylinder_relation(
             return Ok(ParallelCylinderRelationOutcome::CertifiedCommonSupport(
                 Box::new(certificate),
             ));
+        }
+        Ok(None) => {}
+        Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
+    }
+    match internal_tangency::certify_internal_radial_tangency(cylinders, &normalized) {
+        Ok(Some(certificate)) => {
+            return Ok(
+                ParallelCylinderRelationOutcome::CertifiedInternalRadialTangency(Box::new(
+                    certificate,
+                )),
+            );
         }
         Ok(None) => {}
         Err(gap) => return Ok(ParallelCylinderRelationOutcome::Indeterminate(gap)),
@@ -565,6 +584,7 @@ fn certify_source_cap_supports(
             }
             supports[operand][boundary_ordinal] = AxialBoundarySupport {
                 point: center,
+                side_parameter: side_line_origin.y,
                 envelope: if axis_parameter_identity_is_exact(
                     center,
                     cylinder.frame().origin(),
@@ -647,10 +667,11 @@ fn normalize_source_axial_intervals(
         || !finite_vec3(cylinder_b.frame().origin())
         || !cylinder_a.radius().is_finite()
         || !cylinder_b.radius().is_finite()
-        || supports
-            .iter()
-            .flatten()
-            .any(|support| !finite_vec3(support.point) || !support.envelope.is_finite())
+        || supports.iter().flatten().any(|support| {
+            !finite_vec3(support.point)
+                || !support.side_parameter.is_finite()
+                || !support.envelope.is_finite()
+        })
     {
         return Err(ParallelCylinderRelationGap::ArithmeticGuard);
     }
@@ -1055,6 +1076,7 @@ struct NormalizedSourceInterval {
 #[derive(Debug, Clone, Copy)]
 struct AxialBoundarySupport {
     point: Point3,
+    side_parameter: f64,
     envelope: f64,
     exact_domain_boundary: bool,
 }
@@ -1063,6 +1085,7 @@ impl AxialBoundarySupport {
     const fn zero() -> Self {
         Self {
             point: Point3::new(0.0, 0.0, 0.0),
+            side_parameter: 0.0,
             envelope: 0.0,
             exact_domain_boundary: false,
         }
@@ -1072,6 +1095,7 @@ impl AxialBoundarySupport {
     const fn exact(point: Point3) -> Self {
         Self {
             point,
+            side_parameter: 0.0,
             envelope: 0.0,
             exact_domain_boundary: true,
         }

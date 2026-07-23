@@ -7,7 +7,10 @@ use kgeom::frame::Frame;
 use kgeom::surface::Plane;
 use kgeom::vec::{Point2, Point3, Vec3};
 
-use super::super::axial_interval_sweep::plan_axial_interval_sweep;
+use super::super::axial_interval_sweep::{
+    AuthoredAxialEndpoint, AxialEndpointContributor, AxialIntervalOperand,
+    plan_axial_interval_sweep,
+};
 use super::super::boundary_select::RegularizedBooleanOperation;
 use super::*;
 use crate::{
@@ -207,6 +210,26 @@ fn common_support_fixture(
     )
 }
 
+fn internal_tangent_fixture(
+    first: (f64, f64),
+    second: (f64, f64),
+    reverse_second_axis: bool,
+    first_contains_second: bool,
+) -> Fixture {
+    fixture_with_geometry(
+        Placement::World,
+        first,
+        second,
+        reverse_second_axis,
+        [0.0, 1.0],
+        if first_contains_second {
+            [2.0, 1.0]
+        } else {
+            [1.0, 2.0]
+        },
+    )
+}
+
 fn section(fixture: &Fixture, swapped: bool) -> BodySectionGraph {
     let (first, second) = if swapped {
         (fixture.inner.clone(), fixture.outer.clone())
@@ -385,6 +408,17 @@ fn certified_common_support(
     match outcome {
         ParallelCylinderRelationOutcome::CertifiedCommonSupport(certificate) => *certificate,
         other => panic!("expected certified common support, got {other:?}"),
+    }
+}
+
+fn certified_internal_tangency(
+    outcome: ParallelCylinderRelationOutcome,
+) -> CertifiedParallelCylinderInternalRadialTangency {
+    match outcome {
+        ParallelCylinderRelationOutcome::CertifiedInternalRadialTangency(certificate) => {
+            *certificate
+        }
+        other => panic!("expected certified internal radial tangency, got {other:?}"),
     }
 }
 
@@ -949,6 +983,287 @@ fn exact_common_support_preserves_gap_contact_precedence_and_rejects_ring_drift(
             ParallelCylinderRelationGap::SourceBoundaryBinding,
         ),
     );
+}
+
+#[test]
+fn exact_internal_tangency_retains_containment_boundaries_and_endpoint_preorder() {
+    let cases = [
+        ("nested", (-2.0, 4.0), (-1.0, 2.0)),
+        ("crossing", (-2.0, 3.0), (-1.0, 3.0)),
+        ("shared low", (-2.0, 4.0), (-2.0, 2.0)),
+        ("shared high", (-2.0, 2.0), (-1.0, 1.0)),
+        ("equal", (-1.0, 2.0), (-1.0, 2.0)),
+    ];
+    let contributors = [
+        AxialEndpointContributor::new(AxialIntervalOperand::Left, AuthoredAxialEndpoint::Start),
+        AxialEndpointContributor::new(AxialIntervalOperand::Left, AuthoredAxialEndpoint::End),
+        AxialEndpointContributor::new(AxialIntervalOperand::Right, AuthoredAxialEndpoint::Start),
+        AxialEndpointContributor::new(AxialIntervalOperand::Right, AuthoredAxialEndpoint::End),
+    ];
+    for (name, first, second) in cases {
+        for first_contains_second in [false, true] {
+            for reverse_second_axis in [false, true] {
+                let fixture = internal_tangent_fixture(
+                    first,
+                    second,
+                    reverse_second_axis,
+                    first_contains_second,
+                );
+                let forward_graph = section(&fixture, false);
+                let replay_graph = section(&fixture, false);
+                let swapped_graph = section(&fixture, true);
+                let forward_sources = sources(&fixture, false);
+                let swapped_sources = sources(&fixture, true);
+                let context = format!(
+                    "{name} first_contains_second={first_contains_second} antiparallel={reverse_second_axis}"
+                );
+
+                let forward = certified_internal_tangency(
+                    certify(
+                        &fixture,
+                        &forward_graph,
+                        &forward_sources,
+                        PARALLEL_CYLINDER_RELATION_WORK,
+                    )
+                    .unwrap(),
+                );
+                let replayed = certified_internal_tangency(
+                    certify(
+                        &fixture,
+                        &replay_graph,
+                        &forward_sources,
+                        PARALLEL_CYLINDER_RELATION_WORK,
+                    )
+                    .unwrap(),
+                );
+                let swapped = certified_internal_tangency(
+                    certify(
+                        &fixture,
+                        &swapped_graph,
+                        &swapped_sources,
+                        PARALLEL_CYLINDER_RELATION_WORK,
+                    )
+                    .unwrap(),
+                );
+                assert_eq!(forward, replayed, "{context}");
+                assert_eq!(
+                    forward.containing_operand(),
+                    1 - forward.contained_operand()
+                );
+                assert_eq!(
+                    swapped.containing_operand(),
+                    1 - swapped.contained_operand()
+                );
+                assert_eq!(
+                    forward_sources[forward.contained_operand()].side_face(),
+                    swapped_sources[swapped.contained_operand()].side_face(),
+                    "{context}: swap changed the physical contained support",
+                );
+
+                for (is_swapped, relation, relation_sources) in [
+                    (false, &forward, &forward_sources),
+                    (true, &swapped, &swapped_sources),
+                ] {
+                    let expected_contained = usize::from(first_contains_second != is_swapped);
+                    assert_eq!(
+                        relation.contained_operand(),
+                        expected_contained,
+                        "{context}"
+                    );
+                    for (index, witness) in relation.boundaries().iter().enumerate() {
+                        let operand = index / 2;
+                        let boundary = index % 2;
+                        assert_eq!(witness.operand(), operand, "{context}");
+                        assert_eq!(witness.boundary(), boundary, "{context}");
+                        assert_eq!(
+                            witness.cap_face(),
+                            relation_sources[operand].boundaries()[boundary].cap_face(),
+                            "{context}",
+                        );
+                        assert_eq!(
+                            witness.edge(),
+                            relation_sources[operand].boundaries()[boundary].edge(),
+                            "{context}",
+                        );
+                    }
+
+                    let first_endpoints = [first.0, first.0 + first.1];
+                    let second_endpoints = if reverse_second_axis {
+                        [second.0 + second.1, second.0]
+                    } else {
+                        [second.0, second.0 + second.1]
+                    };
+                    let (expected_positions, expected_heights) = if is_swapped {
+                        (
+                            [
+                                second_endpoints[0],
+                                second_endpoints[1],
+                                first_endpoints[0],
+                                first_endpoints[1],
+                            ],
+                            [second.1, first.1],
+                        )
+                    } else {
+                        (
+                            [
+                                first_endpoints[0],
+                                first_endpoints[1],
+                                second_endpoints[0],
+                                second_endpoints[1],
+                            ],
+                            [first.1, second.1],
+                        )
+                    };
+                    for first_index in 0..4 {
+                        for second_index in (first_index + 1)..4 {
+                            assert_eq!(
+                                relation.preorder().compare(
+                                    contributors[first_index],
+                                    contributors[second_index],
+                                ),
+                                expected_positions[first_index]
+                                    .partial_cmp(&expected_positions[second_index])
+                                    .unwrap(),
+                                "{context} swapped={is_swapped}: endpoint comparison {first_index}:{second_index}",
+                            );
+                        }
+                    }
+                    for (operand, height) in expected_heights.into_iter().enumerate() {
+                        assert_eq!(
+                            relation.axial_parameter(operand, 0).unwrap().to_bits(),
+                            0.0_f64.to_bits(),
+                            "{context} swapped={is_swapped}: operand {operand} start parameter",
+                        );
+                        assert_eq!(
+                            relation.axial_parameter(operand, 1).unwrap().to_bits(),
+                            height.to_bits(),
+                            "{context} swapped={is_swapped}: operand {operand} end parameter",
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_internal_tangency_preserves_axial_precedence_and_requires_exact_boundaries() {
+    for first_contains_second in [false, true] {
+        for reverse_second_axis in [false, true] {
+            let gap = internal_tangent_fixture(
+                (-2.0, 1.0),
+                (1.0, 1.0),
+                reverse_second_axis,
+                first_contains_second,
+            );
+            let graph = section(&gap, false);
+            let gap_sources = sources(&gap, false);
+            assert!(matches!(
+                certify(&gap, &graph, &gap_sources, PARALLEL_CYLINDER_RELATION_WORK).unwrap(),
+                ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_)
+            ));
+
+            let contact = internal_tangent_fixture(
+                (-1.0, 1.0),
+                (0.0, 1.0),
+                reverse_second_axis,
+                first_contains_second,
+            );
+            let graph = section(&contact, false);
+            let contact_sources = sources(&contact, false);
+            assert!(matches!(
+                certify(
+                    &contact,
+                    &graph,
+                    &contact_sources,
+                    PARALLEL_CYLINDER_RELATION_WORK,
+                )
+                .unwrap(),
+                ParallelCylinderRelationOutcome::CertifiedAxialContact(_)
+            ));
+        }
+    }
+
+    let mut drifted = internal_tangent_fixture((-2.0, 4.0), (-1.0, 2.0), false, true);
+    let body = drifted.inner.clone();
+    perturb_side_height_within_full_tolerance(&mut drifted, &body, 1);
+    let graph = section(&drifted, false);
+    let sources = sources(&drifted, false);
+    assert_eq!(
+        certify(&drifted, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+        ParallelCylinderRelationOutcome::Indeterminate(
+            ParallelCylinderRelationGap::SourceBoundaryBinding,
+        ),
+    );
+}
+
+#[test]
+fn one_ulp_internal_tangency_neighbors_are_not_certified() {
+    let exact = internal_tangent_fixture((-2.0, 4.0), (-1.0, 2.0), false, true);
+    let graph = section(&exact, false);
+    let exact_sources = sources(&exact, false);
+    assert!(matches!(
+        certify(
+            &exact,
+            &graph,
+            &exact_sources,
+            PARALLEL_CYLINDER_RELATION_WORK,
+        )
+        .unwrap(),
+        ParallelCylinderRelationOutcome::CertifiedInternalRadialTangency(_)
+    ));
+
+    for radial_distance in [next_down_positive(1.0), next_up_positive(1.0)] {
+        let fixture = fixture_with_geometry(
+            Placement::World,
+            (-2.0, 4.0),
+            (-1.0, 2.0),
+            false,
+            [0.0, radial_distance],
+            [2.0, 1.0],
+        );
+        for swapped in [false, true] {
+            let graph = section(&fixture, swapped);
+            let sources = sources(&fixture, swapped);
+            assert!(
+                !matches!(
+                    certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+                    ParallelCylinderRelationOutcome::CertifiedInternalRadialTangency(_)
+                ),
+                "distance={radial_distance:?} swapped={swapped}",
+            );
+        }
+    }
+}
+
+#[test]
+fn internal_tangency_relation_work_accepts_exact_n_and_refuses_n_minus_one() {
+    assert_eq!(PARALLEL_CYLINDER_RELATION_WORK, 64);
+    for first_contains_second in [false, true] {
+        for reverse_second_axis in [false, true] {
+            let fixture = internal_tangent_fixture(
+                (-2.0, 4.0),
+                (-1.0, 2.0),
+                reverse_second_axis,
+                first_contains_second,
+            );
+            let graph = section(&fixture, false);
+            let sources = sources(&fixture, false);
+            assert!(matches!(
+                certify(&fixture, &graph, &sources, PARALLEL_CYLINDER_RELATION_WORK,).unwrap(),
+                ParallelCylinderRelationOutcome::CertifiedInternalRadialTangency(_)
+            ));
+
+            let error = certify(&fixture, &graph, &sources, 63).unwrap_err();
+            let snapshot = error
+                .limit()
+                .expect("relation must retain exact limit evidence");
+            assert_eq!(snapshot.stage, PLANAR_BOOLEAN_BSP_WORK);
+            assert_eq!(snapshot.resource, ResourceKind::Work);
+            assert_eq!(snapshot.consumed, 64);
+            assert_eq!(snapshot.allowed, 63);
+        }
+    }
 }
 
 #[test]

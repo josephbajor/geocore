@@ -205,6 +205,23 @@ impl CertifiedAxialEndpointPreorder {
             class_count,
         })
     }
+
+    /// Compare two retained endpoint identities in the certified preorder.
+    pub(crate) const fn compare(
+        &self,
+        first: AxialEndpointContributor,
+        second: AxialEndpointContributor,
+    ) -> Ordering {
+        let first = self.ranks[first.index()];
+        let second = self.ranks[second.index()];
+        if first < second {
+            Ordering::Less
+        } else if first > second {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    }
 }
 
 /// Exact-equality class of topology endpoint contributors.

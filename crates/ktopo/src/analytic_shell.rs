@@ -341,6 +341,7 @@ pub struct AnalyticShellClosedEdge {
     carrier: AnalyticShellCurve,
     logical_range: ParamRange,
     source: Option<EntityRef>,
+    derived_sources: Option<[EntityRef; 2]>,
     merge_sources: Option<[EntityRef; 2]>,
 }
 
@@ -356,6 +357,7 @@ impl AnalyticShellClosedEdge {
             carrier,
             logical_range,
             source: None,
+            derived_sources: None,
             merge_sources: None,
         }
     }
@@ -366,10 +368,24 @@ impl AnalyticShellClosedEdge {
         self
     }
 
+    /// Retain two ordered sources for independent transaction-journal
+    /// derivation events.
+    ///
+    /// Multi-source derivation is mutually exclusive with
+    /// [`Self::with_source`] and [`Self::with_merge_sources`]. Preflight
+    /// requires two distinct, live identities but intentionally admits any
+    /// source entity kinds: a result edge may depend on intersecting source
+    /// faces without claiming that those faces were merged.
+    pub const fn with_derived_sources(mut self, sources: [EntityRef; 2]) -> Self {
+        self.derived_sources = Some(sources);
+        self
+    }
+
     /// Retain ordered source edges for one transaction-journal merge event.
     ///
-    /// Merge lineage is mutually exclusive with [`Self::with_source`]. The
-    /// preflight requires two distinct, live edge identities.
+    /// Merge lineage is mutually exclusive with [`Self::with_source`] and
+    /// [`Self::with_derived_sources`]. The preflight requires two distinct,
+    /// live edge identities.
     pub const fn with_merge_sources(mut self, sources: [EntityRef; 2]) -> Self {
         self.merge_sources = Some(sources);
         self
@@ -393,6 +409,11 @@ impl AnalyticShellClosedEdge {
     /// Optional source entity.
     pub const fn source(self) -> Option<EntityRef> {
         self.source
+    }
+
+    /// Ordered source identities for optional independent derivation events.
+    pub const fn derived_sources(self) -> Option<[EntityRef; 2]> {
+        self.derived_sources
     }
 
     /// Ordered source identities for an optional merge lineage event.
@@ -987,6 +1008,8 @@ pub enum AnalyticShellPlanError {
     InvalidFaceSplitLineage(EntityRef),
     /// One edge declared mutually exclusive derivation, merge, or split lineage.
     ConflictingEdgeLineage(AnalyticEdgeKey),
+    /// Endpoint-free edge multi-source derivation needs two distinct sources.
+    InvalidEdgeDerivedLineage(AnalyticEdgeKey),
     /// Endpoint-free edge merge lineage needs two distinct edge sources.
     InvalidEdgeMergeLineage(AnalyticEdgeKey),
     /// Explicit split metadata did not form one live, ordered binary edge
@@ -1277,8 +1300,11 @@ fn prepare_edge_splits(
                 closed
                     .values()
                     .find(|edge| {
-                        edge.merge_sources()
+                        edge.derived_sources()
                             .is_some_and(|sources| sources.contains(&source))
+                            || edge
+                                .merge_sources()
+                                .is_some_and(|sources| sources.contains(&source))
                     })
                     .map(|edge| edge.key())
             })
@@ -1376,8 +1402,23 @@ fn prepare_closed_edges(
         {
             return Err(AnalyticShellPlanError::StaleLineage(source));
         }
-        if edge.source.is_some() && edge.merge_sources.is_some() {
+        let lineage_declarations = usize::from(edge.source.is_some())
+            + usize::from(edge.derived_sources.is_some())
+            + usize::from(edge.merge_sources.is_some());
+        if lineage_declarations > 1 {
             return Err(AnalyticShellPlanError::ConflictingEdgeLineage(edge.key));
+        }
+        if let Some(sources) = edge.derived_sources {
+            if sources[0] == sources[1] {
+                return Err(AnalyticShellPlanError::InvalidEdgeDerivedLineage(edge.key));
+            }
+            if let Some(source) = sources
+                .iter()
+                .copied()
+                .find(|source| !lineage_is_live(store, *source))
+            {
+                return Err(AnalyticShellPlanError::StaleLineage(source));
+            }
         }
         if let Some(sources) = edge.merge_sources {
             let valid = sources[0] != sources[1]

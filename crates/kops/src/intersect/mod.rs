@@ -101,8 +101,8 @@ pub use error::{
     SURFACE_SURFACE_CLASS_PAIR, UNSUPPORTED_CLASS_PAIR,
 };
 pub use graph_cylinder_cylinder::{
-    ParallelCylinderExteriorRadialSeparation, ParallelCylinderRadialRelation,
-    classify_parallel_cylinder_radial_relation,
+    ParallelCylinderExteriorRadialSeparation, ParallelCylinderInternalTangency,
+    ParallelCylinderRadialRelation, classify_parallel_cylinder_radial_relation,
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,

@@ -6,9 +6,10 @@
 //! exterior-disjoint. The latter is the only successful empty result in this
 //! closed admission, so generic empty or axially clipped lower results cannot
 //! masquerade as radial separation. The proof-only classifier additionally
-//! exposes exact external tangency and common-cylinder support without admitting
-//! either as a graph intersection. Internal misses, skew axes, and every
-//! incomplete family remain explicit typed gaps.
+//! exposes exact external tangency, internal tangency, and common-cylinder
+//! support without admitting them as graph intersections. Other internal
+//! relations, skew axes, and every incomplete family remain explicit typed
+//! gaps.
 
 use super::bounded_polynomial::ExactScalar;
 use kcore::predicates::{Orientation, orient3d};
@@ -48,6 +49,19 @@ pub struct ParallelCylinderExteriorRadialSeparation {
     _private: (),
 }
 
+/// Operand-directed containment proved by an exact internal radial tangency.
+///
+/// The direction is part of the proof because ordered Boolean operations need
+/// to distinguish the containing support from the contained support. Swapping
+/// the classifier operands reverses this value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelCylinderInternalTangency {
+    /// The first cylinder's radial disk contains the second cylinder's disk.
+    FirstContainsSecond,
+    /// The second cylinder's radial disk contains the first cylinder's disk.
+    SecondContainsFirst,
+}
+
 impl ParallelCylinderExteriorRadialSeparation {
     pub(super) const fn certified() -> Self {
         Self { _private: () }
@@ -67,6 +81,8 @@ pub enum ParallelCylinderRadialRelation {
     StrictExterior,
     /// The radial supports have exactly zero external clearance.
     ExactExternalTangent,
+    /// The unequal radial supports have exactly zero internal clearance.
+    ExactInternalTangent(ParallelCylinderInternalTangency),
     /// Both cylinders have the same infinite radial support.
     ExactCommonSupport,
     /// Neither supported proof completed; this is not a geometric relation.
@@ -170,9 +186,12 @@ pub(super) fn intersect_certified_parallel_cylinders(
 /// order without assuming either axis has exact unit length. Common support
 /// requires zero transverse distance under both axes and exactly equal positive
 /// radii; axial displacement and azimuth chart orientation are irrelevant.
-/// Exact tangency additionally requires the mathematical radius sum to be
+/// External tangency additionally requires the mathematical radius sum to be
 /// represented by the rounded `f64` sum without error; this prevents a rounded
-/// sum from becoming false equality evidence.
+/// sum from becoming false equality evidence. Internal tangency instead
+/// compares the exact radius-difference expansion directly, so no rounded
+/// scalar difference can become equality evidence. Unequal positive radii and
+/// exact equality under both stored axes are required.
 pub fn classify_parallel_cylinder_radial_relation(
     cylinders: [Cylinder; 2],
 ) -> ParallelCylinderRadialRelation {
@@ -200,22 +219,46 @@ pub fn classify_parallel_cylinder_radial_relation(
         return ParallelCylinderRadialRelation::ExactCommonSupport;
     }
 
-    let Some(radius_sum) = exact(cylinders[0].radius())
-        .and_then(|first| exact(cylinders[1].radius()).and_then(|second| first.add(&second).ok()))
-    else {
+    let radii = cylinders.map(|cylinder| cylinder.radius());
+    if !radii
+        .into_iter()
+        .all(|radius| radius.is_finite() && radius > 0.0)
+    {
+        return ParallelCylinderRadialRelation::Unresolved;
+    }
+    let [Some(first_radius), Some(second_radius)] = radii.map(exact) else {
+        return ParallelCylinderRadialRelation::Unresolved;
+    };
+
+    let containment = match radii[0].total_cmp(&radii[1]) {
+        std::cmp::Ordering::Greater => Some(ParallelCylinderInternalTangency::FirstContainsSecond),
+        std::cmp::Ordering::Less => Some(ParallelCylinderInternalTangency::SecondContainsFirst),
+        std::cmp::Ordering::Equal => None,
+    };
+    if let Some(containment) = containment
+        && let Some(internal_clearances) = first_radius
+            .sub(&second_radius)
+            .ok()
+            .and_then(|difference| difference.mul(&difference).ok())
+            .and_then(|squared| exact_parallel_radial_clearance_signs(&metrics, &squared))
+        && internal_clearances
+            .into_iter()
+            .all(|clearance| clearance == 0)
+    {
+        return ParallelCylinderRadialRelation::ExactInternalTangent(containment);
+    }
+
+    let Some(radius_sum) = first_radius.add(&second_radius).ok() else {
         return ParallelCylinderRadialRelation::Unresolved;
     };
     let Some(radius_sum_squared) = radius_sum.mul(&radius_sum).ok() else {
         return ParallelCylinderRadialRelation::Unresolved;
     };
 
-    let [Some(first_clearance), Some(second_clearance)] = metrics.map(|metric| {
-        exact_parallel_radial_clearance(&metric, &radius_sum_squared)
-            .map(|clearance| clearance.sign())
-    }) else {
+    let Some(clearances) = exact_parallel_radial_clearance_signs(&metrics, &radius_sum_squared)
+    else {
         return ParallelCylinderRadialRelation::Unresolved;
     };
-    let clearances = [first_clearance, second_clearance];
     if clearances.into_iter().all(|clearance| clearance > 0) {
         return ParallelCylinderRadialRelation::StrictExterior;
     }
@@ -225,10 +268,9 @@ pub fn classify_parallel_cylinder_radial_relation(
         .and_then(|rounded| radius_sum.sub(&rounded).ok())
         .is_some_and(|rounding_error| rounding_error.is_zero());
     if radius_sum_is_error_free && clearances.into_iter().all(|clearance| clearance == 0) {
-        ParallelCylinderRadialRelation::ExactExternalTangent
-    } else {
-        ParallelCylinderRadialRelation::Unresolved
+        return ParallelCylinderRadialRelation::ExactExternalTangent;
     }
+    ParallelCylinderRadialRelation::Unresolved
 }
 
 fn exact_strict_exterior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
@@ -261,6 +303,16 @@ fn exact_parallel_radial_clearance(
         .transverse_squared
         .sub(&radius_sum_squared.mul(&metric.axis_squared).ok()?)
         .ok()
+}
+
+fn exact_parallel_radial_clearance_signs(
+    metrics: &[ExactParallelRadialMetric; 2],
+    radial_squared: &ExactScalar,
+) -> Option<[i8; 2]> {
+    Some([
+        exact_parallel_radial_clearance(&metrics[0], radial_squared)?.sign(),
+        exact_parallel_radial_clearance(&metrics[1], radial_squared)?.sign(),
+    ])
 }
 
 fn exact(value: f64) -> Option<ExactScalar> {
