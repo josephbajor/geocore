@@ -79,7 +79,10 @@ pub(crate) use periodic_embedding::{
 pub use skew_cylinder_public::{
     SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralTrimProvenance,
     SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve,
-    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderRootChart,
+    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderEmbeddingCertificate,
+    SectionSkewCylinderInterval, SectionSkewCylinderPcurveCellCertificate,
+    SectionSkewCylinderPcurveEnclosure, SectionSkewCylinderRootChart,
+    SectionSkewCylinderRootCorridorCertificate,
 };
 
 #[cfg(test)]
@@ -497,6 +500,7 @@ pub struct SectionBranch {
     fragment_sites: Vec<SectionFragmentSite>,
     endpoint_sites: [usize; 2],
     evidence: SectionBranchEvidence,
+    skew_cylinder_embedding: Option<Box<SectionSkewCylinderEmbeddingCertificate>>,
     ruling_recertification: Option<RulingRecertification>,
     ruling_parameter_flipped: bool,
 }
@@ -550,6 +554,11 @@ impl SectionBranch {
     /// Kernel-owned summary of the graph-owned paired residual proof.
     pub const fn evidence(&self) -> SectionBranchEvidence {
         self.evidence
+    }
+
+    /// Sealed nonlinear pcurve embedding authority for a bounded skew span.
+    pub fn embedding_certificate(&self) -> Option<&SectionSkewCylinderEmbeddingCertificate> {
+        self.skew_cylinder_embedding.as_deref()
     }
 }
 

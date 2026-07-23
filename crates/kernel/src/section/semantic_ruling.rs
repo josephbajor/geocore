@@ -200,6 +200,7 @@ pub(super) fn recover(
                 residual_bounds: [0.0; 2],
                 tolerance,
             },
+            skew_cylinder_embedding: None,
             ruling_recertification: Some(RulingRecertification::Semantic(source)),
             ruling_parameter_flipped: false,
         };

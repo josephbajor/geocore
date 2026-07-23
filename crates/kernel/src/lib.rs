@@ -351,9 +351,11 @@ pub use section::{
     SectionProjectiveParameterInterval, SectionRing, SectionRulingFragmentEnd,
     SectionRulingTrimProvenance, SectionSite, SectionSkewCylinderBranchCarrier,
     SectionSkewCylinderBranchPcurve, SectionSkewCylinderCarrierRootEnclosure,
-    SectionSkewCylinderRootChart, SectionSkewCylinderStrictDiscriminantMiss,
-    SectionSourceParameterKey, SectionUvCircle, SectionUvCurve, SectionUvLine,
-    SectionUvParameterInterval, SectionVertex,
+    SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
+    SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
+    SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
+    SectionSkewCylinderStrictDiscriminantMiss, SectionSourceParameterKey, SectionUvCircle,
+    SectionUvCurve, SectionUvLine, SectionUvParameterInterval, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

@@ -325,6 +325,7 @@ fn adapt_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
+        skew_cylinder_embedding: None,
         ruling_recertification: Some(RulingRecertification::CylinderCylinderGraph(certificate)),
         ruling_parameter_flipped: flipped,
     }))
@@ -426,6 +427,7 @@ pub(super) fn adapt_skew_two_sheet_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
+        skew_cylinder_embedding: None,
         ruling_recertification: None,
         ruling_parameter_flipped: false,
     }))

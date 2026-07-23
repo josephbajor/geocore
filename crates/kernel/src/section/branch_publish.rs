@@ -462,6 +462,7 @@ fn adapt_plane_cylinder_circle_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
+        skew_cylinder_embedding: None,
         ruling_recertification: None,
         ruling_parameter_flipped: false,
     }))
@@ -563,6 +564,7 @@ fn adapt_plane_cylinder_ruling_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
+        skew_cylinder_embedding: None,
         ruling_recertification: Some(RulingRecertification::PlaneCylinderGraph(certificate)),
         ruling_parameter_flipped: flipped,
     }))

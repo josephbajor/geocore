@@ -10,10 +10,13 @@ use kcore::interval::Interval;
 use kcore::operation::OperationScope;
 use kgeom::curve::Curve;
 use kgeom::vec::{Point3, Vec3};
-use kgraph::PairedSkewCylinderBranchResidualCertificate;
+use kgraph::{
+    PairedSkewCylinderBranchResidualCertificate, SkewCylinderBranchGuardedEnd,
+    SkewCylinderBranchPcurveRootCorridorCertificate,
+};
 use kops::intersect::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
-    SkewCylinderHalfAngleChartProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
 };
 use ktopo::entity::{
     EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId,
@@ -28,16 +31,23 @@ use super::root_identity::{
 use super::source_annulus::{self, CertifiedSourceAnnulus};
 use super::*;
 
+// Pair-atomic staging temporarily owns several kilobyte proof values per
+// branch. Indirection keeps the staging discriminant compact; commit moves
+// each value into its final accumulator vector without cloning the proofs.
 enum PreparedSkewBranch {
-    Whole {
-        branch: SectionBranch,
-        fragment: closed_stitch::ClosedCurveFragment,
-        evidence: ClosedFragmentEvidence,
-    },
-    Open {
-        branch: SectionBranch,
-        fragment: CertifiedBoundedSkewCylinderFragment,
-    },
+    Whole(Box<PreparedWholeSkewBranch>),
+    Open(Box<PreparedOpenSkewBranch>),
+}
+
+struct PreparedWholeSkewBranch {
+    branch: SectionBranch,
+    fragment: closed_stitch::ClosedCurveFragment,
+    evidence: ClosedFragmentEvidence,
+}
+
+struct PreparedOpenSkewBranch {
+    branch: SectionBranch,
+    fragment: CertifiedBoundedSkewCylinderFragment,
 }
 
 enum PreparedSkewFacePair {
@@ -162,7 +172,7 @@ fn prepare_skew_face_pair(
             ) {
                 super::cylinder_cylinder_publish::CylinderCylinderBranchAdaptation::Adapted(
                     branch,
-                ) => *branch,
+                ) => branch,
                 super::cylinder_cylinder_publish::CylinderCylinderBranchAdaptation::OrientationIndeterminate => return Ok(PreparedSkewFacePair::Gap(GAP_CARRIER_ORIENTATION)),
                 super::cylinder_cylinder_publish::CylinderCylinderBranchAdaptation::Unsupported => {
                     return Ok(PreparedSkewFacePair::Gap(GAP_PAIR_UNRESOLVED));
@@ -172,11 +182,13 @@ fn prepare_skew_face_pair(
             else {
                 return Ok(PreparedSkewFacePair::Gap(GAP_CLOSED_STITCH));
             };
-            prepared.push(PreparedSkewBranch::Whole {
-                branch,
-                fragment,
-                evidence,
-            });
+            prepared.push(PreparedSkewBranch::Whole(Box::new(
+                PreparedWholeSkewBranch {
+                    branch: *branch,
+                    fragment,
+                    evidence,
+                },
+            )));
             continue;
         }
         match prepare_open_span(
@@ -187,13 +199,16 @@ fn prepare_skew_face_pair(
             vertices,
             surfaces,
             senses,
-            &annuli,
+            annuli,
             root_identity,
             scope,
         )? {
             OpenSkewCylinderAdaptation::Prepared(open) => {
                 let (branch, fragment) = open.into_parts(branch_index);
-                prepared.push(PreparedSkewBranch::Open { branch, fragment });
+                prepared.push(PreparedSkewBranch::Open(Box::new(PreparedOpenSkewBranch {
+                    branch,
+                    fragment,
+                })));
             }
             OpenSkewCylinderAdaptation::OrientationIndeterminate => {
                 return Ok(PreparedSkewFacePair::Gap(GAP_CARRIER_ORIENTATION));
@@ -212,16 +227,18 @@ fn prepare_skew_face_pair(
 fn commit_prepared_branches(prepared: Vec<PreparedSkewBranch>, acc: &mut SectionAccumulator) {
     for branch in prepared {
         match branch {
-            PreparedSkewBranch::Whole {
-                branch,
-                fragment,
-                evidence,
-            } => {
+            PreparedSkewBranch::Whole(prepared) => {
+                let PreparedWholeSkewBranch {
+                    branch,
+                    fragment,
+                    evidence,
+                } = *prepared;
                 acc.branches.push(branch);
                 acc.closed_fragments.push(fragment);
                 acc.closed_fragment_evidence.push(evidence);
             }
-            PreparedSkewBranch::Open { branch, fragment } => {
+            PreparedSkewBranch::Open(prepared) => {
+                let PreparedOpenSkewBranch { branch, fragment } = *prepared;
                 acc.branches.push(branch);
                 acc.bounded_procedural_fragments.push(fragment);
             }
@@ -265,6 +282,7 @@ struct CertifiedBoundedSkewCylinderEnd {
     root: SourceRootKey,
     source_root_scalar: CertifiedSourceRootScalar,
     edge_parameter: Interval,
+    authored_height: f64,
     root_point: Point3,
     inside_point: Point3,
     inside_carrier_parameter: f64,
@@ -318,9 +336,10 @@ pub(super) fn prepare_open_span(
     roots: &mut RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<OpenSkewCylinderAdaptation> {
-    let Some(certificate) = edge.certificate.as_skew_cylinder_open_span() else {
+    let Some(open_certificate) = edge.certificate.as_skew_cylinder_open_span_branch() else {
         return Ok(OpenSkewCylinderAdaptation::Unproven);
     };
+    let certificate = open_certificate.residual_certificate();
     let Some((carrier, source_pcurves)) = validate_open_graph_edge(edge, certificate) else {
         return Ok(OpenSkewCylinderAdaptation::Unproven);
     };
@@ -340,6 +359,11 @@ pub(super) fn prepare_open_span(
     let section_carrier = SectionSkewCylinderBranchCarrier::new(carrier, range, flipped);
     let pcurves =
         source_pcurves.map(|pcurve| SectionSkewCylinderBranchPcurve::new(pcurve, range, flipped));
+    let Some(embedding_certificate) =
+        SectionSkewCylinderEmbeddingCertificate::new(open_certificate, range, flipped)
+    else {
+        return Ok(OpenSkewCylinderAdaptation::Unproven);
+    };
     let section_start = section_carrier.eval_derivs(range.lo, 1);
     if !finite_point_and_tangent(section_start.d[0], section_start.d[1])
         || super::cylinder_cylinder_publish::canonical_flip(
@@ -396,6 +420,8 @@ pub(super) fn prepare_open_span(
             vertex.point,
             section_parameter,
             certificate,
+            open_certificate.root_corridors()[graph_slot],
+            graph_slot,
             annuli,
             roots,
             scope,
@@ -435,6 +461,7 @@ pub(super) fn prepare_open_span(
                     residual_bounds: certificate.residual_bounds(),
                     tolerance: certificate.tolerance(),
                 },
+                skew_cylinder_embedding: Some(Box::new(embedding_certificate)),
                 ruling_recertification: None,
                 ruling_parameter_flipped: false,
             },
@@ -477,6 +504,8 @@ fn certify_endpoint(
     inside_point: Point3,
     inside_carrier_parameter: f64,
     certificate: PairedSkewCylinderBranchResidualCertificate,
+    root_corridor: SkewCylinderBranchPcurveRootCorridorCertificate,
+    graph_slot: usize,
     annuli: &[CertifiedSourceAnnulus; 2],
     roots: &mut RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
@@ -487,6 +516,15 @@ fn certify_endpoint(
         || traces[source_operand].pcurve().operand() != 0
         || traces[source_operand].surface() != certificate.carrier().cylinders()[0]
     {
+        return Ok(None);
+    }
+    if !root_corridor_matches_endpoint(
+        proof,
+        root_corridor,
+        graph_slot,
+        certificate.carrier_range(),
+        traces.map(|trace| trace.pcurve().operand()),
+    ) {
         return Ok(None);
     }
     let ring = match proof.boundary {
@@ -547,6 +585,7 @@ fn certify_endpoint(
         root,
         source_root_scalar,
         edge_parameter,
+        authored_height: proof.bound,
         root_point,
         inside_point,
         inside_carrier_parameter,
@@ -555,6 +594,105 @@ fn certify_endpoint(
             projective: Interval::new(proof.half_angle_bracket[0], proof.half_angle_bracket[1]),
         },
     }))
+}
+
+fn root_corridor_matches_endpoint(
+    proof: kops::intersect::SkewCylinderAxialRootEndpointProof,
+    corridor: SkewCylinderBranchPcurveRootCorridorCertificate,
+    graph_slot: usize,
+    range: kgeom::param::ParamRange,
+    trace_operands: [usize; 2],
+) -> bool {
+    let expected_end = match graph_slot {
+        0 => SkewCylinderBranchGuardedEnd::Lower,
+        1 => SkewCylinderBranchGuardedEnd::Upper,
+        _ => return false,
+    };
+    let expected_inside_side = match graph_slot {
+        0 => SkewCylinderRootInsideSideProof::After,
+        1 => SkewCylinderRootInsideSideProof::Before,
+        _ => return false,
+    };
+    let expected_guard = if graph_slot == 0 { range.lo } else { range.hi };
+    let corridor_cell = corridor.corridor();
+    let root_pcurves = corridor.root_pcurves();
+    let corridor_pcurves = corridor_cell.pcurves();
+    if corridor.guarded_end() != expected_end
+        || proof.inside_side != expected_inside_side
+        || proof.inside_parameter.to_bits() != expected_guard.to_bits()
+        || root_pcurves.map(|pcurve| pcurve.operand()) != trace_operands
+        || corridor_pcurves.map(|pcurve| pcurve.operand()) != trace_operands
+        || proof.source_operand > 1
+    {
+        return false;
+    }
+    let root_height = root_pcurves[proof.source_operand];
+    if !root_height.stored_uv()[1].contains(proof.bound)
+        || !root_height.source_uv()[1].contains(proof.bound)
+    {
+        return false;
+    }
+    let Some(projective_root) = exact_projective_root_longitude(proof) else {
+        return false;
+    };
+    periodic_root_interval_matches(projective_root, corridor.root_parameter())
+}
+
+fn exact_projective_root_longitude(
+    proof: kops::intersect::SkewCylinderAxialRootEndpointProof,
+) -> Option<Interval> {
+    exact_chart_root_longitude(
+        proof.half_angle_chart,
+        proof.half_angle_bracket[0],
+        proof.half_angle_bracket[1],
+    )
+}
+
+fn exact_chart_root_longitude(
+    chart: SkewCylinderHalfAngleChartProof,
+    lo: f64,
+    hi: f64,
+) -> Option<Interval> {
+    if !lo.is_finite() || !hi.is_finite() || lo > hi {
+        return None;
+    }
+    let first = canonical_angle(match chart {
+        SkewCylinderHalfAngleChartProof::Tangent => 2.0 * kcore::math::atan2(lo, 1.0),
+        SkewCylinderHalfAngleChartProof::Cotangent => 2.0 * kcore::math::atan2(1.0, lo),
+    });
+    let second = canonical_angle(match chart {
+        SkewCylinderHalfAngleChartProof::Tangent => 2.0 * kcore::math::atan2(hi, 1.0),
+        SkewCylinderHalfAngleChartProof::Cotangent => 2.0 * kcore::math::atan2(1.0, hi),
+    });
+    let [angular_lo, angular_hi] = match chart {
+        SkewCylinderHalfAngleChartProof::Tangent => [first, second],
+        SkewCylinderHalfAngleChartProof::Cotangent => [second, first],
+    };
+    (angular_lo.is_finite() && angular_hi.is_finite() && angular_lo <= angular_hi)
+        .then_some(Interval::new(angular_lo, angular_hi))
+}
+
+fn periodic_root_interval_matches(canonical: Interval, lifted: Interval) -> bool {
+    const PERIOD: f64 = core::f64::consts::TAU;
+    let turns = ((lifted.lo() - canonical.lo()) / PERIOD).round();
+    if !turns.is_finite() {
+        return false;
+    }
+    let shift = turns * PERIOD;
+    let expected = Interval::new(canonical.lo() + shift, canonical.hi() + shift);
+    expected == lifted
+}
+
+fn canonical_angle(parameter: f64) -> f64 {
+    let mut parameter = parameter % core::f64::consts::TAU;
+    if parameter < 0.0 {
+        parameter += core::f64::consts::TAU;
+    }
+    if parameter == core::f64::consts::TAU || parameter == -0.0 {
+        0.0
+    } else {
+        parameter
+    }
 }
 
 fn carrier_longitude_enclosure(
@@ -601,8 +739,23 @@ pub(super) fn publish_fragments(
                 "bounded procedural fragment referenced a nonprocedural branch",
             ));
         }
+        let Some(embedding) = branch.embedding_certificate() else {
+            return Err(inconsistent_topology(
+                "bounded procedural fragment lost its sealed pcurve embedding",
+            ));
+        };
+        if embedding.range() != branch.range {
+            return Err(inconsistent_topology(
+                "bounded procedural embedding range diverged from its branch",
+            ));
+        }
         let mut public_ends = Vec::with_capacity(2);
-        for evidence in &fragment.endpoints {
+        for (section_end, evidence) in fragment.endpoints.iter().enumerate() {
+            if !published_corridor_matches_end(embedding, section_end, evidence) {
+                return Err(inconsistent_topology(
+                    "bounded procedural endpoint diverged from its root corridor",
+                ));
+            }
             let mut sites = [
                 SectionSite::FaceInterior(branch.faces[0].clone()),
                 SectionSite::FaceInterior(branch.faces[1].clone()),
@@ -675,6 +828,50 @@ pub(super) fn publish_fragments(
     Ok(())
 }
 
+fn published_corridor_matches_end(
+    embedding: &SectionSkewCylinderEmbeddingCertificate,
+    section_end: usize,
+    evidence: &CertifiedBoundedSkewCylinderEnd,
+) -> bool {
+    let Some(source) = embedding.source_root_corridor(section_end) else {
+        return false;
+    };
+    let Some(root) = embedding.root_corridor(section_end) else {
+        return false;
+    };
+    let expected_guard = if section_end == 0 {
+        embedding.range().lo
+    } else {
+        embedding.range().hi
+    };
+    if evidence.inside_carrier_parameter.to_bits() != expected_guard.to_bits()
+        || !root
+            .corridor()
+            .parameter()
+            .contains(evidence.inside_carrier_parameter)
+        || root.root_pcurves().iter().any(|pcurve| {
+            !pcurve.stored_is_strictly_regular() || !pcurve.source_is_strictly_regular()
+        })
+    {
+        return false;
+    }
+    let root_pcurves = source.root_pcurves();
+    if evidence.source_operand > 1
+        || !root_pcurves[evidence.source_operand].stored_uv()[1].contains(evidence.authored_height)
+        || !root_pcurves[evidence.source_operand].source_uv()[1].contains(evidence.authored_height)
+    {
+        return false;
+    }
+    let Some(projective) = exact_chart_root_longitude(
+        evidence.carrier_root.chart,
+        evidence.carrier_root.projective.lo(),
+        evidence.carrier_root.projective.hi(),
+    ) else {
+        return false;
+    };
+    periodic_root_interval_matches(projective, source.root_parameter())
+}
+
 fn finite_interval(value: Interval) -> bool {
     value.lo().is_finite() && value.hi().is_finite()
 }
@@ -704,8 +901,90 @@ mod tests {
     use kgeom::frame::Frame;
     use ktopo::entity::BodyId as RawBodyId;
 
+    use super::super::skew_cylinder_public::orient_parameter_interval;
     use super::*;
     use crate::{CylinderRequest, Kernel};
+
+    fn assert_reversed_enclosure(
+        forward: &SectionSkewCylinderPcurveEnclosure,
+        reversed: &SectionSkewCylinderPcurveEnclosure,
+    ) {
+        assert_eq!(forward.stored_uv(), reversed.stored_uv());
+        assert_eq!(forward.source_uv(), reversed.source_uv());
+        for (forward, reversed) in forward
+            .stored_derivative()
+            .iter()
+            .zip(reversed.stored_derivative())
+            .chain(
+                forward
+                    .source_derivative()
+                    .iter()
+                    .zip(reversed.source_derivative()),
+            )
+        {
+            assert_eq!(reversed.lo().to_bits(), (-forward.hi()).to_bits());
+            assert_eq!(reversed.hi().to_bits(), (-forward.lo()).to_bits());
+        }
+    }
+
+    fn assert_open_certificate_reversal(edge: &IntersectionBranchEdge) {
+        let source = edge
+            .certificate
+            .as_skew_cylinder_open_span_branch()
+            .expect("bounded skew edge lost its sealed open-span proof");
+        let range = edge.carrier_range;
+        let forward = SectionSkewCylinderEmbeddingCertificate::new(source, range, false).unwrap();
+        let reversed = SectionSkewCylinderEmbeddingCertificate::new(source, range, true).unwrap();
+        let last = forward.guarded_cell_count() - 1;
+        for section_index in 0..=last {
+            let graph_cell = forward.guarded_cell(last - section_index).unwrap();
+            let section_cell = reversed.guarded_cell(section_index).unwrap();
+            let expected =
+                orient_parameter_interval(range, as_interval(graph_cell.parameter()), true);
+            assert_eq!(
+                section_cell.parameter().lo().to_bits(),
+                expected.lo().max(range.lo).to_bits()
+            );
+            assert_eq!(
+                section_cell.parameter().hi().to_bits(),
+                expected.hi().min(range.hi).to_bits()
+            );
+            for operand in 0..2 {
+                assert_reversed_enclosure(
+                    &graph_cell.pcurves()[operand],
+                    &section_cell.pcurves()[operand],
+                );
+            }
+        }
+        for section_end in 0..2 {
+            let graph_root = forward.root_corridor(1 - section_end).unwrap();
+            let section_root = reversed.root_corridor(section_end).unwrap();
+            assert_eq!(section_root.section_end(), section_end);
+            let expected =
+                orient_parameter_interval(range, as_interval(graph_root.root_parameter()), true);
+            assert_eq!(section_root.root_parameter(), expected);
+            let graph_corridor = graph_root.corridor();
+            let section_corridor = section_root.corridor();
+            assert_eq!(
+                section_corridor.parameter(),
+                orient_parameter_interval(range, as_interval(graph_corridor.parameter()), true)
+            );
+            for operand in 0..2 {
+                assert_reversed_enclosure(
+                    &graph_root.root_pcurves()[operand],
+                    &section_root.root_pcurves()[operand],
+                );
+                assert_reversed_enclosure(
+                    &graph_corridor.pcurves()[operand],
+                    &section_corridor.pcurves()[operand],
+                );
+            }
+        }
+    }
+
+    fn as_interval(value: SectionSkewCylinderInterval) -> Interval {
+        Interval::new(value.lo(), value.hi())
+    }
 
     fn side_face(store: &Store, body: RawBodyId) -> RawFaceId {
         store
@@ -719,6 +998,31 @@ mod tests {
                 )
             })
             .expect("finite cylinder must retain one side face")
+    }
+
+    #[test]
+    fn projective_root_identity_matches_exact_positive_and_negative_period_lifts() {
+        let canonical = Interval::new(0.25, 0.5);
+        assert!(periodic_root_interval_matches(canonical, canonical));
+        for turns in [-2.0, -1.0, 1.0, 2.0] {
+            let shift = turns * core::f64::consts::TAU;
+            assert!(periodic_root_interval_matches(
+                canonical,
+                Interval::new(canonical.lo() + shift, canonical.hi() + shift)
+            ));
+        }
+        assert!(!periodic_root_interval_matches(
+            canonical,
+            Interval::new(0.25_f64.next_down(), 0.5)
+        ));
+    }
+
+    #[test]
+    fn bounded_embedding_layout_remains_indirect_on_section_branch() {
+        assert_eq!(
+            core::mem::size_of::<Option<Box<SectionSkewCylinderEmbeddingCertificate>>>(),
+            core::mem::size_of::<usize>()
+        );
     }
 
     #[test]
@@ -783,6 +1087,9 @@ mod tests {
         assert!(intersections.raw.is_complete());
         assert_eq!(intersections.branch_graph.edges.len(), 4);
         assert_eq!(intersections.branch_graph.vertices.len(), 8);
+        for edge in &intersections.branch_graph.edges {
+            assert_open_certificate_reversal(edge);
+        }
 
         let mut edges = intersections.branch_graph.edges.clone();
         edges[3].endpoint_proofs[1] = None;
@@ -804,6 +1111,40 @@ mod tests {
         )
         .unwrap();
 
+        assert!(acc.branches.is_empty());
+        assert!(acc.closed_fragments.is_empty());
+        assert!(acc.closed_fragment_evidence.is_empty());
+        assert!(acc.bounded_procedural_fragments.is_empty());
+        assert_eq!(acc.gaps.len(), 1);
+        assert_eq!(
+            acc.gaps[0].reason(),
+            GAP_SKEW_CYLINDER_OPEN_SPAN_CAP_ROOT_UNPROVEN
+        );
+        assert_eq!(acc.gaps[0].faces(), facades);
+
+        let mut edges = intersections.branch_graph.edges.clone();
+        let Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)) =
+            &mut edges[3].endpoint_proofs[1]
+        else {
+            panic!("bounded skew fixture lost its final projective root")
+        };
+        proof.half_angle_bracket[0] = proof.half_angle_bracket[1];
+        let mut roots = RootIdentityAuthority::new();
+        let mut acc = SectionAccumulator::default();
+        append_face_pair_branches(
+            store,
+            raw_faces,
+            &facades,
+            &edges,
+            &intersections.branch_graph.vertices,
+            surfaces,
+            face_data.map(|face| face.sense()),
+            context.tolerances().linear(),
+            &mut roots,
+            &mut scope,
+            &mut acc,
+        )
+        .unwrap();
         assert!(acc.branches.is_empty());
         assert!(acc.closed_fragments.is_empty());
         assert!(acc.closed_fragment_evidence.is_empty());

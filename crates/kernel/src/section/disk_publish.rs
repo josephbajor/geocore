@@ -192,6 +192,7 @@ pub(super) fn append_chord(
             residual_bounds: chord.residual_bounds(),
             tolerance,
         },
+        skew_cylinder_embedding: None,
         ruling_recertification: None::<RulingRecertification>,
         ruling_parameter_flipped: false,
     });

@@ -908,6 +908,52 @@ fn assert_bounded_procedural_fragment(
     assert_eq!(carrier.range(), branch.range());
     assert!(branch.range().is_finite() && branch.range().width() < core::f64::consts::TAU);
     assert_eq!(fragment.source_ordinal(), 0);
+    let embedding = branch
+        .embedding_certificate()
+        .expect("bounded procedural branch lost its pcurve embedding");
+    assert_eq!(embedding.range(), branch.range());
+    assert_eq!(embedding.reversed(), carrier.reversed());
+    assert_eq!(embedding.guarded_cell_count(), 256);
+    assert_eq!(embedding.guarded_cell_work(), 1);
+    assert_eq!(embedding.all_guarded_cells_work(), 256);
+    assert_eq!(embedding.root_corridor_work(), 2);
+    assert_eq!(embedding.total_work(), 260);
+    assert!(
+        embedding
+            .guarded_cell(embedding.guarded_cell_count())
+            .is_none()
+    );
+
+    let mut previous_hi = None;
+    for cell_index in 0..embedding.guarded_cell_count() {
+        let cell = embedding
+            .guarded_cell(cell_index)
+            .expect("fixed guarded cell failed to reissue");
+        assert_eq!(cell.work(), embedding.guarded_cell_work());
+        assert!(branch.range().contains(cell.parameter().lo()));
+        assert!(branch.range().contains(cell.parameter().hi()));
+        if let Some(previous_hi) = previous_hi {
+            assert!(previous_hi >= cell.parameter().lo());
+        }
+        previous_hi = Some(cell.parameter().hi());
+        for operand in 0..2 {
+            let proof = &cell.pcurves()[operand];
+            assert!(proof.stored_is_strictly_regular());
+            assert!(proof.source_is_strictly_regular());
+        }
+    }
+    assert_eq!(
+        embedding.guarded_cell(0).unwrap().parameter().lo(),
+        branch.range().lo
+    );
+    assert_eq!(
+        embedding
+            .guarded_cell(embedding.guarded_cell_count() - 1)
+            .unwrap()
+            .parameter()
+            .hi(),
+        branch.range().hi
+    );
 
     for operand in 0..2 {
         let pcurve = skew_pcurve(branch, operand);
@@ -954,6 +1000,41 @@ fn assert_bounded_procedural_fragment(
             end.inside_point(),
             "procedural guarded endpoint",
         );
+        let root = embedding
+            .root_corridor(slot)
+            .expect("directed physical-root corridor disappeared");
+        assert_eq!(root.section_end(), slot);
+        assert_eq!(root.work(), embedding.root_corridor_work());
+        assert!(
+            root.corridor()
+                .parameter()
+                .contains(end.inside_carrier_parameter())
+        );
+        if slot == 0 {
+            assert!(root.root_parameter().hi() < branch.range().lo);
+        } else {
+            assert!(root.root_parameter().lo() > branch.range().hi);
+        }
+        let adjacent = embedding
+            .guarded_cell(if slot == 0 {
+                0
+            } else {
+                embedding.guarded_cell_count() - 1
+            })
+            .unwrap();
+        for operand in 0..2 {
+            let uv = skew_pcurve(branch, operand).eval(end.inside_carrier_parameter());
+            let uv = [uv.x, uv.y];
+            for coordinate in 0..2 {
+                assert!(
+                    root.corridor().pcurves()[operand].stored_uv()[coordinate]
+                        .contains(uv[coordinate])
+                );
+                assert!(
+                    adjacent.pcurves()[operand].stored_uv()[coordinate].contains(uv[coordinate])
+                );
+            }
+        }
 
         let trim = end.trim();
         assert_eq!(trim.operand(), bound_operand);
@@ -961,6 +1042,16 @@ fn assert_bounded_procedural_fragment(
         assert!(trim.carrier_root().lo().is_finite());
         assert!(trim.carrier_root().hi().is_finite());
         assert!(trim.carrier_root().lo() <= trim.carrier_root().hi());
+        let observed_height = frame.to_local(end.root_point()).z;
+        let authored_height = if (observed_height - BOUNDED_SKEW_LOWER).abs()
+            < (observed_height - BOUNDED_SKEW_UPPER).abs()
+        {
+            0.0
+        } else {
+            BOUNDED_SKEW_UPPER - BOUNDED_SKEW_LOWER
+        };
+        assert!(root.root_pcurves()[bound_operand].stored_uv()[1].contains(authored_height));
+        assert!(root.root_pcurves()[bound_operand].source_uv()[1].contains(authored_height));
         assert!(
             trim.edge_parameter()
                 .contains(trim.source_parameter().root_parameter())
