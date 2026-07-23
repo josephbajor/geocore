@@ -8,12 +8,13 @@
 //!
 //! - intersection is the contained-radius band over the axial overlap;
 //! - union is a whole containing-source copy when the contained axial window
-//!   is itself contained;
+//!   is itself contained, or one tangent-shoulder shell when the contained
+//!   window has exactly one protruding axial tail;
 //! - contained-minus-containing is the zero, one, or two contained-radius
 //!   bands selected by the shared interval sweep.
 //!
-//! A union that changes radius at a finite endpoint needs a certified tangent
-//! shoulder and shared tangent vertex. Containing-minus-contained has a
+//! A contained window that strictly covers the containing window needs two
+//! shoulders and a three-band theorem. Containing-minus-contained has a
 //! pinched tangent-annulus cross-section throughout the positive overlap.
 //! Both stay explicit allocation-free topology refusals here.
 
@@ -27,14 +28,16 @@ use kgeom::vec::{Point2, Point3, Vec2};
 use kgraph::AffineParamMap1d;
 use ktopo::analytic_shell::{
     AnalyticEdgeKey, AnalyticFaceKey, AnalyticFaceSplitPiece, AnalyticPcurveUse,
-    AnalyticShellClosedEdge, AnalyticShellCurve, AnalyticShellFace, AnalyticShellFin,
-    AnalyticShellInput, AnalyticShellLoop, AnalyticShellPcurve, AnalyticShellSurface,
+    AnalyticShellClosedEdge, AnalyticShellCurve, AnalyticShellEdge, AnalyticShellFace,
+    AnalyticShellFin, AnalyticShellInput, AnalyticShellLoop, AnalyticShellPcurve,
+    AnalyticShellSurface, AnalyticShellVertex, AnalyticVertexKey,
 };
 use ktopo::entity::{EntityRef, FaceDomain, Sense};
 
 use super::axial_interval_sweep::{
     AuthoredAxialEndpoint, AxialEndpointContributor, AxialEndpointContributors,
-    AxialIntervalOperand, AxialIntervalPlan, PlannedAxialSpan, plan_axial_interval_sweep,
+    AxialIntervalOperand, AxialIntervalPlan, PlannedAxialSpan, plan_axial_interval_difference,
+    plan_axial_interval_sweep,
 };
 use super::curved_pipeline::{
     CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, StageResult, adapt_operation,
@@ -64,6 +67,7 @@ enum InternalTangencyPlanGap {
 #[derive(Debug, Clone, Copy)]
 struct BoundBoundary {
     operand: AxialIntervalOperand,
+    boundary_index: usize,
     boundary: CertifiedCylinderBoundary,
     axial_parameter: f64,
 }
@@ -101,14 +105,20 @@ pub(super) fn execute_parallel_cylinder_internal_tangency(
             realize_internal_tangent_bands(edit, cylinders, relation, &intersection, linear, scope)
         }
         PlanarBooleanOperation::Unite => {
-            if !span_is_whole_operand(overlap, contained) {
-                return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+            let contained_tails =
+                plan_axial_interval_difference(relation.preorder(), operand_identity(contained));
+            match contained_tails.spans() {
+                [] => realize_certified_cylinder_source_copies(
+                    edit,
+                    &[(bodies[containing].clone(), cylinders[containing])],
+                    scope,
+                ),
+                [tail] => realize_internal_tangent_shoulder(
+                    edit, cylinders, relation, tail, linear, scope,
+                ),
+                [_, _] => refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported),
+                _ => refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported),
             }
-            realize_certified_cylinder_source_copies(
-                edit,
-                &[(bodies[containing].clone(), cylinders[containing])],
-                scope,
-            )
         }
         PlanarBooleanOperation::Subtract if contained == 0 => {
             let difference = plan_axial_interval_sweep(
@@ -121,6 +131,275 @@ pub(super) fn execute_parallel_cylinder_internal_tangency(
             refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
         }
     }
+}
+
+fn realize_internal_tangent_shoulder(
+    edit: &mut PartEdit<'_>,
+    cylinders: [&CertifiedCylinderSource; 2],
+    relation: &CertifiedParallelCylinderInternalRadialTangency,
+    tail: &PlannedAxialSpan,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    let input = match prepare_internal_tangent_shoulder(cylinders, relation, tail) {
+        Ok(input) => input,
+        Err(
+            InternalTangencyPlanGap::RelationBinding
+            | InternalTangencyPlanGap::IntervalContract
+            | InternalTangencyPlanGap::ArithmeticGuard
+            | InternalTangencyPlanGap::Lineage,
+        ) => {
+            return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+        }
+    };
+    realize_analytic_shell_inputs(edit, &[input], linear, scope)
+}
+
+/// Replace one radial step by a compact tangent shoulder.
+///
+/// Both contact circles are bounded complete-period edges with the same
+/// topology vertex at their parameter seam. The planar shoulder owns one
+/// two-fin boundary walk, so the shared vertex has one degree-four manifold
+/// link rather than two pinched face loops.
+fn prepare_internal_tangent_shoulder(
+    cylinders: [&CertifiedCylinderSource; 2],
+    relation: &CertifiedParallelCylinderInternalRadialTangency,
+    tail: &PlannedAxialSpan,
+) -> Result<AnalyticShellInput, InternalTangencyPlanGap> {
+    bind_relation_boundaries(cylinders, relation.boundaries())?;
+    let contained = relation.contained_operand();
+    let containing = relation.containing_operand();
+    let contained_operand = operand_identity(contained);
+    let containing_operand = operand_identity(containing);
+    if !tail.side_operands().contains(contained_operand)
+        || tail.side_operands().contains(containing_operand)
+    {
+        return Err(InternalTangencyPlanGap::IntervalContract);
+    }
+
+    let low = single_bound_boundary(bind_boundary_class(cylinders, relation, tail.low())?)?;
+    let high = single_bound_boundary(bind_boundary_class(cylinders, relation, tail.high())?)?;
+    let (outer_contact, inner_far) = match (low.operand, high.operand) {
+        (operand, far) if operand == containing_operand && far == contained_operand => (low, high),
+        (far, operand) if far == contained_operand && operand == containing_operand => (high, low),
+        _ => return Err(InternalTangencyPlanGap::IntervalContract),
+    };
+    let outer_source = cylinders
+        .get(containing)
+        .ok_or(InternalTangencyPlanGap::RelationBinding)?;
+    let inner_source = cylinders
+        .get(contained)
+        .ok_or(InternalTangencyPlanGap::RelationBinding)?;
+    let outer_far_index = match outer_contact.boundary_index {
+        0 => 1,
+        1 => 0,
+        _ => return Err(InternalTangencyPlanGap::RelationBinding),
+    };
+    let outer_far = *outer_source
+        .boundaries()
+        .get(outer_far_index)
+        .ok_or(InternalTangencyPlanGap::RelationBinding)?;
+
+    let outer_source_frame = *outer_source.cylinder().frame();
+    let trial_frame = Frame::new(
+        outer_far.center(),
+        outer_source_frame.z(),
+        outer_source_frame.x(),
+    )
+    .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let (_, trial_height) = exact_axial_projection(trial_frame, outer_contact.boundary.center())
+        .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
+    let axis = if trial_height > 0.0 {
+        outer_source_frame.z()
+    } else if trial_height < 0.0 {
+        -outer_source_frame.z()
+    } else {
+        return Err(InternalTangencyPlanGap::ArithmeticGuard);
+    };
+    let axial_frame = Frame::new(outer_far.center(), axis, outer_source_frame.x())
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let (outer_contact_center, outer_height) =
+        exact_axial_projection(axial_frame, outer_contact.boundary.center())
+            .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
+    if !outer_height.is_finite() || outer_height <= 0.0 {
+        return Err(InternalTangencyPlanGap::ArithmeticGuard);
+    }
+
+    let (inner_contact_center, _) =
+        exact_axial_projection(*inner_source.cylinder().frame(), outer_contact_center)
+            .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
+    let radial = inner_contact_center - outer_contact_center;
+    let shoulder_frame = Frame::new(outer_contact_center, axis, radial)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let outer_frame = shoulder_frame.with_origin(outer_far.center());
+    let inner_frame = shoulder_frame.with_origin(inner_contact_center);
+    let (inner_far_center, inner_height) =
+        exact_axial_projection(inner_frame, inner_far.boundary.center())
+            .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
+    if !inner_height.is_finite() || inner_height <= 0.0 {
+        return Err(InternalTangencyPlanGap::ArithmeticGuard);
+    }
+
+    let outer_radius = outer_source.cylinder().radius();
+    let inner_radius = inner_source.cylinder().radius();
+    if !outer_radius.is_finite()
+        || !inner_radius.is_finite()
+        || outer_radius <= inner_radius
+        || inner_radius <= 0.0
+    {
+        return Err(InternalTangencyPlanGap::RelationBinding);
+    }
+    let outer_cylinder = Cylinder::new(outer_frame, outer_radius)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let inner_cylinder = Cylinder::new(inner_frame, inner_radius)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let outer_far_circle = Circle::new(outer_frame, outer_radius)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let outer_contact_circle = Circle::new(shoulder_frame, outer_radius)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let inner_contact_circle = Circle::new(inner_frame, inner_radius)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let inner_far_circle = Circle::new(inner_frame.with_origin(inner_far_center), inner_radius)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+
+    const TANGENT: AnalyticVertexKey = AnalyticVertexKey::new(0);
+    const OUTER_FAR: AnalyticEdgeKey = AnalyticEdgeKey::new(0);
+    const OUTER_CONTACT: AnalyticEdgeKey = AnalyticEdgeKey::new(1);
+    const INNER_CONTACT: AnalyticEdgeKey = AnalyticEdgeKey::new(2);
+    const INNER_FAR: AnalyticEdgeKey = AnalyticEdgeKey::new(3);
+    let vertices = vec![AnalyticShellVertex::new(
+        TANGENT,
+        outer_contact_circle.eval(0.0),
+    )];
+    let edges = vec![
+        AnalyticShellEdge::new(
+            OUTER_CONTACT,
+            [TANGENT, TANGENT],
+            AnalyticShellCurve::Circle(outer_contact_circle),
+            outer_contact_circle.param_range(),
+        )
+        .with_source(EntityRef::Edge(outer_contact.boundary.edge())),
+        AnalyticShellEdge::new(
+            INNER_CONTACT,
+            [TANGENT, TANGENT],
+            AnalyticShellCurve::Circle(inner_contact_circle),
+            inner_contact_circle.param_range(),
+        )
+        .with_derived_sources([
+            EntityRef::Face(inner_source.side_face()),
+            EntityRef::Face(outer_contact.boundary.cap_face()),
+        ]),
+    ];
+    let closed_edges = vec![
+        AnalyticShellClosedEdge::new(
+            OUTER_FAR,
+            AnalyticShellCurve::Circle(outer_far_circle),
+            outer_far_circle.param_range(),
+        )
+        .with_source(EntityRef::Edge(outer_far.edge())),
+        AnalyticShellClosedEdge::new(
+            INNER_FAR,
+            AnalyticShellCurve::Circle(inner_far_circle),
+            inner_far_circle.param_range(),
+        )
+        .with_source(EntityRef::Edge(inner_far.boundary.edge())),
+    ];
+
+    let outer_side = AnalyticShellFace::new(
+        AnalyticFaceKey::new(0),
+        AnalyticShellSurface::Cylinder(outer_cylinder),
+        Sense::Forward,
+        FaceDomain::from_bounds(0.0, PERIOD, 0.0, outer_height)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+        vec![
+            AnalyticShellLoop::new(vec![side_fin(OUTER_FAR, Sense::Forward, 0.0)?]),
+            AnalyticShellLoop::new(vec![bounded_side_fin(
+                OUTER_CONTACT,
+                Sense::Reversed,
+                outer_height,
+            )?]),
+        ],
+    )
+    .with_source(EntityRef::Face(outer_source.side_face()));
+    let inner_side = AnalyticShellFace::new(
+        AnalyticFaceKey::new(1),
+        AnalyticShellSurface::Cylinder(inner_cylinder),
+        Sense::Forward,
+        FaceDomain::from_bounds(0.0, PERIOD, 0.0, inner_height)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+        vec![
+            AnalyticShellLoop::new(vec![bounded_side_fin(INNER_CONTACT, Sense::Forward, 0.0)?]),
+            AnalyticShellLoop::new(vec![side_fin(INNER_FAR, Sense::Reversed, inner_height)?]),
+        ],
+    )
+    .with_source(EntityRef::Face(inner_source.side_face()));
+
+    let outer_far_plane = Plane::new(
+        Frame::new(outer_far.center(), -axis, shoulder_frame.x())
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+    );
+    let inner_far_plane = Plane::new(shoulder_frame.with_origin(inner_far_center));
+    let shoulder_plane = Plane::new(shoulder_frame);
+    let outer_cap = tangent_cap_face(
+        AnalyticFaceKey::new(2),
+        OUTER_FAR,
+        outer_far_plane,
+        outer_far_circle,
+        Sense::Reversed,
+        outer_radius,
+        outer_far.cap_face(),
+        true,
+    )?;
+    let inner_cap = tangent_cap_face(
+        AnalyticFaceKey::new(3),
+        INNER_FAR,
+        inner_far_plane,
+        inner_far_circle,
+        Sense::Forward,
+        inner_radius,
+        inner_far.boundary.cap_face(),
+        true,
+    )?;
+    let shoulder = AnalyticShellFace::new(
+        AnalyticFaceKey::new(4),
+        AnalyticShellSurface::Plane(shoulder_plane),
+        Sense::Forward,
+        FaceDomain::from_bounds(-outer_radius, outer_radius, -outer_radius, outer_radius)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+        vec![AnalyticShellLoop::new(vec![
+            plane_circle_fin(
+                OUTER_CONTACT,
+                Sense::Forward,
+                shoulder_plane,
+                outer_contact_circle,
+                false,
+            )?,
+            plane_circle_fin(
+                INNER_CONTACT,
+                Sense::Reversed,
+                shoulder_plane,
+                inner_contact_circle,
+                false,
+            )?,
+        ])],
+    )
+    .with_source(EntityRef::Face(outer_contact.boundary.cap_face()));
+
+    Ok(AnalyticShellInput::new(
+        vertices,
+        edges,
+        vec![outer_side, inner_side, outer_cap, inner_cap, shoulder],
+    )
+    .with_closed_edges(closed_edges))
+}
+
+fn single_bound_boundary(
+    boundaries: Vec<BoundBoundary>,
+) -> Result<BoundBoundary, InternalTangencyPlanGap> {
+    let [boundary] = boundaries.as_slice() else {
+        return Err(InternalTangencyPlanGap::IntervalContract);
+    };
+    Ok(*boundary)
 }
 
 fn span_is_whole_operand(span: &PlannedAxialSpan, operand: usize) -> bool {
@@ -336,6 +615,7 @@ fn bind_boundary_class(
         }
         boundaries.push(BoundBoundary {
             operand,
+            boundary_index,
             boundary: *cylinders[operand_index]
                 .boundaries()
                 .get(boundary_index)
@@ -469,14 +749,100 @@ fn side_fin(
     sense: Sense,
     height: f64,
 ) -> Result<AnalyticShellFin, InternalTangencyPlanGap> {
+    cylinder_circle_fin(edge, sense, height, true)
+}
+
+fn bounded_side_fin(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    height: f64,
+) -> Result<AnalyticShellFin, InternalTangencyPlanGap> {
+    cylinder_circle_fin(edge, sense, height, false)
+}
+
+fn cylinder_circle_fin(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    height: f64,
+    endpoint_free: bool,
+) -> Result<AnalyticShellFin, InternalTangencyPlanGap> {
     let line = Line2d::new(Point2::new(0.0, height), Vec2::new(1.0, 0.0))
         .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
     let map =
         AffineParamMap1d::new(1.0, 0.0).map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let use_ = AnalyticPcurveUse::new(AnalyticShellPcurve::Line(line), map);
     Ok(AnalyticShellFin::new(
         edge,
         sense,
-        AnalyticPcurveUse::new(AnalyticShellPcurve::Line(line), map).with_closure_winding([1, 0]),
+        if endpoint_free {
+            use_.with_closure_winding([1, 0])
+        } else {
+            use_
+        },
+    ))
+}
+
+fn tangent_cap_face(
+    key: AnalyticFaceKey,
+    edge: AnalyticEdgeKey,
+    plane: Plane,
+    circle: Circle,
+    fin_sense: Sense,
+    radius: f64,
+    source: ktopo::entity::FaceId,
+    endpoint_free: bool,
+) -> Result<AnalyticShellFace, InternalTangencyPlanGap> {
+    Ok(AnalyticShellFace::new(
+        key,
+        AnalyticShellSurface::Plane(plane),
+        Sense::Forward,
+        FaceDomain::from_bounds(-radius, radius, -radius, radius)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+        vec![AnalyticShellLoop::new(vec![plane_circle_fin(
+            edge,
+            fin_sense,
+            plane,
+            circle,
+            endpoint_free,
+        )?])],
+    )
+    .with_source(EntityRef::Face(source)))
+}
+
+fn plane_circle_fin(
+    edge: AnalyticEdgeKey,
+    sense: Sense,
+    plane: Plane,
+    circle: Circle,
+    endpoint_free: bool,
+) -> Result<AnalyticShellFin, InternalTangencyPlanGap> {
+    let center = plane.frame().to_local(circle.frame().origin());
+    let local_x = Vec2::new(
+        circle.frame().x().dot(plane.frame().x()),
+        circle.frame().x().dot(plane.frame().y()),
+    );
+    let local_y = Vec2::new(
+        circle.frame().y().dot(plane.frame().x()),
+        circle.frame().y().dot(plane.frame().y()),
+    );
+    let scale = if local_x.perp().dot(local_y) > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let pcurve = Circle2d::new(Point2::new(center.x, center.y), circle.radius(), local_x)
+        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let map =
+        AffineParamMap1d::new(scale, 0.0).map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let use_ = AnalyticPcurveUse::new(AnalyticShellPcurve::Circle(pcurve), map);
+    Ok(AnalyticShellFin::new(
+        edge,
+        sense,
+        if endpoint_free {
+            use_.with_closure_winding([0, 0])
+        } else {
+            use_
+        },
     ))
 }
 

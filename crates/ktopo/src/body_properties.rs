@@ -17,10 +17,11 @@ use crate::check::{
 };
 use crate::entity::{BodyId, BodyKind, FaceId, LoopId, Sense};
 use crate::geom::{Curve2dGeom, SurfaceGeom};
+use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::loop_proof::bounded_pcurve_integral::BoundedPcurveSpan;
 use crate::loop_proof::{
-    certify_piecewise_periodic_line_spans, periodic_line_loop_proof_work,
-    prepare_bounded_analytic_loop,
+    certify_piecewise_periodic_line_spans, is_one_vertex_full_period_circle_edge,
+    periodic_line_loop_proof_work, prepare_bounded_analytic_loop,
 };
 use crate::store::Store;
 use kcore::error::{Error, Result};
@@ -29,6 +30,7 @@ use kcore::math;
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::vec::{Point2, Point3, Vec3};
 
 const fn known_stage(value: &'static str) -> StageId {
@@ -722,28 +724,37 @@ fn prepare_property_loop<'a>(
     let curve = store
         .get(use_.curve())
         .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
-    if edge.bounds.is_some()
-        || edge.vertices != [None, None]
-        || edge.tolerance.is_some()
+    let endpoint_free = edge.bounds.is_none() && edge.vertices == [None, None];
+    let bounded_one_vertex = is_one_vertex_full_period_circle_edge(store, edge)
+        .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
+    if edge.tolerance.is_some()
+        || !endpoint_free && !bounded_one_vertex
+        || bounded_one_vertex
+            && certify_whole_fin_incidence(store, face_id, loop_id, *fin_id, LINEAR_RESOLUTION)
+                != WholeFinIncidence::Certified
         || use_.seam().is_some()
     {
         return Err(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id });
     }
     match (surface, curve, use_.closure_winding()) {
-        (SurfaceGeom::Plane(_), Curve2dGeom::Circle(_), Some([0, 0])) => {}
+        (SurfaceGeom::Plane(_), Curve2dGeom::Circle(_), Some([0, 0])) if endpoint_free => {}
+        (SurfaceGeom::Plane(_), Curve2dGeom::Circle(_), None) if bounded_one_vertex => {}
         (SurfaceGeom::Cylinder(_), Curve2dGeom::Line(line), Some([1 | -1, 0]))
-            if line.dir().x != 0.0 && line.dir().y == 0.0 => {}
+            if endpoint_free && line.dir().x != 0.0 && line.dir().y == 0.0 => {}
+        (SurfaceGeom::Cylinder(_), Curve2dGeom::Line(line), None)
+            if bounded_one_vertex && line.dir().x != 0.0 && line.dir().y == 0.0 => {}
         _ => return Err(BodyPropertiesRefusal::UnsupportedPcurve { face: face_id }),
     }
     let edge_curve = edge
         .curve
         .and_then(|curve| store.get(curve).ok())
         .ok_or(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id })?;
-    let range = edge_curve.as_curve().param_range();
-    if !range.is_finite() || range.lo >= range.hi {
+    let natural_range = edge_curve.as_curve().param_range();
+    let (range_lo, range_hi) = edge.bounds.unwrap_or((natural_range.lo, natural_range.hi));
+    if !range_lo.is_finite() || !range_hi.is_finite() || range_lo >= range_hi {
         return Err(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id });
     }
-    let (edge_start, edge_end) = traversal_bounds(fin.sense, range.lo, range.hi);
+    let (edge_start, edge_end) = traversal_bounds(fin.sense, range_lo, range_hi);
     let start = use_.parameter_at_edge(edge_start);
     let end = use_.parameter_at_edge(edge_end);
     if !start.is_finite() || !end.is_finite() || start == end {

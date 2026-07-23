@@ -1,10 +1,10 @@
 //! Facade-only set-operation evidence for exact internal radial tangency.
 //!
 //! `O` denotes the larger containing radial disk and `I` the smaller
-//! contained disk. The supported slice keeps only regularized results whose
-//! boundary is a whole source or a canonical finite `I`-radius band. A
-//! tangent shoulder and the pinched `O \ I` annulus remain typed, atomic
-//! refusals.
+//! contained disk. The supported slice keeps whole sources, canonical finite
+//! `I`-radius bands, and one exact tangent shoulder when `I` has one axial
+//! protrusion. Two shoulders and the pinched `O \ I` annulus remain typed,
+//! atomic refusals.
 //! Wall-time budget: less than 60 seconds for the semantic and rigid-frame
 //! matrices.
 
@@ -12,12 +12,15 @@ use super::*;
 
 const INTERNAL_TANGENCY_RELATION_WORK: u64 = 64;
 const INTERNAL_TANGENCY_BAND_WORK: u64 = 420;
+const INTERNAL_TANGENCY_SHOULDER_WORK: u64 = 1_092;
 const INTERNAL_TANGENCY_PROPERTIES_WORK: u64 = 3_953;
+const INTERNAL_TANGENCY_SHOULDER_PROPERTIES_WORK: u64 = 7_881;
 const WHOLE_CYLINDER_COPY_WORK: u64 = 26;
 const WHOLE_CYLINDER_COPY_IDENTITIES: usize = 26;
 const CONTAINING_RADIUS: f64 = 3.0;
 const CONTAINED_RADIUS: f64 = 1.0;
 const CENTER_SEPARATION: f64 = 2.0;
+const TANGENT_SHOULDER_TOPOLOGY: [usize; 3] = [5, 4, 1];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RadialRole {
@@ -47,6 +50,7 @@ enum ExpectedResult {
     ProvenEmpty,
     SourceCopy(RadialRole),
     RebuiltBands(&'static [[f64; 2]]),
+    TangentShoulder,
     Refused,
 }
 
@@ -64,8 +68,16 @@ const CROSSING: SemanticRow = SemanticRow {
     name: "crossing",
     intervals: [[-2.0, 1.0], [-1.0, 2.0]],
     intersect: ExpectedResult::RebuiltBands(&[[-1.0, 1.0]]),
-    unite: ExpectedResult::Refused,
+    unite: ExpectedResult::TangentShoulder,
     contained_minus_containing: ExpectedResult::RebuiltBands(&[[1.0, 2.0]]),
+};
+
+const REVERSE_CROSSING: SemanticRow = SemanticRow {
+    name: "reverse crossing",
+    intervals: [[-1.0, 2.0], [-2.0, 1.0]],
+    intersect: ExpectedResult::RebuiltBands(&[[-1.0, 1.0]]),
+    unite: ExpectedResult::TangentShoulder,
+    contained_minus_containing: ExpectedResult::RebuiltBands(&[[-2.0, -1.0]]),
 };
 
 const CONTAINING_COVERS_CONTAINED: SemanticRow = SemanticRow {
@@ -84,22 +96,23 @@ const CONTAINED_COVERS_CONTAINING: SemanticRow = SemanticRow {
     contained_minus_containing: ExpectedResult::RebuiltBands(&[[-2.0, -1.0], [1.0, 2.0]]),
 };
 
-const SEMANTIC_ROWS: [SemanticRow; 6] = [
+const SEMANTIC_ROWS: [SemanticRow; 7] = [
     CROSSING,
+    REVERSE_CROSSING,
     CONTAINING_COVERS_CONTAINED,
     CONTAINED_COVERS_CONTAINING,
     SemanticRow {
         name: "shared low with I extending high",
         intervals: [[-2.0, 0.0], [-2.0, 2.0]],
         intersect: ExpectedResult::RebuiltBands(&[[-2.0, 0.0]]),
-        unite: ExpectedResult::Refused,
+        unite: ExpectedResult::TangentShoulder,
         contained_minus_containing: ExpectedResult::RebuiltBands(&[[0.0, 2.0]]),
     },
     SemanticRow {
         name: "shared high with I extending low",
         intervals: [[0.0, 2.0], [-2.0, 2.0]],
         intersect: ExpectedResult::RebuiltBands(&[[0.0, 2.0]]),
-        unite: ExpectedResult::Refused,
+        unite: ExpectedResult::TangentShoulder,
         contained_minus_containing: ExpectedResult::RebuiltBands(&[[-2.0, 0.0]]),
     },
     SemanticRow {
@@ -588,6 +601,139 @@ fn assert_rebuilt_band_lineage(
     );
 }
 
+fn derived_results(
+    events: &[OwnedLineage],
+    source: &JournalEntity,
+    kind: EntityKind,
+) -> Vec<JournalEntity> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            OwnedLineage::Derived {
+                derived,
+                source: actual,
+            } if actual == source && derived.kind() == kind => Some(derived.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_tangent_shoulder_lineage(
+    fixture: &Fixture,
+    created: &kernel::BooleanCreatedResult,
+    intervals: [[f64; 2]; 2],
+    containing_operand: usize,
+    reversed_axes: [bool; 2],
+    label: &str,
+) {
+    let source_layouts: [CylinderEntityLayout; 2] = core::array::from_fn(|operand| {
+        cylinder_entity_layout(
+            fixture,
+            operand_body(fixture, operand),
+            reversed_axes[operand],
+        )
+    });
+    let outer_operand = operand_for_role(containing_operand, RadialRole::Containing);
+    let inner_operand = operand_for_role(containing_operand, RadialRole::Contained);
+    let outer = &source_layouts[outer_operand];
+    let inner = &source_layouts[inner_operand];
+    let high_tail =
+        intervals[RadialRole::Contained.index()][1] > intervals[RadialRole::Containing.index()][1];
+    let contact = usize::from(high_tail);
+    let far = 1 - contact;
+
+    let events = owned_lineage(created);
+    assert_eq!(events.len(), 10, "{label}: shoulder lineage changed");
+    assert!(
+        events
+            .iter()
+            .all(|event| matches!(event, OwnedLineage::Derived { .. })),
+        "{label}: unequal tangent supports may publish only DerivedFrom lineage"
+    );
+
+    for source in [
+        &outer.side,
+        &inner.side,
+        &outer.caps[contact],
+        &outer.caps[far],
+        &inner.caps[contact],
+    ] {
+        assert_eq!(
+            derived_results(&events, source, EntityKind::Face).len(),
+            1,
+            "{label}: expected one result face from {source:?}"
+        );
+    }
+    for source in [
+        &outer.rings[contact],
+        &outer.rings[far],
+        &inner.rings[contact],
+    ] {
+        assert_eq!(
+            derived_results(&events, source, EntityKind::Edge).len(),
+            1,
+            "{label}: expected one result edge from {source:?}"
+        );
+    }
+    let inner_cut_from_side = derived_results(&events, &inner.side, EntityKind::Edge);
+    let inner_cut_from_cap = derived_results(&events, &outer.caps[contact], EntityKind::Edge);
+    assert_eq!(inner_cut_from_side.len(), 1, "{label}");
+    assert_eq!(inner_cut_from_side, inner_cut_from_cap, "{label}");
+
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    let body = part.body(created.bodies()[0].clone()).unwrap();
+    let results = body
+        .faces()
+        .unwrap()
+        .map(JournalEntity::Face)
+        .chain(body.edges().unwrap().map(JournalEntity::Edge))
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 9, "{label}");
+    assert!(
+        results
+            .iter()
+            .all(|result| events.iter().any(|event| matches!(
+                event,
+                OwnedLineage::Derived { derived, .. } if derived == result
+            ))),
+        "{label}: every result face and edge needs source lineage"
+    );
+}
+
+fn assert_full_tangent_shoulder(
+    fixture: &Fixture,
+    created: &kernel::BooleanCreatedResult,
+    label: &str,
+) {
+    assert_eq!(created.bodies().len(), 1, "{label}");
+    assert_eq!(created.reports().len(), 1, "{label}");
+    let committed = &created.reports()[0];
+    assert_eq!(committed.body(), created.bodies()[0], "{label}");
+    assert_eq!(committed.report().level(), CheckLevel::Full, "{label}");
+    assert_eq!(committed.report().outcome(), CheckOutcome::Valid, "{label}");
+    assert!(committed.report().faults().is_empty(), "{label}");
+    assert!(committed.report().gaps().is_empty(), "{label}");
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    assert_eq!(
+        body_topology(&part, created.bodies()[0].clone()),
+        TANGENT_SHOULDER_TOPOLOGY,
+        "{label}"
+    );
+    let checked = part
+        .check_body(CheckBodyRequest::new(
+            created.bodies()[0].clone(),
+            CheckLevel::Full,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(
+        checked.outcome(),
+        CheckOutcome::Valid,
+        "{label}: {checked:#?}"
+    );
+}
+
 fn assert_full_cylinder_components(
     fixture: &Fixture,
     created: &kernel::BooleanCreatedResult,
@@ -672,6 +818,92 @@ fn assert_internal_span_properties(fixture: &Fixture, body: BodyId, span: [f64; 
     );
 }
 
+fn assert_tangent_shoulder_properties(fixture: &Fixture, body: BodyId, intervals: [[f64; 2]; 2]) {
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    let properties = certified_properties_at_exact_budget(
+        &part,
+        body,
+        INTERNAL_TANGENCY_SHOULDER_PROPERTIES_WORK,
+        "internal-tangency shoulder",
+    );
+    let outer = intervals[RadialRole::Containing.index()];
+    let inner = intervals[RadialRole::Contained.index()];
+    let tail = if inner[1] > outer[1] {
+        [outer[1], inner[1]]
+    } else {
+        [inner[0], outer[0]]
+    };
+    let outer_height = outer[1] - outer[0];
+    let inner_height = tail[1] - tail[0];
+    let outer_mass = core::f64::consts::PI * CONTAINING_RADIUS.powi(2) * outer_height;
+    let inner_mass = core::f64::consts::PI * CONTAINED_RADIUS.powi(2) * inner_height;
+    let volume = outer_mass + inner_mass;
+    let area = 2.0
+        * core::f64::consts::PI
+        * (CONTAINING_RADIUS * outer_height
+            + CONTAINED_RADIUS * inner_height
+            + CONTAINING_RADIUS.powi(2));
+    assert_scalar_matches_analytic(
+        properties.volume(),
+        volume,
+        "internal-tangency shoulder volume",
+    );
+    assert_scalar_matches_analytic(
+        properties.surface_area(),
+        area,
+        "internal-tangency shoulder surface area",
+    );
+
+    let outer_center = [0.0, 0.0, (outer[0] + outer[1]) / 2.0];
+    let inner_center = [CENTER_SEPARATION, 0.0, (tail[0] + tail[1]) / 2.0];
+    let centroid: [f64; 3] = core::array::from_fn(|axis| {
+        (outer_mass * outer_center[axis] + inner_mass * inner_center[axis]) / volume
+    });
+    assert_point_matches_analytic(
+        properties.centroid(),
+        fixture
+            .frame
+            .point_at(centroid[0], centroid[1], centroid[2]),
+    );
+
+    let cylinder_inertia = |mass: f64, radius: f64, height: f64| {
+        let transverse = mass * (3.0 * radius.powi(2) + height.powi(2)) / 12.0;
+        let axial = mass * radius.powi(2) / 2.0;
+        [
+            [transverse, 0.0, 0.0],
+            [0.0, transverse, 0.0],
+            [0.0, 0.0, axial],
+        ]
+    };
+    let parallel_axis = |mass: f64, center: [f64; 3]| {
+        let displacement = core::array::from_fn::<_, 3, _>(|axis| center[axis] - centroid[axis]);
+        let squared = displacement.iter().map(|value| value * value).sum::<f64>();
+        core::array::from_fn::<_, 3, _>(|row| {
+            core::array::from_fn::<_, 3, _>(|column| {
+                mass * (if row == column { squared } else { 0.0 }
+                    - displacement[row] * displacement[column])
+            })
+        })
+    };
+    let outer_inertia = cylinder_inertia(outer_mass, CONTAINING_RADIUS, outer_height);
+    let inner_inertia = cylinder_inertia(inner_mass, CONTAINED_RADIUS, inner_height);
+    let outer_shift = parallel_axis(outer_mass, outer_center);
+    let inner_shift = parallel_axis(inner_mass, inner_center);
+    let local = core::array::from_fn(|row| {
+        core::array::from_fn(|column| {
+            outer_inertia[row][column]
+                + inner_inertia[row][column]
+                + outer_shift[row][column]
+                + inner_shift[row][column]
+        })
+    });
+    assert_inertia_matches_analytic(
+        properties.centroidal_inertia().value(),
+        properties.centroidal_inertia().error_bound(),
+        rotate_tensor(fixture.frame, local),
+    );
+}
+
 fn assert_component_order_and_interiors(
     fixture: &Fixture,
     bodies: &[BodyId],
@@ -749,6 +981,54 @@ fn assert_component_order_and_interiors(
     }
 }
 
+fn assert_tangent_shoulder_interiors(
+    fixture: &Fixture,
+    body: BodyId,
+    intervals: [[f64; 2]; 2],
+    label: &str,
+) {
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    let outer = intervals[RadialRole::Containing.index()];
+    let inner = intervals[RadialRole::Contained.index()];
+    let high_tail = inner[1] > outer[1];
+    let tail = if high_tail {
+        [outer[1], inner[1]]
+    } else {
+        [inner[0], outer[0]]
+    };
+    for (role, axial) in [
+        (RadialRole::Containing, (outer[0] + outer[1]) / 2.0),
+        (RadialRole::Contained, (tail[0] + tail[1]) / 2.0),
+    ] {
+        let point = radial_axis_point(fixture.frame, role, axial);
+        let classified = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(body.clone(), point))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            classified.verdict(),
+            &kernel::PointBodyVerdict::Interior,
+            "{label}: {role:?} axis point at {axial}"
+        );
+    }
+    let global = [outer[0].min(inner[0]), outer[1].max(inner[1])];
+    let margin = (global[1] - global[0]) / 4.0;
+    for axial in [global[0] - margin, global[1] + margin] {
+        let point = radial_axis_point(fixture.frame, RadialRole::Containing, axial);
+        let classified = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(body.clone(), point))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            classified.verdict(),
+            &kernel::PointBodyVerdict::Exterior,
+            "{label}: result extends beyond axial union at {axial}"
+        );
+    }
+}
+
 fn export_components(fixture: &Fixture, bodies: &[BodyId]) -> Vec<Vec<u8>> {
     let part = fixture.session.part(fixture.part_id.clone()).unwrap();
     bodies
@@ -789,8 +1069,11 @@ fn assert_internal_outcome(
     );
     assert_eq!(
         internal_usage_at(&outcome, BOOLEAN_REALIZED_VERTICES, ResourceKind::Items),
-        Some(0),
-        "{label}: interval-only result allocated vertices"
+        Some(u64::from(matches!(
+            expected,
+            ExpectedResult::TangentShoulder
+        ))),
+        "{label}: realized-vertex accounting changed"
     );
     let report = outcome.report().clone();
     let result = outcome.into_result().unwrap();
@@ -869,6 +1152,33 @@ fn assert_internal_outcome(
                 label,
             );
             assert_source_bodies_preserved(fixture, 2 + spans.len());
+            let exports = if capture_exports {
+                export_components(fixture, created.bodies())
+            } else {
+                Vec::new()
+            };
+            (exports, created.bodies().to_vec())
+        }
+        ExpectedResult::TangentShoulder => {
+            let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+                panic!("{label}: tangent-shoulder result returned {result:#?}")
+            };
+            assert_full_tangent_shoulder(fixture, &created, label);
+            assert_tangent_shoulder_lineage(
+                fixture,
+                &created,
+                intervals,
+                containing_operand,
+                reversed_axes,
+                label,
+            );
+            assert_tangent_shoulder_interiors(
+                fixture,
+                created.bodies()[0].clone(),
+                intervals,
+                label,
+            );
+            assert_source_bodies_preserved(fixture, 3);
             let exports = if capture_exports {
                 export_components(fixture, created.bodies())
             } else {
@@ -1091,7 +1401,7 @@ fn internal_tangency_refusals_roll_back_before_supported_replay() {
     for containing_operand in [0, 1] {
         let mut after_unite_refusal = internal_tangency_fixture(
             Placement::Oblique,
-            CROSSING.intervals,
+            CONTAINED_COVERS_CONTAINING.intervals,
             containing_operand,
             reversed_axes,
         );
@@ -1099,17 +1409,17 @@ fn internal_tangency_refusals_roll_back_before_supported_replay() {
             &mut after_unite_refusal,
             InternalRequest::Unite { swapped: true },
             ExpectedResult::Refused,
-            CROSSING.intervals,
+            CONTAINED_COVERS_CONTAINING.intervals,
             containing_operand,
             reversed_axes,
             false,
-            "unsupported tangent shoulder",
+            "unsupported two-tangent-shoulder chain",
         );
         let replay = execute_expected(
             &mut after_unite_refusal,
             InternalRequest::Intersect { swapped: false },
-            CROSSING.intersect,
-            CROSSING.intervals,
+            CONTAINED_COVERS_CONTAINING.intersect,
+            CONTAINED_COVERS_CONTAINING.intervals,
             containing_operand,
             reversed_axes,
             true,
@@ -1117,15 +1427,15 @@ fn internal_tangency_refusals_roll_back_before_supported_replay() {
         );
         let mut baseline = internal_tangency_fixture(
             Placement::Oblique,
-            CROSSING.intervals,
+            CONTAINED_COVERS_CONTAINING.intervals,
             containing_operand,
             reversed_axes,
         );
         let baseline = execute_expected(
             &mut baseline,
             InternalRequest::Intersect { swapped: false },
-            CROSSING.intersect,
-            CROSSING.intervals,
+            CONTAINED_COVERS_CONTAINING.intersect,
+            CONTAINED_COVERS_CONTAINING.intervals,
             containing_operand,
             reversed_axes,
             true,
@@ -1290,6 +1600,12 @@ fn assert_internal_realization_frontier(
 fn internal_tangency_realization_work_has_exact_atomic_frontiers() {
     assert_internal_realization_frontier(
         CROSSING.intervals,
+        InternalRequest::Unite { swapped: true },
+        ExpectedResult::TangentShoulder,
+        INTERNAL_TANGENCY_SHOULDER_WORK,
+    );
+    assert_internal_realization_frontier(
+        CROSSING.intervals,
         InternalRequest::Intersect { swapped: false },
         CROSSING.intersect,
         INTERNAL_TANGENCY_BAND_WORK,
@@ -1306,6 +1622,42 @@ fn internal_tangency_realization_work_has_exact_atomic_frontiers() {
         ExpectedResult::SourceCopy(RadialRole::Contained),
         WHOLE_CYLINDER_COPY_WORK,
     );
+}
+
+#[test]
+fn tangent_shoulder_properties_have_exact_frontier_and_independent_union_oracle() {
+    let containing_operand = 1;
+    let reversed_axes = [true, false];
+    let mut fixture = internal_tangency_fixture(
+        Placement::Oblique,
+        CROSSING.intervals,
+        containing_operand,
+        reversed_axes,
+    );
+    let outcome = run_internal_tangency(
+        &mut fixture,
+        containing_operand,
+        InternalRequest::Unite { swapped: true },
+    );
+    assert_eq!(
+        internal_usage_at(&outcome, BOOLEAN_POST_SELECTION_WORK, ResourceKind::Work),
+        Some(INTERNAL_TANGENCY_SHOULDER_WORK)
+    );
+    let result = outcome.into_result().unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+        panic!("internal-tangency shoulder property fixture returned {result:#?}")
+    };
+    assert_full_tangent_shoulder(&fixture, &created, "shoulder property fixture");
+    assert_tangent_shoulder_lineage(
+        &fixture,
+        &created,
+        CROSSING.intervals,
+        containing_operand,
+        reversed_axes,
+        "shoulder property fixture",
+    );
+    assert_tangent_shoulder_properties(&fixture, created.bodies()[0].clone(), CROSSING.intervals);
+    assert_source_bodies_preserved(&fixture, 3);
 }
 
 #[test]
@@ -1350,64 +1702,59 @@ fn rebuilt_internal_tangent_band_properties_have_exact_frontiers_and_cylinder_or
 }
 
 #[test]
-fn rebuilt_internal_tangent_band_xt_is_stable_and_fast_self_imports_twice() {
-    let containing_operand = 1;
-    let reversed_axes = [false, true];
-    let mut fixture = internal_tangency_fixture(
-        Placement::Oblique,
-        CROSSING.intervals,
-        containing_operand,
-        reversed_axes,
-    );
-    let outcome = run_internal_tangency(
-        &mut fixture,
-        containing_operand,
-        InternalRequest::Intersect { swapped: true },
-    );
-    assert_eq!(
-        internal_usage_at(&outcome, BOOLEAN_POST_SELECTION_WORK, ResourceKind::Work),
-        Some(INTERNAL_TANGENCY_BAND_WORK)
-    );
-    let result = outcome.into_result().unwrap();
-    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
-        panic!("internal-tangency X_T fixture returned {result:#?}")
-    };
-    assert_full_cylinder_components(&fixture, &created, "X_T fixture");
-    assert_rebuilt_band_lineage(
-        &fixture,
-        &created,
-        CROSSING.intervals,
-        containing_operand,
-        reversed_axes,
-        &[[-1.0, 1.0]],
-        "X_T fixture",
-    );
-    let body = created.bodies()[0].clone();
-    let (first, second) = {
+fn rebuilt_internal_tangent_results_have_stable_xt_and_fast_self_import_twice() {
+    for (name, request, expected) in [
+        (
+            "contained-radius band",
+            InternalRequest::Intersect { swapped: true },
+            CROSSING.intersect,
+        ),
+        (
+            "tangent shoulder",
+            InternalRequest::Unite { swapped: true },
+            ExpectedResult::TangentShoulder,
+        ),
+    ] {
+        let containing_operand = 1;
+        let reversed_axes = [false, true];
+        let mut fixture = internal_tangency_fixture(
+            Placement::Oblique,
+            CROSSING.intervals,
+            containing_operand,
+            reversed_axes,
+        );
+        let evidence = execute_expected(
+            &mut fixture,
+            request,
+            expected,
+            CROSSING.intervals,
+            containing_operand,
+            reversed_axes,
+            true,
+            name,
+        );
+        let [body] = evidence.bodies.as_slice() else {
+            panic!("{name}: expected exactly one exported result")
+        };
+        let [first] = evidence.exports.as_slice() else {
+            panic!("{name}: expected exactly one X_T payload")
+        };
         let part = fixture.session.part(fixture.part_id.clone()).unwrap();
-        let first = part
+        let second = part
             .export_xt(ExportXtRequest::new(body.clone()))
             .unwrap()
             .into_result()
             .unwrap()
             .bytes()
             .to_vec();
-        let second = part
-            .export_xt(ExportXtRequest::new(body))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .bytes()
-            .to_vec();
-        (first, second)
-    };
-    assert_xt_equal(
-        &first,
-        &second,
-        "repeat internal-tangency X_T export changed",
-    );
-    assert_fast_self_import(&mut fixture.session, &first);
-    assert_fast_self_import(&mut fixture.session, &first);
+        assert_xt_equal(
+            first,
+            &second,
+            &format!("{name}: repeat X_T export changed"),
+        );
+        assert_fast_self_import(&mut fixture.session, first);
+        assert_fast_self_import(&mut fixture.session, first);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1427,6 +1774,8 @@ fn radial_adversary_settings(loose: bool) -> OperationSettings {
 
 fn exact_tolerance_evidence(
     containing_operand: usize,
+    request: InternalRequest,
+    expected: ExpectedResult,
     settings: OperationSettings,
     label: &str,
 ) -> InternalEvidence {
@@ -1438,17 +1787,13 @@ fn exact_tolerance_evidence(
         reversed_axes,
     );
     let before = fixture_signature(&fixture);
-    let outcome = run_internal_tangency_with_settings(
-        &mut fixture,
-        containing_operand,
-        InternalRequest::Intersect { swapped: true },
-        settings,
-    );
+    let outcome =
+        run_internal_tangency_with_settings(&mut fixture, containing_operand, request, settings);
     assert_internal_outcome(
         &mut fixture,
         before,
         outcome,
-        CROSSING.intersect,
+        expected,
         CROSSING.intervals,
         containing_operand,
         reversed_axes,
@@ -1513,21 +1858,38 @@ fn assert_radial_neighbor_refusal(
 #[test]
 fn exact_internal_tangency_is_tolerance_independent_and_not_inferred_across_one_ulp() {
     for containing_operand in [0, 1] {
-        let baseline = exact_tolerance_evidence(
-            containing_operand,
-            radial_adversary_settings(false),
-            "exact internal tangency baseline",
-        );
-        let loose = exact_tolerance_evidence(
-            containing_operand,
-            radial_adversary_settings(true),
-            "exact internal tangency loose tolerance",
-        );
-        assert_same_internal_evidence(
-            &loose,
-            &baseline,
-            "loose tolerance changed exact internal tangency",
-        );
+        for (name, request, expected) in [
+            (
+                "Intersect",
+                InternalRequest::Intersect { swapped: true },
+                CROSSING.intersect,
+            ),
+            (
+                "Unite",
+                InternalRequest::Unite { swapped: true },
+                ExpectedResult::TangentShoulder,
+            ),
+        ] {
+            let baseline = exact_tolerance_evidence(
+                containing_operand,
+                request,
+                expected,
+                radial_adversary_settings(false),
+                &format!("exact internal tangency {name} baseline"),
+            );
+            let loose = exact_tolerance_evidence(
+                containing_operand,
+                request,
+                expected,
+                radial_adversary_settings(true),
+                &format!("exact internal tangency {name} loose tolerance"),
+            );
+            assert_same_internal_evidence(
+                &loose,
+                &baseline,
+                &format!("loose tolerance changed exact internal tangency {name}"),
+            );
+        }
     }
 
     let adversaries = [

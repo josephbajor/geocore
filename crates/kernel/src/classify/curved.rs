@@ -8,10 +8,11 @@
 use std::collections::HashSet;
 
 use kcore::interval::Interval;
-use kcore::predicates::{Orientation, affine_dot3};
-use kgeom::curve::Circle;
+use kcore::predicates::{Orientation, affine_dot3, orient3d};
+use kgeom::curve::{Circle, Curve};
 use kgeom::frame::Frame;
 use kgeom::surface::{Cylinder, Plane};
+use kops::intersect::{ParallelCylinderRadialRelation, classify_parallel_cylinder_radial_relation};
 use ktopo::entity::{
     BodyId as RawBodyId, EdgeId as RawEdgeId, FaceId as RawFaceId, Loop, RegionKind,
 };
@@ -24,8 +25,7 @@ use crate::error::Result;
 
 pub(super) const GAP_CYLINDER_TRIM: &str =
     "cylindrical face classification requires full-period constant-axial ring boundaries";
-pub(super) const GAP_CIRCULAR_PLANE_TRIM: &str =
-    "circular planar classification requires vertex-less full-circle boundary loops";
+pub(super) const GAP_CIRCULAR_PLANE_TRIM: &str = "circular planar classification requires exact full-circle loops or one internally tangent bounded pair";
 pub(super) const GAP_CURVED_BODY_PARITY: &str =
     "curved body classification found no certified common-axis parity ray";
 
@@ -115,13 +115,23 @@ fn prepare_circular_plane(
         return Ok(CurvedPrepOutcome::NotApplicable);
     }
     // A plane with both polygonal and circular cycles belongs to the mixed
-    // planar preparation path in the parent module. Decide this before
-    // reading any individual cycle so storage order cannot change the gap.
-    if face.loops().iter().any(|loop_id| {
+    // planar preparation path in the parent module. The one non-single-fin
+    // exception is the internal-tangent shoulder: one loop of two bounded
+    // complete circles sharing one topology vertex.
+    let tangent_pair = if let [loop_id] = face.loops() {
         store
             .get::<Loop>(*loop_id)
-            .is_ok_and(|loop_| loop_.fins().len() != 1)
-    }) {
+            .is_ok_and(|loop_| loop_.fins().len() == 2)
+    } else {
+        false
+    };
+    if !tangent_pair
+        && face.loops().iter().any(|loop_id| {
+            store
+                .get::<Loop>(*loop_id)
+                .is_ok_and(|loop_| loop_.fins().len() != 1)
+        })
+    {
         return Ok(CurvedPrepOutcome::NotApplicable);
     }
     let mut rings = Vec::with_capacity(face.loops().len());
@@ -129,32 +139,69 @@ fn prepare_circular_plane(
     for &loop_id in face.loops() {
         let ring = read(store.get::<Loop>(loop_id))?;
         charge(scope, ring.fins().len() as u64)?;
-        let [fin_id] = ring.fins() else {
-            return if rings.is_empty() {
-                Ok(CurvedPrepOutcome::NotApplicable)
-            } else {
-                Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM))
-            };
-        };
-        let fin = read(store.get(*fin_id))?;
-        let edge = read(store.get(fin.edge))?;
-        let Some(curve_id) = edge.curve else {
-            return Ok(CurvedPrepOutcome::NotApplicable);
-        };
-        if !matches!(read(store.curve(curve_id))?, CurveGeom::Circle(_)) {
-            return if rings.is_empty() {
-                Ok(CurvedPrepOutcome::NotApplicable)
-            } else {
-                Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM))
-            };
-        };
-        let Some(prepared) =
-            prepare_planar_circle_ring(store, raw, loop_id, *fin_id, linear, scope)?
-        else {
+        match ring.fins() {
+            [fin_id] => {
+                let fin = read(store.get(*fin_id))?;
+                let edge = read(store.get(fin.edge))?;
+                let Some(curve_id) = edge.curve else {
+                    return Ok(CurvedPrepOutcome::NotApplicable);
+                };
+                if !matches!(read(store.curve(curve_id))?, CurveGeom::Circle(_)) {
+                    return if rings.is_empty() {
+                        Ok(CurvedPrepOutcome::NotApplicable)
+                    } else {
+                        Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM))
+                    };
+                };
+                let Some(prepared) =
+                    prepare_planar_circle_ring(store, raw, loop_id, *fin_id, linear, scope)?
+                else {
+                    return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+                };
+                max_tol = max_tol.max(prepared.edge_tol);
+                rings.push(prepared);
+            }
+            [first, second] if tangent_pair => {
+                let mut shared_vertex = None;
+                for &fin_id in [first, second] {
+                    let Some((prepared, vertex)) = prepare_bounded_planar_circle_ring(
+                        store, raw, loop_id, fin_id, linear, scope,
+                    )?
+                    else {
+                        return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+                    };
+                    if shared_vertex.is_some_and(|seen| seen != vertex) {
+                        return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+                    }
+                    shared_vertex = Some(vertex);
+                    max_tol = max_tol.max(prepared.edge_tol);
+                    rings.push(prepared);
+                }
+            }
+            _ => return Ok(CurvedPrepOutcome::NotApplicable),
+        }
+    }
+    if tangent_pair {
+        let [first, second] = rings.as_slice() else {
             return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
         };
-        max_tol = max_tol.max(prepared.edge_tol);
-        rings.push(prepared);
+        if !circle_is_exactly_coplanar_with_plane(first.circle, plane)
+            || !circle_is_exactly_coplanar_with_plane(second.circle, plane)
+        {
+            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+        }
+        let (Ok(first), Ok(second)) = (
+            Cylinder::new(*first.circle.frame(), first.circle.radius()),
+            Cylinder::new(*second.circle.frame(), second.circle.radius()),
+        ) else {
+            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+        };
+        if !matches!(
+            classify_parallel_cylinder_radial_relation([first, second]),
+            ParallelCylinderRadialRelation::ExactInternalTangent(_)
+        ) {
+            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+        }
     }
 
     let normal = as_coords(plane.frame().z());
@@ -179,7 +226,80 @@ fn prepare_circular_plane(
     )))
 }
 
-/// Prepare one topology-owned vertex-less circular loop on a planar face.
+fn circle_is_exactly_coplanar_with_plane(circle: Circle, plane: Plane) -> bool {
+    let circle_normal = circle.frame().z();
+    let plane_normal = plane.frame().z();
+    let normals_parallel = circle_normal == plane_normal
+        || circle_normal == -plane_normal
+        || [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            .into_iter()
+            .all(|basis| {
+                orient3d(
+                    circle_normal.to_array(),
+                    plane_normal.to_array(),
+                    basis,
+                    [0.0; 3],
+                ) == Orientation::Zero
+            });
+    normals_parallel
+        && affine_dot3(
+            plane_normal.to_array(),
+            circle.frame().origin().to_array(),
+            plane.frame().origin().to_array(),
+            0.0,
+        )
+        .is_some_and(|value| value.sign() == Orientation::Zero)
+}
+
+fn prepare_bounded_planar_circle_ring(
+    store: &Store,
+    raw: RawFaceId,
+    loop_id: ktopo::entity::LoopId,
+    fin_id: ktopo::entity::FinId,
+    linear: f64,
+    scope: &mut kcore::operation::OperationScope<'_, '_>,
+) -> Result<Option<(CircleRing, ktopo::entity::VertexId)>> {
+    let ring = read(store.get::<Loop>(loop_id))?;
+    let fin = read(store.get(fin_id))?;
+    let edge = read(store.get(fin.edge))?;
+    let ([Some(first), Some(second)], Some((lo, hi)), Some(curve_id), Some(use_)) =
+        (edge.vertices(), edge.bounds(), edge.curve(), fin.pcurve())
+    else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = read(store.curve(curve_id))? else {
+        return Ok(None);
+    };
+    if ring.face() != raw
+        || !ring.fins().contains(&fin_id)
+        || fin.parent() != loop_id
+        || !edge.fins().contains(&fin_id)
+        || first != second
+        || edge.tolerance().is_some()
+        || !exact_period(lo, hi, circle.param_range().width())
+        || use_.closure_winding().is_some()
+        || use_.seam().is_some()
+    {
+        return Ok(None);
+    }
+    let edge_tol = linear;
+    charge_whole_fin_authority(store, raw, loop_id, fin_id, scope)?;
+    if certify_whole_fin_incidence(store, raw, loop_id, fin_id, edge_tol)
+        != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    Ok(Some((
+        CircleRing {
+            edge: fin.edge,
+            circle: *circle,
+            edge_tol,
+        },
+        first,
+    )))
+}
+
+/// Prepare one topology-owned endpoint-free circular loop on a planar face.
 ///
 /// Callers first identify the 3D circle class. This seam owns all backlink,
 /// topology, tolerance, and whole-fin incidence checks shared by circular-cap
@@ -248,7 +368,20 @@ fn prepare_cylinder(
         if ring.face() != raw || fin.parent() != loop_id || !edge.fins().contains(fin_id) {
             return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
         }
-        if edge.vertices() != [None, None] || edge.bounds().is_some() {
+        let endpoint_free = edge.vertices() == [None, None] && edge.bounds().is_none();
+        let bounded_one_vertex = match (edge.vertices(), edge.bounds(), edge.curve()) {
+            ([Some(first), Some(second)], Some((lo, hi)), Some(curve_id))
+                if first == second && edge.tolerance().is_none() =>
+            {
+                matches!(
+                    read(store.curve(curve_id))?,
+                    CurveGeom::Circle(circle)
+                        if exact_period(lo, hi, circle.param_range().width())
+                )
+            }
+            _ => false,
+        };
+        if !endpoint_free && !bounded_one_vertex {
             return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
         }
         let edge_tol = linear.max(edge.tolerance.map_or(0.0, |value| value.value()));
@@ -266,10 +399,12 @@ fn prepare_cylinder(
         };
         let winding = use_.closure_winding();
         let horizontal = line.dir().y == 0.0 && line.dir().x != 0.0;
-        let full_period = matches!(winding, Some([1 | -1, 0]));
+        let full_period = endpoint_free && matches!(winding, Some([1 | -1, 0]))
+            || bounded_one_vertex && winding.is_none();
         let chart_is_axially_fixed = use_.chart().period_shifts()[1] == 0;
         let rate = line.dir().x * use_.edge_to_pcurve().scale();
-        let winding_matches_rate = matches!(winding, Some([1, 0])) && rate > 0.0
+        let winding_matches_rate = bounded_one_vertex
+            || matches!(winding, Some([1, 0])) && rate > 0.0
             || matches!(winding, Some([-1, 0])) && rate < 0.0;
         if !horizontal || !full_period || !chart_is_axially_fixed || !winding_matches_rate {
             return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
@@ -302,6 +437,17 @@ fn prepare_cylinder(
             guard,
         },
     )))
+}
+
+fn exact_period(lo: f64, hi: f64, period: f64) -> bool {
+    if !lo.is_finite() || !hi.is_finite() || !period.is_finite() || lo >= hi || period <= 0.0 {
+        return false;
+    }
+    let width = kcore::expansion::sum(&[hi], &kcore::expansion::negate(&[lo]));
+    kcore::expansion::sign(&kcore::expansion::sum(
+        &width,
+        &kcore::expansion::negate(&[period]),
+    )) == 0
 }
 
 pub(super) fn face_site(
@@ -1256,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_full_turn_circle_with_a_seam_vertex_is_not_a_ring_edge() {
+    fn bounded_full_turn_circle_with_a_nonincident_vertex_is_not_a_ring_edge() {
         let mut store = Store::new();
         let body = ktopo::make::cylinder(&mut store, &Frame::world(), 2.0, 3.0).unwrap();
         let side = store

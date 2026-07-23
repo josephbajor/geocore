@@ -31,7 +31,10 @@ use self::periodic_line_loop::certify_piecewise_periodic_line_loop;
 pub(crate) use self::periodic_line_loop::{
     certify_piecewise_periodic_line_spans, periodic_line_loop_proof_work,
 };
-use crate::entity::{Edge, FinPcurve, LoopId, Sense, VertexId};
+use crate::analytic_tangency::{
+    circles_are_exactly_internal_tangent, point_is_within_circle_endpoint_envelope,
+};
+use crate::entity::{Edge, FinId, FinPcurve, LoopId, Sense, VertexId};
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::incidence::{
     IncidenceCertification, certify_edge_surface_incidence, certify_pcurve_incidence,
@@ -39,6 +42,7 @@ use crate::incidence::{
 use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::store::Store;
 use kcore::error::Result;
+use kcore::expansion;
 use kcore::interval::Interval;
 use kcore::predicates::{Orientation, orient2d, polygon_orientation2d_iter};
 use kcore::tolerance::LINEAR_RESOLUTION;
@@ -117,6 +121,9 @@ pub(crate) fn certify_loop_orientation(
     if let Some(periodic) = certify_piecewise_periodic_line_loop(store, face_id, loop_id)? {
         return Ok(Some(periodic.orientation()));
     }
+    if let Some(orientation) = certify_internal_tangent_circle_pair_loop(store, face_id, loop_id)? {
+        return Ok(Some(orientation));
+    }
     let [fin_id] = loop_.fins.as_slice() else {
         return Ok(None);
     };
@@ -132,16 +139,19 @@ pub(crate) fn certify_loop_orientation(
         return Ok(None);
     };
     let face = store.get(face_id)?;
+    let bounded_full_period = is_one_vertex_full_period_circle_edge(store, edge)?;
     let parameter_orientation = match (store.get(face.surface)?, store.get(use_.curve())?) {
         (SurfaceGeom::Plane(_), Curve2dGeom::Circle(_))
-            if use_.closure_winding() == Some([0, 0]) =>
+            if use_.closure_winding() == Some([0, 0])
+                || bounded_full_period && use_.closure_winding().is_none() =>
         {
             traversal_orientation([use_.edge_to_pcurve().scale(), 1.0], fin.sense)
         }
         (SurfaceGeom::Cylinder(_), Curve2dGeom::Line(line))
             if line.dir().y == 0.0
                 && line.dir().x != 0.0
-                && matches!(use_.closure_winding(), Some([1 | -1, 0])) =>
+                && (matches!(use_.closure_winding(), Some([1 | -1, 0]))
+                    || bounded_full_period && use_.closure_winding().is_none()) =>
         {
             traversal_orientation([line.dir().x, use_.edge_to_pcurve().scale()], fin.sense)
         }
@@ -575,6 +585,9 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
     if loop_.fins.len() < 2 {
         return Ok(LoopSimplicity::Indeterminate);
     }
+    if certify_internal_tangent_circle_pair_loop(store, loop_.face, loop_id)?.is_some() {
+        return Ok(LoopSimplicity::Certified);
+    }
     let mut tails = Vec::with_capacity(loop_.fins.len());
     for (index, &fin_id) in loop_.fins.iter().enumerate() {
         let Some(tail) = store.fin_tail(fin_id)? else {
@@ -607,6 +620,136 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
         });
     };
     Ok(certify_segment_ring(&segments))
+}
+
+/// Recognize a bounded complete circle whose two endpoints are one topology
+/// vertex and whose exact parameter width is one natural period.
+pub(crate) fn is_one_vertex_full_period_circle_edge(store: &Store, edge: &Edge) -> Result<bool> {
+    let (Some(curve_id), Some((lo, hi)), [Some(first), Some(second)]) =
+        (edge.curve, edge.bounds, edge.vertices)
+    else {
+        return Ok(false);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(false);
+    };
+    let natural = circle.param_range();
+    Ok(edge.tolerance.is_none() && first == second && exact_period(lo, hi, natural.width()))
+}
+
+fn certify_internal_tangent_circle_pair_loop(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+    loop_id: LoopId,
+) -> Result<Option<Orientation>> {
+    let face = store.get(face_id)?;
+    if !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
+        return Ok(None);
+    }
+    let loop_ = store.get(loop_id)?;
+    let [first_fin, second_fin] = loop_.fins.as_slice() else {
+        return Ok(None);
+    };
+    if loop_.face != face_id {
+        return Ok(None);
+    }
+    let (Some(first), Some(second)) = (
+        prepare_internal_tangent_circle_use(store, face_id, loop_id, *first_fin)?,
+        prepare_internal_tangent_circle_use(store, face_id, loop_id, *second_fin)?,
+    ) else {
+        return Ok(None);
+    };
+    if first.edge == second.edge
+        || first.vertex != second.vertex
+        || first.circle.radius() == second.circle.radius()
+        || first.orientation == second.orientation
+        || !circles_are_exactly_internal_tangent(first.circle, second.circle)
+    {
+        return Ok(None);
+    }
+    let point = store.vertex_position(first.vertex)?;
+    if !first.endpoint_incidence(point) || !second.endpoint_incidence(point) {
+        return Ok(None);
+    }
+    Ok(Some(if first.circle.radius() > second.circle.radius() {
+        first.orientation
+    } else {
+        second.orientation
+    }))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InternalTangentCircleUse {
+    edge: crate::entity::EdgeId,
+    vertex: VertexId,
+    circle: kgeom::curve::Circle,
+    range: ParamRange,
+    orientation: Orientation,
+}
+
+impl InternalTangentCircleUse {
+    fn endpoint_incidence(self, point: Point3) -> bool {
+        [self.range.lo, self.range.hi].into_iter().all(|parameter| {
+            point_is_within_circle_endpoint_envelope(
+                point,
+                self.circle,
+                parameter,
+                LINEAR_RESOLUTION,
+            )
+        })
+    }
+}
+
+fn prepare_internal_tangent_circle_use(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+    loop_id: LoopId,
+    fin_id: FinId,
+) -> Result<Option<InternalTangentCircleUse>> {
+    let fin = store.get(fin_id)?;
+    let edge = store.get(fin.edge)?;
+    let ([Some(vertex), Some(other)], Some((lo, hi))) = (edge.vertices, edge.bounds) else {
+        return Ok(None);
+    };
+    if vertex != other
+        || fin.parent != loop_id
+        || !is_one_vertex_full_period_circle_edge(store, edge)?
+        || certify_whole_fin_incidence(store, face_id, loop_id, fin_id, LINEAR_RESOLUTION)
+            != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    let (Some(curve_id), Some(use_)) = (edge.curve, fin.pcurve) else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(None);
+    };
+    let Curve2dGeom::Circle(pcurve) = store.get(use_.curve())? else {
+        return Ok(None);
+    };
+    let orientation = traversal_orientation([use_.edge_to_pcurve().scale(), 1.0], fin.sense);
+    if use_.closure_winding().is_some()
+        || use_.seam().is_some()
+        || pcurve.radius().to_bits() != circle.radius().to_bits()
+    {
+        return Ok(None);
+    }
+    Ok(orientation.map(|orientation| InternalTangentCircleUse {
+        edge: fin.edge,
+        vertex,
+        circle: *circle,
+        range: ParamRange::new(lo, hi),
+        orientation,
+    }))
+}
+
+fn exact_period(lo: f64, hi: f64, period: f64) -> bool {
+    if !lo.is_finite() || !hi.is_finite() || !period.is_finite() || lo >= hi || period <= 0.0 {
+        return false;
+    }
+    let width = expansion::sum(&[hi], &expansion::negate(&[lo]));
+    expansion::sign(&expansion::sum(&width, &expansion::negate(&[period]))) == 0
 }
 
 /// Certify strict outer/hole containment for exact polygonal loops on a plane.

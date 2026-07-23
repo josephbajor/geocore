@@ -21,7 +21,7 @@ use super::periodic_line_loop::{
 use super::{
     BoundedLoopSpan, LoopSimplicity, Segment2, certify_bounded_analytic_loop_orientation,
     certify_convex_polygon_circle_containment, certify_loop_orientation, certify_loop_simplicity,
-    prepare_bounded_analytic_loop, strict_planar_ring,
+    is_one_vertex_full_period_circle_edge, prepare_bounded_analytic_loop, strict_planar_ring,
 };
 use crate::entity::{EdgeId, LoopId};
 use crate::geom::{Curve2dGeom, SurfaceGeom};
@@ -358,12 +358,14 @@ fn prepare_periodic_ring(
         return Ok(None);
     };
     let winding = use_.closure_winding();
+    let endpoint_free = edge.bounds.is_none() && edge.vertices == [None, None];
+    let bounded_one_vertex = is_one_vertex_full_period_circle_edge(store, edge)?;
     if loop_.face != face_id
         || fin.parent != loop_id
         || edge.tolerance.is_some()
-        || edge.bounds.is_some()
-        || edge.vertices != [None, None]
-        || !matches!(winding, Some([1 | -1, 0]))
+        || !endpoint_free && !bounded_one_vertex
+        || endpoint_free && !matches!(winding, Some([1 | -1, 0]))
+        || bounded_one_vertex && winding.is_some()
         || use_.seam().is_some()
         || line.dir().y != 0.0
         || line.dir().x == 0.0

@@ -2,11 +2,13 @@
 //!
 //! Nested disks retain one shared two-loop annulus. Strict-secant disks retain
 //! two complementary coplanar disk differences, four bounded source-circle
-//! arcs, and a degree-four link at each of the two exact roots. In both cases
-//! the far disks lie in opposite open half-spaces of the contact plane. Whole
-//! fin incidence, loop containment, source pcurves, and outward interval
-//! radial predicates identify the shell with the regularized boundary after
-//! the positive-area shared interface is removed.
+//! arcs, and a degree-four link at each of the two exact roots. Exact internal
+//! tangency retains one pinched shoulder loop whose two complete-period edges
+//! share the tangent vertex. In every family the far disks lie in opposite
+//! open half-spaces of the contact plane. Whole-fin incidence, loop layout,
+//! exact or outward-interval radial predicates, and coherent winding identify
+//! the shell with the regularized boundary after the shared interface is
+//! removed.
 
 use super::mixed_profile_prism_proof::{
     Cap, ProfileCarrier, oriented_dot_sign, peer_face, prepare_cap,
@@ -26,7 +28,14 @@ mod tests;
 #[path = "parallel_cylinder_contact_shell_proof/strict_secant_tests.rs"]
 mod strict_secant_tests;
 
-/// Cumulative deterministic work for nested axial-contact shell proofs.
+#[cfg(test)]
+#[path = "parallel_cylinder_contact_shell_proof/internal_tangent_tests.rs"]
+mod internal_tangent_tests;
+
+#[path = "parallel_cylinder_contact_shell_proof/internal_tangent.rs"]
+mod internal_tangent;
+
+/// Cumulative deterministic work for parallel-cylinder contact shell proofs.
 pub(crate) const PARALLEL_CYLINDER_CONTACT_SHELL_WORK: StageId =
     match StageId::new("ktopo.check.parallel-cylinder-contact-shell-work") {
         Ok(stage) => stage,
@@ -115,7 +124,15 @@ pub(super) fn certify_parallel_cylinder_contact_shell(
             [(*first_face, *first), (*second_face, *second)],
         );
     }
-    certify_nested_contact(
+    let nested = certify_nested_contact(
+        store,
+        shell_id,
+        [(*first_face, *first), (*second_face, *second)],
+    )?;
+    if nested.is_some() {
+        return Ok(nested);
+    }
+    internal_tangent::certify_internal_tangent_contact(
         store,
         shell_id,
         [(*first_face, *first), (*second_face, *second)],

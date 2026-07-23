@@ -783,12 +783,13 @@ fn certified_properties_at_exact_budget(
         usage.consumed, expected_work,
         "{label} property work changed"
     );
+    let result = outcome.into_result().unwrap();
     let BodyPropertiesOutcome::Certified {
         properties,
         full_check,
-    } = outcome.into_result().unwrap()
+    } = result
     else {
-        panic!("{label} analytic properties were refused")
+        panic!("{label} analytic properties were refused: {result:#?}")
     };
     assert_eq!(full_check.outcome(), CheckOutcome::Valid);
 

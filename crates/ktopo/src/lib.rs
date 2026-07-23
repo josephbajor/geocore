@@ -60,6 +60,7 @@
 //!   kept private until their representation coverage is production-ready.
 
 pub mod analytic_shell;
+pub(crate) mod analytic_tangency;
 #[cfg(feature = "benchmark-internals")]
 #[doc(hidden)]
 pub mod benchmark;
