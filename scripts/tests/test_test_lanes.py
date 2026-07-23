@@ -73,6 +73,7 @@ class ClassificationTests(unittest.TestCase):
                 "intersection_chart",
                 "offset_surface",
                 "oracle_cli",
+                "persistent_skew_write",
                 "read",
                 "write",
             }.issubset(retained)
@@ -88,7 +89,7 @@ class ClassificationTests(unittest.TestCase):
                 self.inventory.standard_targets
             )
         )
-        self.assertEqual(len(self.inventory.fast_smoke_targets), 13)
+        self.assertEqual(len(self.inventory.fast_smoke_targets), 14)
         self.assertEqual(
             len(self.inventory.standard_targets), EXPECTED_STANDARD_TARGET_COUNT
         )
@@ -106,8 +107,8 @@ class ClassificationTests(unittest.TestCase):
     def test_listing_is_stable_and_names_both_groups(self) -> None:
         first = format_inventory(self.inventory)
         self.assertEqual(first, format_inventory(self.inventory))
-        self.assertIn("fast smoke integration targets (13):", first)
-        self.assertIn("standard kxt targets retained (7):", first)
+        self.assertIn("fast smoke integration targets (14):", first)
+        self.assertIn("standard kxt targets retained (8):", first)
         self.assertIn("kxt::read", first)
         self.assertIn(
             "production-corpus ratchets excluded from standard (14):", first

@@ -22,6 +22,8 @@ use kernel::{
 mod body_distance;
 #[path = "lifecycle/bounded_skew_body_properties.rs"]
 mod bounded_skew_body_properties;
+#[path = "lifecycle/bounded_skew_xt.rs"]
+mod bounded_skew_xt;
 #[path = "lifecycle/cap_crossing_secant.rs"]
 mod cap_crossing_secant;
 #[path = "lifecycle/curved_cavity.rs"]

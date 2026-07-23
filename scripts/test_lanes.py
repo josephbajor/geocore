@@ -82,7 +82,7 @@ PRODUCTION_CORPUS_RATCHETS = tuple(
 )
 
 # The fast lane is intentionally a representative smoke gate rather than the
-# 80-target non-corpus partition. Workspace library/binary tests already carry
+# 81-target non-corpus partition. Workspace library/binary tests already carry
 # the dense unit-test surface; these integration targets protect the principal
 # cross-crate, determinism, topology, completion, interchange, and facade seams.
 FAST_SMOKE_TARGETS = tuple(
@@ -98,6 +98,7 @@ FAST_SMOKE_TARGETS = tuple(
             IntegrationTarget("kops", "completion"),
             IntegrationTarget("kops", "operation_intersection"),
             IntegrationTarget("kxt", "intersection_chart"),
+            IntegrationTarget("kxt", "persistent_skew_write"),
             IntegrationTarget("kxt", "read"),
             IntegrationTarget("kxt", "write"),
             IntegrationTarget("kernel-lifecycle", "cli"),
@@ -105,8 +106,8 @@ FAST_SMOKE_TARGETS = tuple(
     )
 )
 
-EXPECTED_INTEGRATION_TARGET_COUNT = 94
-EXPECTED_STANDARD_TARGET_COUNT = 80
+EXPECTED_INTEGRATION_TARGET_COUNT = 95
+EXPECTED_STANDARD_TARGET_COUNT = 81
 
 
 class LaneContractError(RuntimeError):

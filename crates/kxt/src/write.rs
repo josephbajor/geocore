@@ -30,6 +30,9 @@ use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
 use std::collections::BTreeSet;
 
+#[path = "write/persistent_skew.rs"]
+mod persistent_skew;
+
 const VERSION: &str = ": TRANSMIT FILE created by modeller version 2700142";
 /// Declared file schema (PART2 header form, without the base suffix).
 ///
@@ -217,6 +220,13 @@ impl Plan {
             push_dummy_fins(&mut dummy_fin_specs, edge, e, b.kind());
             match e.curve() {
                 Some(curve) => {
+                    if persistent_skew::is_persistent_curve(store.get(curve)?) {
+                        persistent_skew::validate_edge(store, e)?;
+                        for &fin in e.fins() {
+                            push_interned(&mut fin_pcurve_handles, fin);
+                        }
+                        continue;
+                    }
                     push_interned(&mut curve_handles, curve);
                     let curve = store.get(curve)?;
                     if let CurveGeom::Intersection(descriptor) = curve {
@@ -607,7 +617,7 @@ impl Plan {
                 values: vec![
                     int(index),
                     ptr(0),
-                    optional_double(edge.tolerance().map(EntityTolerance::value)),
+                    optional_double(persistent_skew::edge_tolerance(store, edge)?),
                     ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
@@ -615,7 +625,7 @@ impl Plan {
                     // exact bounded edges (block.x_t, plate.x_t); parameter
                     // bounds are implied by the vertices. TRIMMED_CURVE
                     // wrapping stays reserved for tolerant fin SP-curves.
-                    ptr(match edge.curve() {
+                    ptr(match persistent_skew::transmitted_curve(store, edge)? {
                         Some(curve) => id_of(&self.curves, curve),
                         None => 0,
                     }),
@@ -1952,6 +1962,9 @@ fn flatten_pcurve_poles(curve: &NurbsCurve2d) -> Vec<f64> {
 }
 
 fn pcurve_nurbs(store: &Store, fin_id: FinId) -> Result<NurbsCurve2d> {
+    if let Some(curve) = persistent_skew::pcurve_nurbs(store, fin_id)? {
+        return Ok(curve);
+    }
     let use_: FinPcurve = store.get(fin_id)?.pcurve().ok_or(XtError::InvalidModel {
         what: "curve-less tolerant edge fin has no pcurve",
     })?;
