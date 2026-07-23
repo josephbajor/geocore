@@ -2379,6 +2379,12 @@ mod tests {
                     306,
                     4096
                 ),
+                snapshot(
+                    crate::shell_proof::BOUNDED_SKEW_LOBE_SHELL_WORK,
+                    ResourceKind::Work,
+                    0,
+                    4096,
+                ),
                 proof_snapshot(crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
@@ -2448,6 +2454,12 @@ mod tests {
                     ResourceKind::Work,
                     612,
                     4096
+                ),
+                snapshot(
+                    crate::shell_proof::BOUNDED_SKEW_LOBE_SHELL_WORK,
+                    ResourceKind::Work,
+                    0,
+                    4096,
                 ),
                 snapshot(CALLER_STAGE, ResourceKind::Work, 3, 5),
                 proof_snapshot(crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK, 0),

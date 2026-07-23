@@ -31,6 +31,8 @@ use kgeom::frame::Frame;
 use kgeom::surface::Cylinder;
 use kgeom::vec::{Point2, Point3, Vec3};
 
+#[path = "bounded_skew_lobe_shell_proof.rs"]
+pub(crate) mod bounded_skew_lobe_shell_proof;
 #[path = "cap_reaching_cylinder_shell_proof.rs"]
 mod cap_reaching_cylinder_shell_proof;
 #[path = "chord_portal_shell_proof.rs"]
@@ -47,6 +49,8 @@ mod parallel_cylinder_contact_shell_proof;
 mod portal_cylinder_shell_proof;
 #[path = "two_host_axial_chain_shell_proof.rs"]
 mod two_host_axial_chain_shell_proof;
+#[cfg(test)]
+pub(crate) use bounded_skew_lobe_shell_proof::BOUNDED_SKEW_LOBE_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use cap_reaching_cylinder_shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK;
 #[cfg(test)]
@@ -79,6 +83,7 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
     )])
     .expect("built-in shell proof budget is valid");
     facet_pairs
+        .overlaid(&bounded_skew_lobe_shell_proof::bounded_skew_lobe_shell_proof_budget())
         .overlaid(&cylindrical_host_proof::cylindrical_host_proof_budget())
         .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
@@ -197,6 +202,13 @@ fn certify_shell_impl(
             scope.as_deref_mut(),
         )?
     {
+        return Ok(certification);
+    }
+    if let Some(certification) = bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell(
+        store,
+        shell_id,
+        scope.as_deref_mut(),
+    )? {
         return Ok(certification);
     }
     if let Some(certification) = mixed_profile_prism_proof::certify_mixed_profile_prism(

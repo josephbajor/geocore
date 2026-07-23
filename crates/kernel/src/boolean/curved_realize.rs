@@ -167,9 +167,21 @@ pub(super) fn realize_analytic_shell_inputs(
     if inputs.is_empty() {
         return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
     }
+    let vertices = inputs.iter().try_fold(0_u64, |total, input| {
+        let count = u64::try_from(input.vertices().len()).map_err(|_| work_overflow())?;
+        total.checked_add(count).ok_or_else(work_overflow)
+    })?;
     for input in inputs {
-        precharge_analytic_shell(input, scope)?;
+        precharge_analytic_shell_work(input, scope)?;
     }
+    scope
+        .ledger_mut()
+        .observe(
+            PLANAR_BOOLEAN_REALIZED_VERTICES,
+            ResourceKind::Items,
+            vertices,
+        )
+        .map_err(Error::from)?;
 
     let part = edit.id.clone();
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
@@ -580,7 +592,7 @@ fn precharge_planar_curved_assembly(
 
 /// Charge a conservative checked bound for analytic-shell preflight and
 /// allocation before opening the transaction.
-fn precharge_analytic_shell(
+fn precharge_analytic_shell_work(
     input: &AnalyticShellInput,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<()> {
@@ -596,7 +608,6 @@ fn precharge_analytic_shell(
                 .ok_or_else(work_overflow)?;
         }
     }
-    let vertices = u64::try_from(input.vertices().len()).map_err(|_| work_overflow())?;
     let work = analytic_shell_realization_work(
         input.vertices().len(),
         input.edges().len(),
@@ -608,14 +619,6 @@ fn precharge_analytic_shell(
     scope
         .ledger_mut()
         .charge(PLANAR_BOOLEAN_REALIZATION_WORK, work)
-        .map_err(Error::from)?;
-    scope
-        .ledger_mut()
-        .observe(
-            PLANAR_BOOLEAN_REALIZED_VERTICES,
-            ResourceKind::Items,
-            vertices,
-        )
         .map_err(Error::from)?;
     Ok(())
 }

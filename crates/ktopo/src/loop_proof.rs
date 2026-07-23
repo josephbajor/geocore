@@ -41,6 +41,10 @@ use crate::incidence::{
 };
 use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::store::Store;
+pub(crate) use analytic_face_layout::{
+    certify_periodic_aabb2_separation, certify_periodic_aabb2_window_lift,
+    certify_periodic_range_window_lift,
+};
 use kcore::error::Result;
 use kcore::expansion;
 use kcore::interval::Interval;
@@ -111,6 +115,13 @@ pub(crate) fn certify_loop_orientation(
             != 1
     {
         return Ok(None);
+    }
+    if let Some(orientation) =
+        crate::shell_proof::bounded_skew_lobe_shell_proof::certify_bounded_skew_cylinder_loop(
+            store, loop_id,
+        )?
+    {
+        return Ok(Some(orientation));
     }
     if let Some((_, orientation)) = strict_planar_ring(store, loop_id)? {
         return Ok(Some(orientation));
@@ -584,6 +595,13 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
     }
     if loop_.fins.len() < 2 {
         return Ok(LoopSimplicity::Indeterminate);
+    }
+    if crate::shell_proof::bounded_skew_lobe_shell_proof::certify_bounded_skew_cylinder_loop(
+        store, loop_id,
+    )?
+    .is_some()
+    {
+        return Ok(LoopSimplicity::Certified);
     }
     if certify_internal_tangent_circle_pair_loop(store, loop_.face, loop_id)?.is_some() {
         return Ok(LoopSimplicity::Certified);

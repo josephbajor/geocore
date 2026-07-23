@@ -42,6 +42,8 @@ mod curved_source;
 #[allow(dead_code)]
 mod curved_support_separation;
 #[allow(dead_code)]
+mod cylinder_dispatch;
+#[allow(dead_code)]
 mod cylinder_pair_boundary;
 #[allow(dead_code)]
 mod disk_face_arrangement;
@@ -85,6 +87,8 @@ mod planar_bsp;
 mod realize;
 #[allow(dead_code)]
 mod select;
+#[allow(dead_code)]
+mod transverse_cylinder_pipeline;
 
 /// Boolean-specific source-extraction work.
 pub const BOOLEAN_SOURCE_EXTRACTION_WORK: StageId = extract::PLANAR_SOURCE_EXTRACTION_WORK;

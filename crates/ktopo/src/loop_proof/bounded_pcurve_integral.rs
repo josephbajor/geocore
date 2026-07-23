@@ -148,6 +148,17 @@ pub(crate) fn certify_signed_line_integral(
     })
 }
 
+/// Enclose one authored analytic span's directed chart integral.
+///
+/// Representation-specific loop theorems may combine this exact
+/// Line2d/Circle2d term with independently sealed procedural terms. The
+/// caller still owns topology closure, simplicity, and final sign proof.
+pub(crate) fn certify_bounded_pcurve_span_integral(
+    span: BoundedPcurveSpan<'_>,
+) -> Option<Interval> {
+    span_integral(span, 0).ok()
+}
+
 fn span_integral(
     span: BoundedPcurveSpan<'_>,
     span_index: usize,

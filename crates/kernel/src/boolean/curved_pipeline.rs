@@ -12,14 +12,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kcore::operation::{AccountingMode, OperationScope, ResourceKind};
+use kcore::operation::{OperationScope, ResourceKind};
 use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::vec::Point3;
 use ktopo::convex_multishell::{
     certify_mixed_convex_multishell_input, mixed_convex_multishell_dimension_work,
 };
 use ktopo::entity::FaceId as RawFaceId;
-use ktopo::geom::SurfaceGeom;
 use ktopo::transaction::{FullBodyCheck, Journal};
 
 use super::boundary_select::{
@@ -37,6 +36,7 @@ use super::curved_support_separation::{
     CertifiedAxialCapContact, ConvexHostCylinderSupportRelation,
     certify_convex_host_cylinder_support_relation, certify_strict_axial_cap_contact,
 };
+use super::cylinder_dispatch::CylinderOperandScan;
 use super::extract::{
     CertifiedConvexPlanarSource, ExtractedPlanarSourceBody, PlanarSourceExtractionError,
     PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
@@ -51,8 +51,9 @@ use super::mixed_boundary::{MixedBoundaryError, prepare_mixed_bounded_arc_bounda
 use super::mixed_shell_plan::components::{
     MixedShellComponentError, mixed_shell_component_work, partition_prepared_mixed_shell_components,
 };
+use super::mixed_shell_plan::cylinder_pair::CertifiedCylinderPairPlan;
 use super::mixed_shell_plan::materialize::{
-    MixedShellMaterializationError, MixedShellScalarInputs,
+    MixedShellMaterializationBlueprint, MixedShellMaterializationError, MixedShellScalarInputs,
     materialize_mixed_shell_component_inputs, prepare_mixed_shell_materialization,
 };
 use super::mixed_shell_plan::{MixedShellPlanError, plan_mixed_shell};
@@ -165,59 +166,17 @@ impl From<kcore::error::Error> for PipelineFailure {
 
 pub(super) type StageResult<T> = core::result::Result<T, PipelineFailure>;
 
-/// Detect cylinder carriers under the enclosing operation's source budget.
-pub(crate) fn cylinder_operand_mask_in_scope(
-    edit: &PartEdit<'_>,
-    bodies: [&BodyId; 2],
-    scope: &mut OperationScope<'_, '_>,
-) -> Result<[bool; 2]> {
-    scope
-        .ledger()
-        .require_limit(
-            super::extract::PLANAR_SOURCE_EXTRACTION_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-        )
-        .map_err(Error::from)?;
-    let mut result = [false; 2];
-    for (operand, body) in bodies.into_iter().enumerate() {
-        let faces = edit
-            .state
-            .store
-            .faces_of_body(body.raw())
-            .map_err(|source| Error::InconsistentTopology { source })?;
-        charge_source_scan(scope, faces.len())?;
-        for face_id in faces {
-            let face = edit
-                .state
-                .store
-                .get(face_id)
-                .map_err(|source| Error::InconsistentTopology { source })?;
-            if matches!(
-                edit.state
-                    .store
-                    .surface(face.surface())
-                    .map_err(|source| Error::InconsistentTopology { source })?,
-                SurfaceGeom::Cylinder(_)
-            ) {
-                result[operand] = true;
-            }
-        }
-    }
-    Ok(result)
-}
-
 /// Execute the curved stages inside the dispatcher-owned operation scope.
 pub(crate) fn execute_curved_in_scope(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
     left: BodyId,
     right: BodyId,
-    cylinder_mask: [bool; 2],
+    cylinder_scan: CylinderOperandScan,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<CurvedBooleanPipelineOutcome> {
-    match execute_stages(edit, operation, [left, right], cylinder_mask, linear, scope) {
+    match execute_stages(edit, operation, [left, right], cylinder_scan, linear, scope) {
         Ok(outcome) => Ok(outcome),
         Err(PipelineFailure::Execution(error)) => Err(error),
         Err(PipelineFailure::Refused(refusal)) => {
@@ -369,15 +328,24 @@ fn execute_stages(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
     bodies: [BodyId; 2],
-    cylinder_mask: [bool; 2],
+    cylinder_scan: CylinderOperandScan,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     super::pipeline::validate_pipeline_budget(scope)?;
+    let cylinder_mask = cylinder_scan.mask();
     if cylinder_mask == [true, true] {
-        return super::parallel_cylinder_pipeline::execute_parallel_cylinder_boolean(
-            edit, operation, bodies, linear, scope,
-        );
+        return match cylinder_scan.pair_axes_exactly_parallel() {
+            Some(true) => super::parallel_cylinder_pipeline::execute_parallel_cylinder_boolean(
+                edit, operation, bodies, linear, scope,
+            ),
+            Some(false) => {
+                super::transverse_cylinder_pipeline::execute_transverse_cylinder_boolean(
+                    edit, operation, bodies, linear, scope,
+                )
+            }
+            None => refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported),
+        };
     }
     let (planar_operand, cylinder_operand) = match cylinder_mask {
         [true, false] => (1_usize, 0_usize),
@@ -621,17 +589,46 @@ pub(super) fn realize_mixed_shell(
         .ledger_mut()
         .charge(PLANAR_BOOLEAN_REALIZATION_WORK, blueprint.work())
         .map_err(Error::from)?;
-    let component_work = mixed_shell_component_work(plan, &blueprint)
+    realize_prepared_mixed_shell(edit, plan, &blueprint, linear, scope)
+}
+
+/// Realize a mixed shell from an allocation-free blueprint already charged by
+/// its caller.
+///
+/// The cylinder-pair complete-plan adapter prepares, validates, and charges
+/// this exact blueprint together with its stronger fragment-coverage proof.
+/// Reusing it here keeps persistent composite certification and physical-edge
+/// coalescing on their single admitted work frontier.
+pub(super) fn realize_certified_cylinder_pair_shell(
+    edit: &mut PartEdit<'_>,
+    certified: &CertifiedCylinderPairPlan,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    realize_prepared_mixed_shell(edit, certified.plan(), certified.blueprint(), linear, scope)
+}
+
+fn realize_prepared_mixed_shell(
+    edit: &mut PartEdit<'_>,
+    plan: &super::mixed_shell_plan::MixedShellProofPlan,
+    blueprint: &MixedShellMaterializationBlueprint,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    if !plan.materialization_gaps().is_empty() {
+        return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
+    }
+    let component_work = mixed_shell_component_work(plan, blueprint)
         .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow))?;
     scope
         .ledger_mut()
         .charge(PLANAR_BOOLEAN_REALIZATION_WORK, component_work)
         .map_err(Error::from)?;
-    let components = partition_prepared_mixed_shell_components(plan, &blueprint)
+    let components = partition_prepared_mixed_shell_components(plan, blueprint)
         .map_err(mixed_component_failure)?;
     let inputs = materialize_mixed_shell_component_inputs(
         plan,
-        &blueprint,
+        blueprint,
         &components,
         &edit.state.store,
         &MixedShellScalarInputs::empty(),
@@ -1043,18 +1040,6 @@ fn axial_parameter(source: &CertifiedCylinderSource, point: Point3) -> Option<f6
     let frame = cylinder.frame();
     let parameter = (point - frame.origin()).dot(frame.z());
     parameter.is_finite().then_some(parameter)
-}
-
-fn charge_source_scan(scope: &mut OperationScope<'_, '_>, amount: usize) -> Result<()> {
-    let amount = u64::try_from(amount).map_err(|_| Error::Core {
-        source: kcore::error::Error::InvalidGeometry {
-            reason: "curved Boolean source dispatch exceeds u64 accounting",
-        },
-    })?;
-    scope
-        .ledger_mut()
-        .charge(super::extract::PLANAR_SOURCE_EXTRACTION_WORK, amount)
-        .map_err(Error::from)
 }
 
 pub(super) fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailure {
@@ -1481,3 +1466,7 @@ mod tests {
         assert_eq!(after.2, before.2);
     }
 }
+
+#[cfg(test)]
+#[path = "curved_pipeline_bounded_skew_tests.rs"]
+mod bounded_skew_tests;

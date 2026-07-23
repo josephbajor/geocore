@@ -36,7 +36,9 @@ use kcore::operation::{
 };
 use kcore::predicates::{Orientation, orient2d};
 use kcore::tolerance::LINEAR_RESOLUTION;
+use kgeom::aabb::Aabb2;
 use kgeom::curve2d::Circle2d;
+use kgeom::param::ParamRange;
 use kgeom::vec::Point2;
 
 /// Cumulative structural work for one Full face-loop containment proof.
@@ -608,6 +610,129 @@ fn periodic_envelopes_separated(first: Box2, second: Box2, period: f64) -> bool 
     })
 }
 
+/// Prove strict separation of two complete chart boxes on `S1 x R`.
+///
+/// This is intentionally shared with specialized shell theorems rather than
+/// reimplementing periodic lifting with raw midpoint arithmetic. The input
+/// boxes already enclose their complete carriers; every quotient, lift, and
+/// seam split below is then performed with outward intervals. Unsupported
+/// widths and numerically ambiguous lifts fail closed.
+pub(crate) fn certify_periodic_aabb2_separation(first: Aabb2, second: Aabb2, period: f64) -> bool {
+    if first.is_empty()
+        || second.is_empty()
+        || !first.min.x.is_finite()
+        || !first.min.y.is_finite()
+        || !first.max.x.is_finite()
+        || !first.max.y.is_finite()
+        || !second.min.x.is_finite()
+        || !second.min.y.is_finite()
+        || !second.max.x.is_finite()
+        || !second.max.y.is_finite()
+        || first.min.x > first.max.x
+        || first.min.y > first.max.y
+        || second.min.x > second.max.x
+        || second.min.y > second.max.y
+    {
+        return false;
+    }
+    periodic_envelopes_separated(
+        Box2 {
+            u: Interval::new(first.min.x, first.max.x),
+            v: Interval::new(first.min.y, first.max.y),
+        },
+        Box2 {
+            u: Interval::new(second.min.x, second.max.x),
+            v: Interval::new(second.min.y, second.max.y),
+        },
+        period,
+    )
+}
+
+/// Prove that one complete chart box fits an authored `S1 x R` window under
+/// one integer longitude lift.
+///
+/// The lift is selected from outward quotient intervals and then rechecked
+/// by interval translation. A seam-straddling box, an overwide box, a huge
+/// ambiguous quotient, or axial overreach is rejected.
+#[cfg(test)]
+fn certify_periodic_aabb2_window_containment(
+    value: Aabb2,
+    window: [ParamRange; 2],
+    period: f64,
+) -> bool {
+    certify_periodic_aabb2_window_lift(value, window, period).is_some()
+}
+
+/// Return the unique certified integer lift used by periodic containment.
+///
+/// Exposing the lift lets callers prove that several complete envelopes use
+/// one authored chart phase instead of independently accepting equivalent
+/// phases.
+pub(crate) fn certify_periodic_aabb2_window_lift(
+    value: Aabb2,
+    window: [ParamRange; 2],
+    period: f64,
+) -> Option<i64> {
+    if value.is_empty()
+        || !value.min.x.is_finite()
+        || !value.min.y.is_finite()
+        || !value.max.x.is_finite()
+        || !value.max.y.is_finite()
+        || value.min.x > value.max.x
+        || value.min.y > value.max.y
+        || !window[1].is_finite()
+    {
+        return None;
+    }
+    let v = Interval::new(value.min.y, value.max.y);
+    if v.lo() < window[1].lo || v.hi() > window[1].hi {
+        return None;
+    }
+    certify_periodic_range_window_lift(ParamRange::new(value.min.x, value.max.x), window[0], period)
+}
+
+/// Return the unique integer lift placing one complete longitude range in a
+/// finite authored window.
+pub(crate) fn certify_periodic_range_window_lift(
+    value: ParamRange,
+    window: ParamRange,
+    period: f64,
+) -> Option<i64> {
+    if !value.is_finite() || !window.is_finite() || !period.is_finite() || period <= 0.0 {
+        return None;
+    }
+    let u = Interval::new(value.lo, value.hi);
+    if u.lo() >= window.lo && u.hi() <= window.hi {
+        return Some(0);
+    }
+    let period_interval = Interval::point(period);
+    let Some(lower_turn) =
+        (Interval::point(window.lo) - Interval::point(value.lo)).checked_div(period_interval)
+    else {
+        return None;
+    };
+    let Some(upper_turn) =
+        (Interval::point(window.hi) - Interval::point(value.hi)).checked_div(period_interval)
+    else {
+        return None;
+    };
+    if !finite_interval(lower_turn)
+        || !finite_interval(upper_turn)
+        || lower_turn.width() >= 1.0
+        || upper_turn.width() >= 1.0
+    {
+        return None;
+    }
+    let first = lower_turn.hi().ceil();
+    let last = upper_turn.lo().floor();
+    if !first.is_finite() || first != last || first.abs() > (1_u64 << 52) as f64 {
+        return None;
+    }
+    let shifted = u + Interval::point(first) * period_interval;
+    (finite_interval(shifted) && shifted.lo() >= window.lo && shifted.hi() <= window.hi)
+        .then_some(first as i64)
+}
+
 fn canonical_periodic_pieces(value: Interval, period: f64) -> Option<Vec<Interval>> {
     if !finite_interval(value) || !period.is_finite() || period <= 0.0 {
         return None;
@@ -693,6 +818,13 @@ mod tests {
         Box2 {
             u: Interval::new(u[0], u[1]),
             v: Interval::new(v[0], v[1]),
+        }
+    }
+
+    fn aabb(u: [f64; 2], v: [f64; 2]) -> Aabb2 {
+        Aabb2 {
+            min: kgeom::vec::Vec2::new(u[0], v[0]),
+            max: kgeom::vec::Vec2::new(u[1], v[1]),
         }
     }
 
@@ -831,6 +963,61 @@ mod tests {
         let seam_left = bounds([-0.25, 0.25], [0.5, 1.5]);
         let seam_right = bounds([period - 0.1, period + 0.1], [0.5, 1.5]);
         assert!(!periodic_envelopes_separated(seam_left, seam_right, period));
+    }
+
+    #[test]
+    fn periodic_window_containment_requires_one_certified_lift() {
+        let period = core::f64::consts::TAU;
+        let window = [ParamRange::new(0.0, period), ParamRange::new(-1.0, 1.0)];
+        assert!(certify_periodic_aabb2_window_containment(
+            aabb([0.5, 1.0], [-1.0, 1.0]),
+            window,
+            period,
+        ));
+        assert!(certify_periodic_aabb2_window_containment(
+            aabb([0.5 + 4.0 * period, 1.0 + 4.0 * period], [-0.5, 0.5],),
+            window,
+            period,
+        ));
+        assert_eq!(
+            certify_periodic_aabb2_window_lift(aabb([0.5, 1.0], [-0.5, 0.5]), window, period,),
+            Some(0),
+        );
+        assert_eq!(
+            certify_periodic_aabb2_window_lift(
+                aabb([0.5 + period, 1.0 + period], [-0.5, 0.5]),
+                window,
+                period,
+            ),
+            Some(-1),
+        );
+        assert!(certify_periodic_aabb2_window_containment(
+            aabb([0.0, period], [-1.0, 1.0]),
+            window,
+            period,
+        ));
+
+        let cases = [
+            ("seam straddle", aabb([-0.1, 0.1], [-0.5, 0.5])),
+            ("axial overreach", aabb([0.5, 1.0], [-1.1, 0.5])),
+            ("overwide longitude", aabb([0.0, period + 0.1], [-0.5, 0.5])),
+            (
+                "ambiguous huge lift",
+                aabb(
+                    [
+                        period * (1_u64 << 53) as f64,
+                        period * (1_u64 << 53) as f64 + 1.0,
+                    ],
+                    [-0.5, 0.5],
+                ),
+            ),
+        ];
+        for (name, value) in cases {
+            assert!(
+                !certify_periodic_aabb2_window_containment(value, window, period),
+                "{name}"
+            );
+        }
     }
 
     #[test]

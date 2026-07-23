@@ -1727,7 +1727,7 @@ fn ends_by_overlap_end(ends: [BoundEndpoint; 2]) -> [BoundEndpoint; 2] {
     }
 }
 
-fn vectors_are_exactly_parallel(first: Vec3, second: Vec3) -> bool {
+pub(super) fn vectors_are_exactly_parallel(first: Vec3, second: Vec3) -> bool {
     if first == second || first == -second {
         return true;
     }
