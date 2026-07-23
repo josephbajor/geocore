@@ -23,8 +23,8 @@ use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
 use kgraph::{
     IntersectionCertificateError, PairedSkewCylinderBranchResidualCertificate,
-    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SkewCylinderSheet,
-    certify_paired_skew_cylinder_branch_residuals,
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
+    SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
 };
 
@@ -34,6 +34,7 @@ use super::bounded_trigonometric::{
 };
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
+use super::graph_branch_certificate::SkewCylinderOpenSpanBranchCertificate;
 use super::graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
@@ -48,7 +49,7 @@ use super::skew_cylinder_axial_roots::{
     SkewCylinderAxialRootFailure, SkewCylinderHalfAngleChart, exact_skew_cylinder_discriminant,
 };
 use super::skew_cylinder_open_spans::{
-    SkewCylinderFiniteSheetTopology, SkewCylinderOpenSpanEndpointProof,
+    SkewCylinderFiniteSheetTopology, SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof,
     SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide,
     classify_skew_cylinder_open_spans,
 };
@@ -64,6 +65,8 @@ const NUMERIC_RESOLUTION_REASON: &str =
     "exact skew Cylinder/Cylinder classification or branch proof did not finish";
 const NONPARALLEL_REASON: &str =
     "skew Cylinder/Cylinder discriminant admission requires exact nonparallel axes";
+const ROOT_CORRIDOR_REASON: &str =
+    "bounded skew Cylinder/Cylinder endpoints require certified physical-root pcurve corridors";
 
 /// Stable work stage for one exact full-cycle skew-cylinder discriminant proof.
 pub const SKEW_CYLINDER_DISCRIMINANT_WORK: StageId =
@@ -104,7 +107,7 @@ pub const SKEW_CYLINDER_OPEN_SPAN_WORK: StageId =
 
 /// Atomic work charged for each retained non-wrapping open span.
 pub const SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH: u64 =
-    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK;
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK + 2 * SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK;
 
 /// Missing carrier for the two sheets proved by a strict-positive discriminant.
 pub const SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER: CapabilityId =
@@ -170,10 +173,26 @@ pub(super) struct CertifiedSkewCylinderIntersections {
 }
 
 /// Proof and exact endpoint evidence aligned with one canonicalized raw branch.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct CertifiedSkewCylinderBranch {
-    pub(super) certificate: PairedSkewCylinderBranchResidualCertificate,
+    pub(super) proof: CertifiedSkewCylinderBranchProof,
     pub(super) endpoint_proofs: [Option<IntersectionBranchEndpointProof>; 2],
+}
+
+/// Sealed whole-sheet or bounded-span proof retained through graph promotion.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum CertifiedSkewCylinderBranchProof {
+    TwoSheet(Box<PairedSkewCylinderBranchResidualCertificate>),
+    OpenSpan(Box<SkewCylinderOpenSpanBranchCertificate>),
+}
+
+impl CertifiedSkewCylinderBranchProof {
+    pub(super) fn residual(&self) -> PairedSkewCylinderBranchResidualCertificate {
+        match self {
+            Self::TwoSheet(certificate) => **certificate,
+            Self::OpenSpan(certificate) => certificate.residual_certificate(),
+        }
+    }
 }
 
 impl SkewCylinderStrictDiscriminantMiss {
@@ -357,7 +376,11 @@ fn intersect_strict_positive_two_sheet(
             SkewCylinderFiniteSheetTopology::Outside => {}
             SkewCylinderFiniteSheetTopology::Whole => match whole_certificate {
                 Ok(certificate) => branches.push(CertifiedSkewCylinderBranch {
-                    certificate: *certificate,
+                    proof: CertifiedSkewCylinderBranchProof::TwoSheet(Box::new(if reversed {
+                        certificate.swapped()
+                    } else {
+                        *certificate
+                    })),
                     endpoint_proofs: [None; 2],
                 }),
                 Err(failure) => return Ok(single_branch_certificate_failure(failure, scope)),
@@ -371,8 +394,8 @@ fn intersect_strict_positive_two_sheet(
                             branches: None,
                         });
                     }
-                    let certificate = match certify_paired_skew_cylinder_branch_subrange_residuals(
-                        cylinders, ranges, span.range, sheet, tolerance,
+                    let open_span = match certify_open_span_pcurve_transport(
+                        cylinders, ranges, span, reversed, tolerance,
                     ) {
                         Ok(certificate) => certificate,
                         Err(failure) => {
@@ -380,7 +403,7 @@ fn intersect_strict_positive_two_sheet(
                         }
                     };
                     branches.push(CertifiedSkewCylinderBranch {
-                        certificate,
+                        proof: CertifiedSkewCylinderBranchProof::OpenSpan(Box::new(open_span)),
                         endpoint_proofs: [span.start, span.end]
                             .map(|proof| Some(graph_endpoint_proof(proof))),
                     });
@@ -388,7 +411,32 @@ fn intersect_strict_positive_two_sheet(
             }
         }
     }
-    publish_skew_branches(branches, reversed)
+    publish_skew_branches(branches)
+}
+
+fn certify_open_span_pcurve_transport(
+    cylinders: [Cylinder; 2],
+    ranges: [[ParamRange; 2]; 2],
+    span: SkewCylinderOpenSpan,
+    reversed: bool,
+    tolerance: f64,
+) -> Result<SkewCylinderOpenSpanBranchCertificate, IntersectionCertificateError> {
+    let certificate = certify_paired_skew_cylinder_branch_subrange_residuals(
+        cylinders, ranges, span.range, span.sheet, tolerance,
+    )?;
+    let certificate = if reversed {
+        certificate.swapped()
+    } else {
+        certificate
+    };
+    let [lower_root, upper_root] = span.root_longitude_intervals(ranges[0][0]).ok_or(
+        IntersectionCertificateError::UnsupportedCarrierParameterization {
+            reason: ROOT_CORRIDOR_REASON,
+        },
+    )?;
+    let lower_corridor = certificate.certify_lower_pcurve_root_corridor(lower_root)?;
+    let upper_corridor = certificate.certify_upper_pcurve_root_corridor(upper_root)?;
+    SkewCylinderOpenSpanBranchCertificate::mint(certificate, [lower_corridor, upper_corridor])
 }
 
 fn publish_whole_sheets(
@@ -399,30 +447,23 @@ fn publish_whole_sheets(
         certificates
             .into_iter()
             .map(|certificate| CertifiedSkewCylinderBranch {
-                certificate,
+                proof: CertifiedSkewCylinderBranchProof::TwoSheet(Box::new(if reversed {
+                    certificate.swapped()
+                } else {
+                    certificate
+                })),
                 endpoint_proofs: [None; 2],
             })
             .collect(),
-        reversed,
     )
 }
 
 fn publish_skew_branches(
     branches: Vec<CertifiedSkewCylinderBranch>,
-    reversed: bool,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
-    let branches = branches
-        .into_iter()
-        .map(|mut branch| {
-            if reversed {
-                branch.certificate = branch.certificate.swapped();
-            }
-            branch
-        })
-        .collect::<Vec<_>>();
     let curves = branches
         .iter()
-        .map(|branch| raw_skew_curve(&branch.certificate))
+        .map(|branch| raw_skew_curve(&branch.proof.residual()))
         .collect::<Vec<_>>();
     let raw = if curves.is_empty() {
         SurfaceSurfaceIntersections::complete_empty()
@@ -451,8 +492,8 @@ fn align_skew_branches(
             ));
         };
         let mut matches = branches.iter().enumerate().filter(|(_, branch)| {
-            branch.certificate.carrier() == carrier
-                && branch.certificate.carrier_range() == curve.curve_range
+            let certificate = branch.proof.residual();
+            certificate.carrier() == carrier && certificate.carrier_range() == curve.curve_range
         });
         let Some((index, _)) = matches.next() else {
             return Err(GraphSurfaceIntersectionError::BranchCertificate(

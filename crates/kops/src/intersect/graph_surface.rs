@@ -6,7 +6,9 @@
 //! open circle arcs, ellipses, tangencies, and near-parallel rulings fail closed.
 
 use super::error::IntersectionError;
-pub use super::graph_branch_certificate::IntersectionBranchCertificate;
+pub use super::graph_branch_certificate::{
+    IntersectionBranchCertificate, SkewCylinderOpenSpanBranchCertificate,
+};
 use super::graph_cylinder_cylinder::{
     ParallelCylinderExteriorRadialSeparation, build_verified_cylinder_cylinder_ruling_branch,
     intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
@@ -1962,7 +1964,7 @@ fn build_verified_branch_graph(
                         IntersectionCertificateError::InvalidTraceFamily,
                     ))?;
                 endpoint_proofs = certified.endpoint_proofs;
-                certified.certificate
+                certified.proof.clone()
             })?,
             (
                 SurfaceIntersectionCurve::Circle(raw_circle),

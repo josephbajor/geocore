@@ -11,6 +11,7 @@
 
 use core::cmp::Ordering;
 
+use kcore::interval::Interval;
 use kgeom::param::ParamRange;
 use kgraph::SkewCylinderSheet;
 
@@ -63,6 +64,31 @@ pub(super) struct SkewCylinderOpenSpan {
     pub(super) end: SkewCylinderOpenSpanEndpointProof,
 }
 
+impl SkewCylinderOpenSpan {
+    /// Lift both exact-source projective root brackets into the canonical
+    /// longitude chart that owns this non-wrapping span.
+    ///
+    /// The returned order is `[lower, upper]` in increasing carrier
+    /// parameter, independent of caller operand order. The exact projective
+    /// provenance remains attached to `start` and `end`; these intervals are
+    /// only its monotone longitude image for pcurve corridor certification.
+    pub(super) fn root_longitude_intervals(
+        self,
+        authored_longitude: ParamRange,
+    ) -> Option<[Interval; 2]> {
+        if self.start.inside_side != SkewCylinderRootInsideSide::After
+            || self.end.inside_side != SkewCylinderRootInsideSide::Before
+            || self.start.carrier_parameter.to_bits() != self.range.lo.to_bits()
+            || self.end.carrier_parameter.to_bits() != self.range.hi.to_bits()
+        {
+            return None;
+        }
+        let lower = lift_root_longitude_interval(self.start, authored_longitude)?;
+        let upper = lift_root_longitude_interval(self.end, authored_longitude)?;
+        (lower.hi() < self.range.lo && upper.lo() > self.range.hi).then_some([lower, upper])
+    }
+}
+
 /// Complete finite occupancy for one ordered strict-positive sheet.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum SkewCylinderFiniteSheetTopology {
@@ -107,6 +133,50 @@ struct CutTransition {
     cut: AuthoredRootCut,
     before_inside: [bool; 2],
     after_inside: [bool; 2],
+}
+
+fn lift_root_longitude_interval(
+    proof: SkewCylinderOpenSpanEndpointProof,
+    authored_longitude: ParamRange,
+) -> Option<Interval> {
+    if !authored_longitude.is_finite() || authored_longitude.width() != TAU {
+        return None;
+    }
+    let angular = proof.root.angular_bracket();
+    let representative = angular.representative();
+    let lifted_representative =
+        fit_periodic_parameter(representative, authored_longitude, TAU, 0.0)?;
+    let shift = lifted_representative - representative;
+    let mut lo = angular.lo + shift;
+    let mut hi = angular.hi + shift;
+    match proof.inside_side {
+        SkewCylinderRootInsideSide::After if hi >= proof.carrier_parameter => {
+            lo -= TAU;
+            hi -= TAU;
+        }
+        SkewCylinderRootInsideSide::Before if lo <= proof.carrier_parameter => {
+            lo += TAU;
+            hi += TAU;
+        }
+        SkewCylinderRootInsideSide::After | SkewCylinderRootInsideSide::Before => {}
+    }
+    if !lo.is_finite()
+        || !hi.is_finite()
+        || lo > hi
+        || lo <= authored_longitude.lo
+        || hi >= authored_longitude.hi
+    {
+        return None;
+    }
+    match proof.inside_side {
+        SkewCylinderRootInsideSide::After if hi < proof.carrier_parameter => {
+            Some(Interval::new(lo, hi))
+        }
+        SkewCylinderRootInsideSide::Before if lo > proof.carrier_parameter => {
+            Some(Interval::new(lo, hi))
+        }
+        SkewCylinderRootInsideSide::After | SkewCylinderRootInsideSide::Before => None,
+    }
 }
 
 /// Merge four exact source-bound topologies into complete Lower/Upper finite
@@ -738,6 +808,13 @@ mod tests {
         assert!(!span.start.root.repeated && !span.end.root.repeated);
         assert_ne!(span.start.root.before, span.start.root.after);
         assert_ne!(span.end.root.before, span.end.root.after);
+        let [lower_root, upper_root] = span
+            .root_longitude_intervals(ranges[0][0])
+            .expect("both projective roots must lift into the retained longitude chart");
+        assert!(ranges[0][0].lo < lower_root.lo());
+        assert!(lower_root.hi() < span.range.lo);
+        assert!(span.range.hi < upper_root.lo());
+        assert!(upper_root.hi() < ranges[0][0].hi);
     }
 
     #[test]
@@ -779,6 +856,11 @@ mod tests {
             assert!(!span.start.root.repeated && !span.end.root.repeated);
             assert_ne!(span.start.root.before, span.start.root.after);
             assert_ne!(span.end.root.before, span.end.root.after);
+            let [lower_root, upper_root] = span
+                .root_longitude_intervals(ranges[0][0])
+                .expect("each projective root pair must lift without wrapping");
+            assert!(lower_root.hi() < span.range.lo);
+            assert!(span.range.hi < upper_root.lo());
         }
         for pair in spans.windows(2) {
             assert!(pair[0].range.hi < pair[1].range.lo);

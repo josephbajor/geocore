@@ -12,7 +12,11 @@ use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
-use kgraph::{Curve2dDescriptor, CurveDescriptor, GeometryGraph, SkewCylinderSheet};
+use kgraph::{
+    Curve2dDescriptor, CurveDescriptor, GeometryGraph, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
+    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchGuardedEnd, SkewCylinderSheet,
+};
 use kops::intersect::{
     ContactKind, GraphSurfaceIntersectionError, IntersectionBranchEndpointEvent,
     IntersectionBranchEndpointProof, IntersectionBranchTopology, IntersectionBranchVertexEvent,
@@ -308,6 +312,7 @@ fn assert_single_upper_open_span(
             .into_iter()
             .all(|bound| bound.is_finite() && bound >= 0.0 && bound <= tolerance)
     );
+    assert_open_span_pcurve_transport(edge, true);
 
     assert_upper_open_span_endpoint_proofs(result, boundary_surfaces, tolerance);
     assert!(
@@ -319,6 +324,91 @@ fn assert_single_upper_open_span(
     );
 
     assert_upper_open_span_lifts(result, source_cylinders, tolerance);
+}
+
+fn assert_open_span_pcurve_transport(
+    edge: &kops::intersect::IntersectionBranchEdge,
+    reissue_all_guarded_cells: bool,
+) {
+    let certificate = edge
+        .certificate
+        .as_skew_cylinder_open_span_branch()
+        .expect("bounded skew branches must retain sealed pcurve transport");
+    let residual = certificate.residual_certificate();
+    assert_eq!(
+        Some(residual),
+        edge.certificate.as_skew_cylinder_open_span(),
+        "the compatibility accessor must expose the same compact residual proof"
+    );
+    let expected_operands = residual.traces().map(|trace| trace.pcurve().operand());
+    let [lower, upper] = certificate.root_corridors();
+    assert_eq!(lower.guarded_end(), SkewCylinderBranchGuardedEnd::Lower);
+    assert_eq!(upper.guarded_end(), SkewCylinderBranchGuardedEnd::Upper);
+    assert!(lower.root_parameter().hi() < edge.carrier_range.lo);
+    assert!(upper.root_parameter().lo() > edge.carrier_range.hi);
+    assert_eq!(
+        lower.corridor().parameter().lo(),
+        lower.root_parameter().lo()
+    );
+    assert_eq!(lower.corridor().parameter().hi(), edge.carrier_range.lo);
+    assert_eq!(upper.corridor().parameter().lo(), edge.carrier_range.hi);
+    assert_eq!(
+        upper.corridor().parameter().hi(),
+        upper.root_parameter().hi()
+    );
+    for corridor in [lower, upper] {
+        assert_eq!(
+            corridor.root_pcurves().map(|pcurve| pcurve.operand()),
+            expected_operands
+        );
+        assert_eq!(
+            corridor.corridor().pcurves().map(|pcurve| pcurve.operand()),
+            expected_operands
+        );
+        assert_eq!(
+            corridor.work(),
+            SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK
+        );
+        for pcurve in corridor
+            .root_pcurves()
+            .into_iter()
+            .chain(corridor.corridor().pcurves())
+        {
+            assert!(pcurve.stored_is_strictly_regular());
+            assert!(pcurve.source_is_strictly_regular());
+        }
+    }
+    if !reissue_all_guarded_cells {
+        return;
+    }
+    assert_eq!(
+        SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
+        SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS as u64 * SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK
+    );
+    let mut prior_hi = edge.carrier_range.lo;
+    let mut reissued_work = 0;
+    for index in 0..SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS {
+        let cell = certificate
+            .certify_pcurve_cell(index)
+            .expect("every fixed guarded cell must reissue without stored bulk evidence");
+        assert_eq!(cell.parameter().lo(), prior_hi);
+        assert_eq!(
+            cell.pcurves().map(|pcurve| pcurve.operand()),
+            expected_operands
+        );
+        assert!(cell.pcurves().into_iter().all(|pcurve| {
+            pcurve.stored_is_strictly_regular() && pcurve.source_is_strictly_regular()
+        }));
+        prior_hi = cell.parameter().hi();
+        reissued_work += cell.work();
+    }
+    assert_eq!(prior_hi, edge.carrier_range.hi);
+    assert_eq!(reissued_work, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK);
+    assert!(
+        certificate
+            .certify_pcurve_cell(SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS)
+            .is_err()
+    );
 }
 
 fn assert_upper_open_span_endpoint_proofs(
@@ -482,6 +572,7 @@ fn assert_four_upper_open_spans(
             source_cylinders
         );
         let tolerance = certificate.tolerance();
+        assert_open_span_pcurve_transport(edge, false);
 
         for endpoint_slot in 0..2 {
             let Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)) =
@@ -902,8 +993,8 @@ fn axial_clip_work_has_exact_n_and_atomic_n_minus_one_boundary() {
 #[test]
 fn open_span_certificate_work_has_exact_n_and_atomic_n_minus_one_boundary() {
     assert_eq!(
-        SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH, 256,
-        "one independently certified open branch must remain one atomic 256-work unit"
+        SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH, 260,
+        "one open branch must atomically precharge 256 guarded cells and two 2-work root corridors"
     );
     let cylinders = perpendicular_pair();
     let windows = [
