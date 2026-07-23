@@ -1675,6 +1675,11 @@ fn validate_curve(descriptor: &CurveDescriptor) -> GeometryGraphResult<()> {
                 && v.certificate().carrier_range().is_finite()
                 && v.certificate().carrier_range().width() > 0.0
         }
+        CurveDescriptor::SkewCylinderBranch(_) => {
+            return Err(invalid_intersection_descriptor(
+                "operation-local skew Cylinder/Cylinder branches have no persistent graph contract",
+            ));
+        }
     };
     if valid {
         Ok(())
@@ -1733,6 +1738,12 @@ fn validate_curve2d(descriptor: &Curve2dDescriptor) -> GeometryGraphResult<()> {
                 && v.chart_window()
                     .into_iter()
                     .all(|range| range.is_finite() && range.width() >= 0.0)
+        }
+        Curve2dDescriptor::SkewCylinderBranch(_) => {
+            return Err(GeometryGraphError::InvalidDescriptor {
+                class: descriptor.class_key(),
+                reason: "operation-local skew Cylinder/Cylinder pcurves have no persistent graph contract",
+            });
         }
     };
     if valid {

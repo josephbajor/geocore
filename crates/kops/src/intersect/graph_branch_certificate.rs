@@ -6,8 +6,8 @@
 
 use kgraph::{
     PairedCylinderCylinderRulingResidualCertificate, PairedPlaneCylinderCircleResidualCertificate,
-    PairedPlaneCylinderRulingResidualCertificate, VerifiedIntersectionCertificate,
-    VerifiedNurbsIntersectionCertificate,
+    PairedPlaneCylinderRulingResidualCertificate, PairedSkewCylinderBranchResidualCertificate,
+    VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
 };
 
 /// Whole-range proof retained by one operation-local branch.
@@ -22,11 +22,23 @@ pub enum IntersectionBranchCertificate {
     PlaneCylinderRuling(Box<PairedPlaneCylinderRulingResidualCertificate>),
     /// Finite exact-family Cylinder/Cylinder ruling proof.
     CylinderCylinderRuling(Box<PairedCylinderCylinderRulingResidualCertificate>),
+    /// Certified procedural full-cycle sheet of a strict-positive skew pair.
+    SkewCylinderTwoSheet(Box<PairedSkewCylinderBranchResidualCertificate>),
     /// Operation-generated degree-1 analytic/NURBS trace proof.
     Nurbs(Box<VerifiedNurbsIntersectionCertificate>),
 }
 
 impl IntersectionBranchCertificate {
+    pub(crate) const fn is_operation_local_cylinder(&self) -> bool {
+        matches!(
+            self,
+            Self::PlaneCylinderCircle(_)
+                | Self::PlaneCylinderRuling(_)
+                | Self::CylinderCylinderRuling(_)
+                | Self::SkewCylinderTwoSheet(_)
+        )
+    }
+
     /// Conservative paired residual bounds in operand order.
     pub fn residual_bounds(&self) -> [f64; 2] {
         match self {
@@ -34,6 +46,7 @@ impl IntersectionBranchCertificate {
             Self::PlaneCylinderCircle(certificate) => certificate.residual_bounds(),
             Self::PlaneCylinderRuling(certificate) => certificate.residual_bounds(),
             Self::CylinderCylinderRuling(certificate) => certificate.residual_bounds(),
+            Self::SkewCylinderTwoSheet(certificate) => certificate.residual_bounds(),
             Self::Nurbs(certificate) => certificate.residual_bounds(),
         }
     }
@@ -45,6 +58,7 @@ impl IntersectionBranchCertificate {
             Self::PlaneCylinderCircle(certificate) => certificate.tolerance(),
             Self::PlaneCylinderRuling(certificate) => certificate.tolerance(),
             Self::CylinderCylinderRuling(certificate) => certificate.tolerance(),
+            Self::SkewCylinderTwoSheet(certificate) => certificate.tolerance(),
             Self::Nurbs(certificate) => certificate.tolerance(),
         }
     }
@@ -56,6 +70,7 @@ impl IntersectionBranchCertificate {
             Self::PlaneCylinderCircle(_)
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -69,6 +84,7 @@ impl IntersectionBranchCertificate {
             Self::PlaneCylinderCircle(_)
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -80,6 +96,7 @@ impl IntersectionBranchCertificate {
             Self::Analytic(_)
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -91,6 +108,7 @@ impl IntersectionBranchCertificate {
             Self::Analytic(_)
             | Self::PlaneCylinderCircle(_)
             | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -104,6 +122,21 @@ impl IntersectionBranchCertificate {
             Self::Analytic(_)
             | Self::PlaneCylinderCircle(_)
             | Self::PlaneCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_)
+            | Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow the certified skew Cylinder/Cylinder two-sheet proof when it matches.
+    pub fn as_skew_cylinder_two_sheet(
+        &self,
+    ) -> Option<PairedSkewCylinderBranchResidualCertificate> {
+        match self {
+            Self::SkewCylinderTwoSheet(certificate) => Some(**certificate),
+            Self::Analytic(_)
+            | Self::PlaneCylinderCircle(_)
+            | Self::PlaneCylinderRuling(_)
+            | Self::CylinderCylinderRuling(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -114,7 +147,8 @@ impl IntersectionBranchCertificate {
             Self::Analytic(_)
             | Self::PlaneCylinderCircle(_)
             | Self::PlaneCylinderRuling(_)
-            | Self::CylinderCylinderRuling(_) => None,
+            | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_) => None,
             Self::Nurbs(certificate) => Some(certificate.as_ref()),
         }
     }

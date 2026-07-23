@@ -33,9 +33,11 @@ mod geometry_class;
 mod graph_branch_certificate;
 mod graph_cylinder_cylinder;
 mod graph_cylinder_cylinder_skew;
+mod graph_cylinder_cylinder_skew_branch;
 mod graph_plane_cylinder;
 mod graph_surface;
 mod graph_surface_budget;
+mod graph_surface_persist;
 mod line_circle;
 mod line_cone;
 mod line_cylinder;
@@ -111,7 +113,8 @@ pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY, SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
     SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
-    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SkewCylinderStrictDiscriminantMiss,
+    SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
+    SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderStrictDiscriminantMiss,
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,

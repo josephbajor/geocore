@@ -14,6 +14,8 @@ mod graph;
 mod intersection;
 #[path = "intersection/plane_cylinder_ruling.rs"]
 mod plane_cylinder_ruling;
+#[path = "intersection/skew_cylinder_branch.rs"]
+mod skew_cylinder_branch;
 
 pub use class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
 pub use cylinder_cylinder_ruling::{
@@ -84,4 +86,9 @@ pub use intersection::{
 pub use plane_cylinder_ruling::{
     CylinderRulingTrace, PairedPlaneCylinderRulingResidualCertificate, PlaneCylinderRulingTrace,
     PlaneRulingTrace, certify_paired_plane_cylinder_ruling_residuals,
+};
+pub use skew_cylinder_branch::{
+    PairedSkewCylinderBranchResidualCertificate, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
+    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchCarrier, SkewCylinderBranchPcurve,
+    SkewCylinderBranchTrace, SkewCylinderSheet, certify_paired_skew_cylinder_branch_residuals,
 };

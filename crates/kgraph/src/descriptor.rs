@@ -12,6 +12,7 @@ use crate::intersection::{
     TransmittedNurbsIntersectionCurveDescriptor, VerifiedIntersectionCurveDescriptor,
     VerifiedNurbsIntersectionCurveDescriptor,
 };
+use crate::{SkewCylinderBranchCarrier, SkewCylinderBranchPcurve};
 
 /// Constant signed displacement along a basis surface's natural unit normal.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +42,10 @@ impl OffsetSurfaceDescriptor {
 }
 
 /// A 3D curve descriptor.
+// The operation-local procedural variant intentionally stays inline so its
+// certifier-minted Copy identity survives value handoff without indirection.
+// Graph insertion rejects it before arena allocation.
+#[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CurveDescriptor {
@@ -60,6 +65,8 @@ pub enum CurveDescriptor {
     TransmittedIntersection(Box<TransmittedIntersectionCurveDescriptor>),
     /// Verified chordal chart with original NURBS traces retained from interchange.
     TransmittedNurbsIntersection(Box<TransmittedNurbsIntersectionCurveDescriptor>),
+    /// Operation-local certified procedural skew Cylinder/Cylinder sheet.
+    SkewCylinderBranch(SkewCylinderBranchCarrier),
 }
 
 impl CurveDescriptor {
@@ -79,6 +86,7 @@ impl CurveDescriptor {
             Self::VerifiedNurbsIntersection(value) => value.as_ref(),
             Self::TransmittedIntersection(value) => value.as_ref(),
             Self::TransmittedNurbsIntersection(value) => value.as_ref(),
+            Self::SkewCylinderBranch(value) => value,
         }
     }
 
@@ -93,6 +101,7 @@ impl CurveDescriptor {
             Self::VerifiedNurbsIntersection(_) => CurveClass::Intersection,
             Self::TransmittedIntersection(_) => CurveClass::Intersection,
             Self::TransmittedNurbsIntersection(_) => CurveClass::Intersection,
+            Self::SkewCylinderBranch(_) => CurveClass::Intersection,
         }
     }
 
@@ -168,6 +177,15 @@ impl CurveDescriptor {
         }
     }
 
+    /// Borrow as an operation-local skew-cylinder sheet.
+    pub fn as_skew_cylinder_branch(&self) -> Option<&SkewCylinderBranchCarrier> {
+        if let Self::SkewCylinderBranch(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     /// Borrow this descriptor as a verified transmitted original-NURBS chart.
     pub fn as_transmitted_nurbs_intersection(
         &self,
@@ -210,6 +228,11 @@ impl From<Ellipse> for CurveDescriptor {
 impl From<NurbsCurve> for CurveDescriptor {
     fn from(value: NurbsCurve) -> Self {
         Self::Nurbs(value)
+    }
+}
+impl From<SkewCylinderBranchCarrier> for CurveDescriptor {
+    fn from(value: SkewCylinderBranchCarrier) -> Self {
+        Self::SkewCylinderBranch(value)
     }
 }
 
@@ -380,6 +403,8 @@ pub enum Curve2dDescriptor {
     Nurbs(NurbsCurve2d),
     /// Finite certifier-minted inverse sphere chart of a spatial circle.
     SphericalCircle(SphericalCirclePcurve),
+    /// Operation-local certified procedural skew Cylinder/Cylinder sheet chart.
+    SkewCylinderBranch(SkewCylinderBranchPcurve),
 }
 
 impl Curve2dDescriptor {
@@ -395,6 +420,7 @@ impl Curve2dDescriptor {
             Self::Circle(value) => value,
             Self::Nurbs(value) => value,
             Self::SphericalCircle(value) => value,
+            Self::SkewCylinderBranch(value) => value,
         }
     }
 
@@ -405,6 +431,7 @@ impl Curve2dDescriptor {
             Self::Circle(_) => Curve2dClass::Circle,
             Self::Nurbs(_) => Curve2dClass::Nurbs,
             Self::SphericalCircle(_) => Curve2dClass::SphericalCircle,
+            Self::SkewCylinderBranch(_) => Curve2dClass::SkewCylinderBranch,
         }
     }
     /// Stable external class key.
@@ -444,6 +471,15 @@ impl Curve2dDescriptor {
             None
         }
     }
+
+    /// Borrow as an operation-local skew-cylinder sheet chart.
+    pub const fn as_skew_cylinder_branch(&self) -> Option<&SkewCylinderBranchPcurve> {
+        if let Self::SkewCylinderBranch(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 impl From<Line2d> for Curve2dDescriptor {
@@ -459,6 +495,11 @@ impl From<Circle2d> for Curve2dDescriptor {
 impl From<NurbsCurve2d> for Curve2dDescriptor {
     fn from(v: NurbsCurve2d) -> Self {
         Self::Nurbs(v)
+    }
+}
+impl From<SkewCylinderBranchPcurve> for Curve2dDescriptor {
+    fn from(value: SkewCylinderBranchPcurve) -> Self {
+        Self::SkewCylinderBranch(value)
     }
 }
 

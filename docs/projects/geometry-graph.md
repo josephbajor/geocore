@@ -253,7 +253,7 @@ interval, and a paired whole-interval residual certificate. Graph validation
 recomputes the certified field and rejects any mismatch before allocation; reverse
 dependencies protect every transitive basis (including offset chains) while the
 proof is live, and stale/altered sources roll the persistence batch back atomically.
-Exact-parallel/antiparallel strict-secant Cylinder/Cylinder rulings remain operation-local: their graph proof yields exactly two deterministic branches, tangent/miss/coincident/skew are typed gaps, and persistence refuses unsupported analytic cylinder families.
+Exact-parallel strict-secant rulings and exact-nonparallel strictly contained two-sheet branches remain operation-local. The latter retain exact-source and stored finite-window/common-chart proofs, paired residuals, closed seam topology, and deterministic Lower/Upper order; contact, clipped, and coincident families stay typed gaps, and persistence refuses every unsupported analytic cylinder family before mutation.
 
 ## Explicit non-goals
 

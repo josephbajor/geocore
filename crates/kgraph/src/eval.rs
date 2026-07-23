@@ -873,6 +873,7 @@ fn curve_leaf(descriptor: &CurveDescriptor) -> &dyn Curve {
         CurveDescriptor::VerifiedNurbsIntersection(v) => v.as_ref(),
         CurveDescriptor::TransmittedIntersection(v) => v.as_ref(),
         CurveDescriptor::TransmittedNurbsIntersection(v) => v.as_ref(),
+        CurveDescriptor::SkewCylinderBranch(v) => v,
     }
 }
 
@@ -882,6 +883,7 @@ fn curve2d_leaf(descriptor: &Curve2dDescriptor) -> &dyn Curve2d {
         Curve2dDescriptor::Circle(v) => v,
         Curve2dDescriptor::Nurbs(v) => v,
         Curve2dDescriptor::SphericalCircle(v) => v,
+        Curve2dDescriptor::SkewCylinderBranch(v) => v,
     }
 }
 

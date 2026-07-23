@@ -12,8 +12,10 @@ use super::graph_cylinder_cylinder::{
     intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
 };
 use super::graph_cylinder_cylinder_skew::{
-    SkewCylinderStrictDiscriminantMiss, intersect_certified_skew_cylinders,
+    CertifiedSkewCylinderIntersections, SkewCylinderStrictDiscriminantMiss,
+    intersect_certified_skew_cylinders,
 };
+use super::graph_cylinder_cylinder_skew_branch::build_verified_skew_cylinder_branch;
 use super::graph_plane_cylinder::{
     build_verified_plane_cylinder_circle_branch, build_verified_plane_cylinder_ruling_branch,
     canonical_line, plane_pcurve,
@@ -21,6 +23,7 @@ use super::graph_plane_cylinder::{
 pub use super::graph_surface_budget::{
     GraphSurfaceBudgetProfile, NURBS_TRACE_CERTIFICATE_WORK, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
 };
+pub use super::graph_surface_persist::persist_verified_graph_surface_intersections;
 use super::nurbs_nurbs_surface::{
     intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope,
@@ -64,10 +67,10 @@ use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, Curve2dHandle, CurveDescriptor, CurveHandle,
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    NurbsIntersectionTrace, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
-    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, TransmittedOffsetPlaneTrace,
-    VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
-    certify_paired_plane_sphere_circle_residuals,
+    NurbsIntersectionTrace, PairedSkewCylinderBranchResidualCertificate, PairedTrace,
+    PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor,
+    SurfaceHandle, TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
+    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_verified_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
@@ -952,6 +955,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     };
     let mut parallel_cylinder_exterior_radial_separation = None;
     let mut skew_cylinder_strict_discriminant_miss = None;
+    let mut skew_cylinder_two_sheet_certificates = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1020,8 +1024,18 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 parallel_cylinder_exterior_radial_separation = separation;
                 raw
             } else {
-                let (raw, miss) = intersect_certified_skew_cylinders(cylinders, ranges, scope)?;
-                skew_cylinder_strict_discriminant_miss = miss;
+                let CertifiedSkewCylinderIntersections {
+                    raw,
+                    strict_miss,
+                    two_sheet_certificates,
+                } = intersect_certified_skew_cylinders(
+                    cylinders,
+                    ranges,
+                    tolerances.linear(),
+                    scope,
+                )?;
+                skew_cylinder_strict_discriminant_miss = strict_miss;
+                skew_cylinder_two_sheet_certificates = two_sheet_certificates;
                 raw
             };
             (raw, None)
@@ -1189,6 +1203,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         ResolvedGraphProofSources {
             fields,
             offset_plane_traces,
+            skew_cylinder_two_sheet_certificates,
         },
         [range_a, range_b],
         &raw,
@@ -1232,92 +1247,6 @@ fn swap_nurbs_march_output(
     });
     let traces = paired.into_iter().map(|(_, trace)| trace).collect();
     Ok((output.result.swapped(), traces))
-}
-
-/// Persist every certified positive-length branch into the geometry graph.
-///
-/// Paired pcurves are inserted in operand order followed by their verified
-/// intersection-curve node. The complete batch is transactional: stale or
-/// altered sources, mismatched certificates, and allocation-time graph
-/// validation failures restore exact pre-call graph state.
-pub fn persist_verified_graph_surface_intersections(
-    graph: &mut GeometryGraph,
-    intersections: &GraphSurfaceSurfaceIntersections,
-) -> GraphSurfaceIntersectionResult<PersistentIntersectionBranchGraph> {
-    graph.begin_undo_frame();
-    let result = persist_verified_graph_surface_intersections_impl(graph, intersections);
-    match result {
-        Ok(persistent) => {
-            graph
-                .commit_undo_frame()
-                .map_err(IntersectionError::from)
-                .map_err(GraphSurfaceIntersectionError::Intersection)?;
-            Ok(persistent)
-        }
-        Err(error) => {
-            graph
-                .rollback_undo_frame()
-                .map_err(IntersectionError::from)
-                .map_err(GraphSurfaceIntersectionError::Intersection)?;
-            Err(error)
-        }
-    }
-}
-
-fn persist_verified_graph_surface_intersections_impl(
-    graph: &mut GeometryGraph,
-    intersections: &GraphSurfaceSurfaceIntersections,
-) -> GraphSurfaceIntersectionResult<PersistentIntersectionBranchGraph> {
-    let mut edges = Vec::with_capacity(intersections.branch_graph.edges.len());
-    for edge in &intersections.branch_graph.edges {
-        let pcurves = [
-            graph.insert_curve2d(edge.pcurves[0].clone())?,
-            graph.insert_curve2d(edge.pcurves[1].clone())?,
-        ];
-        let curve = match &edge.certificate {
-            IntersectionBranchCertificate::Analytic(certificate) => match certificate.as_ref() {
-                VerifiedIntersectionCertificate::PlaneLine(certificate) => graph
-                    .insert_verified_plane_intersection_curve(
-                        edge.source_surfaces,
-                        pcurves,
-                        *certificate,
-                    )?,
-                VerifiedIntersectionCertificate::PlaneSphereCircle(certificate) => graph
-                    .insert_verified_plane_sphere_intersection_curve(
-                        edge.source_surfaces,
-                        pcurves,
-                        *certificate,
-                    )?,
-            },
-            IntersectionBranchCertificate::PlaneCylinderCircle(_)
-            | IntersectionBranchCertificate::PlaneCylinderRuling(_)
-            | IntersectionBranchCertificate::CylinderCylinderRuling(_) => {
-                return Err(GraphSurfaceIntersectionError::BranchCertificate(
-                    IntersectionCertificateError::UnsupportedCarrierParameterization {
-                        reason: "persistent analytic cylinder branches require a dedicated descriptor contract",
-                    },
-                ));
-            }
-            IntersectionBranchCertificate::Nurbs(certificate) => graph
-                .insert_verified_nurbs_intersection_curve(
-                    edge.source_surfaces,
-                    pcurves,
-                    certificate.as_ref().clone(),
-                )?,
-        };
-        edges.push(PersistentIntersectionBranchEdge {
-            curve,
-            pcurves,
-            endpoint_vertices: edge.endpoint_vertices,
-            endpoint_events: edge.endpoint_events,
-            kind: edge.kind,
-        });
-    }
-    Ok(PersistentIntersectionBranchGraph {
-        source_surfaces: intersections.branch_graph.source_surfaces,
-        vertices: intersections.branch_graph.vertices.clone(),
-        edges,
-    })
 }
 
 fn supports_constant_latitude_plane_sphere_chart(plane: Plane, sphere: Sphere) -> bool {
@@ -1911,6 +1840,7 @@ fn build_verified_branch_graph(
     let ResolvedGraphProofSources {
         fields,
         offset_plane_traces,
+        skew_cylinder_two_sheet_certificates,
     } = proof_sources;
     let mut vertices = raw
         .points
@@ -2013,6 +1943,21 @@ fn build_verified_branch_graph(
                 [cylinder_a, cylinder_b],
                 surface_ranges,
                 tolerance,
+            )?,
+            (
+                SurfaceIntersectionCurve::SkewCylinder(raw_carrier),
+                [
+                    ResolvedGraphSurfaceField::Cylinder { .. },
+                    ResolvedGraphSurfaceField::Cylinder { .. },
+                ],
+            ) => build_verified_skew_cylinder_branch(
+                *raw_carrier,
+                branch,
+                skew_cylinder_two_sheet_certificates
+                    .and_then(|certificates| certificates.get(branch_index).copied())
+                    .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                        IntersectionCertificateError::InvalidTraceFamily,
+                    ))?,
             )?,
             (
                 SurfaceIntersectionCurve::Circle(raw_circle),
@@ -2169,6 +2114,7 @@ pub(super) struct VerifiedBranchPayload {
 struct ResolvedGraphProofSources<'a> {
     fields: [ResolvedGraphSurfaceField<'a>; 2],
     offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
+    skew_cylinder_two_sheet_certificates: Option<[PairedSkewCylinderBranchResidualCertificate; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

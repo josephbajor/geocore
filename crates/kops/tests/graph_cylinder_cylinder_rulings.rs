@@ -8,20 +8,26 @@ use kcore::operation::{
 };
 use kcore::proof::IncompleteCause;
 use kcore::tolerance::Tolerances;
-use kgeom::curve::Curve;
+use kgeom::curve::{Curve, Line};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Point3, Vec3};
-use kgraph::{Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError};
+use kgraph::{
+    Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError,
+    SkewCylinderSheet,
+};
 use kops::intersect::{
-    GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError, IntersectionBranchTopology,
+    ContactKind, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
+    IntersectionBranchEndpointEvent, IntersectionBranchTopology, IntersectionBranchVertexEvent,
     IntersectionError, SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
     SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE, SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK,
     SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION, SKEW_CYLINDER_DISCRIMINANT_WORK,
-    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
-    intersect_bounded_graph_surfaces_with_context,
+    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
+    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SKEW_CYLINDER_TWO_SHEET_WORK, SurfaceIntersectionCurve,
+    SurfaceSurfaceCurve, SurfaceSurfaceIntersections, intersect_bounded_graph_surfaces,
+    intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
+    persist_verified_graph_surface_intersections,
 };
 
 fn range(lo: f64, hi: f64) -> ParamRange {
@@ -111,6 +117,7 @@ fn assert_single_skew_incomplete(
     result: &kops::intersect::GraphSurfaceSurfaceIntersections,
     sources: [kgraph::SurfaceHandle; 2],
     code: DiagnosticCode,
+    stage: kcore::operation::StageId,
     capability: CapabilityId,
     fixture: &str,
 ) {
@@ -124,7 +131,7 @@ fn assert_single_skew_incomplete(
     assert_eq!(result.raw.incomplete_evidence().len(), 1, "{fixture}");
     let evidence = result.raw.incomplete_evidence()[0];
     assert_eq!(evidence.code, code, "{fixture}");
-    assert_eq!(evidence.stage, SKEW_CYLINDER_DISCRIMINANT_WORK, "{fixture}");
+    assert_eq!(evidence.stage, stage, "{fixture}");
     assert_eq!(
         evidence.cause,
         IncompleteCause::ProofMethodUnavailable { capability },
@@ -171,6 +178,181 @@ fn assert_ruling_lifts(edge: &kops::intersect::IntersectionBranchEdge, cylinders
                 .as_curve()
                 .eval(edge.parameter_maps[operand].map(parameter));
             assert!(point.dist(cylinder.eval([uv.x, uv.y])) <= certificate.tolerance());
+        }
+    }
+}
+
+fn assert_perpendicular_two_sheet_result(
+    result: &kops::intersect::GraphSurfaceSurfaceIntersections,
+    sources: [kgraph::SurfaceHandle; 2],
+    source_cylinders: [Cylinder; 2],
+    construction_frame: Frame,
+) {
+    assert_eq!(result.branch_graph.source_surfaces, sources);
+    assert!(result.raw.is_complete());
+    assert!(!result.raw.is_proven_empty());
+    assert!(result.raw.points.is_empty());
+    assert!(result.raw.regions.is_empty());
+    assert!(result.raw.incomplete_evidence().is_empty());
+    assert_eq!(result.raw.curves.len(), 2);
+    assert_eq!(result.branch_graph.edges.len(), 2);
+    assert_eq!(result.branch_graph.vertices.len(), 2);
+    assert!(result.skew_cylinder_strict_discriminant_miss().is_none());
+    assert!(
+        result
+            .parallel_cylinder_exterior_radial_separation()
+            .is_none()
+    );
+
+    for (branch_index, expected_sheet) in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
+        .into_iter()
+        .enumerate()
+    {
+        let raw_branch = &result.raw.curves[branch_index];
+        let SurfaceIntersectionCurve::SkewCylinder(raw_carrier) = raw_branch.curve else {
+            panic!("strict-positive skew branch must use its procedural carrier");
+        };
+        assert_eq!(raw_carrier.sheet(), expected_sheet);
+
+        let edge = &result.branch_graph.edges[branch_index];
+        let CurveDescriptor::SkewCylinderBranch(carrier) = edge.carrier else {
+            panic!("verified skew branch must retain its procedural carrier");
+        };
+        assert_eq!(carrier, raw_carrier);
+        assert_eq!(carrier.sheet(), expected_sheet);
+        assert_eq!(edge.carrier_range, raw_branch.curve_range);
+        assert_eq!(edge.topology, IntersectionBranchTopology::Closed);
+        assert_eq!(edge.endpoint_vertices, [branch_index, branch_index]);
+        assert!(matches!(
+            result.branch_graph.vertices[branch_index].event,
+            IntersectionBranchVertexEvent::PeriodSeam { .. }
+        ));
+        assert!(
+            edge.endpoint_events
+                .iter()
+                .all(|event| matches!(event, IntersectionBranchEndpointEvent::PeriodSeam { .. }))
+        );
+        assert!(
+            edge.pcurves
+                .iter()
+                .all(|pcurve| matches!(pcurve, Curve2dDescriptor::SkewCylinderBranch(_)))
+        );
+        assert!(
+            edge.parameter_maps
+                .iter()
+                .all(|map| map.scale() == 1.0 && map.offset() == 0.0)
+        );
+
+        let certificate = edge.certificate.as_skew_cylinder_two_sheet().unwrap();
+        assert_eq!(certificate.carrier(), carrier);
+        assert_eq!(certificate.sheet(), expected_sheet);
+        assert_eq!(
+            certificate.traces().map(|trace| trace.surface()),
+            source_cylinders
+        );
+        assert_eq!(certificate.parameter_maps(), edge.parameter_maps);
+        assert!(
+            certificate
+                .residual_bounds()
+                .into_iter()
+                .all(|bound| bound <= certificate.tolerance())
+        );
+
+        for parameter in [
+            edge.carrier_range.lo,
+            edge.carrier_range.lerp(0.25),
+            edge.carrier_range.lerp(0.5),
+            edge.carrier_range.lerp(0.75),
+            edge.carrier_range.hi,
+        ] {
+            let (sine, cosine) = kcore::math::sincos(parameter);
+            let ruling_height = (4.0 - sine * sine).sqrt()
+                * if expected_sheet == SkewCylinderSheet::Lower {
+                    -1.0
+                } else {
+                    1.0
+                };
+            let expected_point = construction_frame.origin()
+                + construction_frame.x() * cosine
+                + construction_frame.y() * sine
+                + construction_frame.z() * ruling_height;
+            let point = carrier.eval(parameter);
+            assert!(
+                point.dist(expected_point) <= certificate.tolerance(),
+                "{expected_sheet:?} carrier disagrees with the perpendicular-cylinder oracle"
+            );
+            for (operand, cylinder) in source_cylinders.iter().enumerate() {
+                let uv = edge.pcurves[operand]
+                    .as_curve()
+                    .eval(edge.parameter_maps[operand].map(parameter));
+                assert!(
+                    point.dist(cylinder.eval([uv.x, uv.y])) <= certificate.tolerance(),
+                    "{expected_sheet:?} pcurve {operand} does not lift to the carrier"
+                );
+            }
+        }
+    }
+}
+
+fn assert_non_right_two_sheet_result(
+    result: &kops::intersect::GraphSurfaceSurfaceIntersections,
+    source_cylinders: [Cylinder; 2],
+    construction_frame: Frame,
+) {
+    assert!(result.raw.is_complete());
+    assert_eq!(result.raw.curves.len(), 2);
+    assert_eq!(result.branch_graph.edges.len(), 2);
+    assert_eq!(result.branch_graph.vertices.len(), 2);
+
+    for (branch_index, expected_sheet) in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
+        .into_iter()
+        .enumerate()
+    {
+        let edge = &result.branch_graph.edges[branch_index];
+        let CurveDescriptor::SkewCylinderBranch(carrier) = edge.carrier else {
+            panic!("non-right skew branch must retain its procedural carrier");
+        };
+        assert_eq!(carrier.sheet(), expected_sheet);
+        assert_eq!(edge.topology, IntersectionBranchTopology::Closed);
+        let certificate = edge.certificate.as_skew_cylinder_two_sheet().unwrap();
+        assert_eq!(
+            certificate.traces().map(|trace| trace.surface()),
+            source_cylinders
+        );
+
+        for parameter in [
+            edge.carrier_range.lo,
+            edge.carrier_range.lerp(0.25),
+            edge.carrier_range.lerp(0.5),
+            edge.carrier_range.lerp(0.75),
+            edge.carrier_range.hi,
+        ] {
+            let (sine, cosine) = kcore::math::sincos(parameter);
+            let signed_root = (4.0 - sine * sine).sqrt()
+                * if expected_sheet == SkewCylinderSheet::Lower {
+                    -1.0
+                } else {
+                    1.0
+                };
+            let ruling_height = (0.8 * cosine + signed_root) / 0.6;
+            let expected_point = construction_frame.origin()
+                + construction_frame.x() * cosine
+                + construction_frame.y() * sine
+                + construction_frame.z() * ruling_height;
+            let point = carrier.eval(parameter);
+            assert!(
+                point.dist(expected_point) <= certificate.tolerance(),
+                "{expected_sheet:?} carrier disagrees with the non-right oracle"
+            );
+            for (operand, cylinder) in source_cylinders.iter().enumerate() {
+                let uv = edge.pcurves[operand]
+                    .as_curve()
+                    .eval(edge.parameter_maps[operand].map(parameter));
+                assert!(
+                    point.dist(cylinder.eval([uv.x, uv.y])) <= certificate.tolerance(),
+                    "{expected_sheet:?} non-right pcurve {operand} does not lift"
+                );
+            }
         }
     }
 }
@@ -668,7 +850,229 @@ fn one_sided_exact_envelope_refusal_retries_reversed_parameterization() {
 }
 
 #[test]
-fn perpendicular_skew_positive_root_and_ulp_cases_keep_structured_evidence() {
+fn mixed_skew_and_non_skew_canonicalization_is_permutation_invariant() {
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 0.0, 2.0);
+    let windows = skew_windows();
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        second_handle,
+        windows[1],
+        first_handle,
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let branch_for = |sheet| {
+        reversed
+            .raw
+            .curves
+            .iter()
+            .find(|branch| {
+                matches!(
+                    &branch.curve,
+                    SurfaceIntersectionCurve::SkewCylinder(carrier)
+                        if carrier.sheet() == sheet
+                )
+            })
+            .unwrap()
+            .clone()
+    };
+    let lower = branch_for(SkewCylinderSheet::Lower);
+    let upper = branch_for(SkewCylinderSheet::Upper);
+    let line = SurfaceSurfaceCurve {
+        curve: SurfaceIntersectionCurve::Line(
+            Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+        ),
+        curve_range: range(0.0, core::f64::consts::TAU),
+        uv_a_start: [core::f64::consts::PI, 0.0],
+        uv_a_end: [core::f64::consts::PI, 1.0],
+        uv_b_start: [0.0, 0.0],
+        uv_b_end: [1.0, 0.0],
+        kind: ContactKind::Transverse,
+    };
+    let branches = [lower, upper, line];
+    let expected =
+        SurfaceSurfaceIntersections::canonicalized_complete(Vec::new(), branches.to_vec()).unwrap();
+
+    for permutation in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let result = SurfaceSurfaceIntersections::canonicalized_complete(
+            Vec::new(),
+            permutation.map(|index| branches[index].clone()).to_vec(),
+        )
+        .unwrap();
+        assert_eq!(result, expected, "permutation {permutation:?}");
+    }
+    assert!(matches!(
+        &expected.curves[0].curve,
+        SurfaceIntersectionCurve::SkewCylinder(carrier)
+            if carrier.sheet() == SkewCylinderSheet::Lower
+    ));
+    assert!(matches!(
+        &expected.curves[1].curve,
+        SurfaceIntersectionCurve::SkewCylinder(carrier)
+            if carrier.sheet() == SkewCylinderSheet::Upper
+    ));
+    assert!(matches!(
+        expected.curves[2].curve,
+        SurfaceIntersectionCurve::Line(_)
+    ));
+}
+
+#[test]
+fn perpendicular_skew_positive_pair_promotes_two_closed_branches_rigidly_and_in_both_orders() {
+    let frames = [
+        Frame::world(),
+        Frame::new(
+            Point3::new(3.0, -2.0, 5.0),
+            Vec3::new(0.0, 0.8, 0.6),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    ];
+    let windows = skew_windows();
+
+    for frame in frames {
+        let [first, second] = perpendicular_axis_pair(frame, 0.0, 2.0);
+        let (mut graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+
+        assert_eq!(forward, replay);
+        assert_perpendicular_two_sheet_result(
+            &forward,
+            [first_handle, second_handle],
+            [first, second],
+            frame,
+        );
+        assert_perpendicular_two_sheet_result(
+            &reversed,
+            [second_handle, first_handle],
+            [second, first],
+            frame,
+        );
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+        for (forward_edge, reversed_edge) in forward
+            .branch_graph
+            .edges
+            .iter()
+            .zip(&reversed.branch_graph.edges)
+        {
+            assert_eq!(forward_edge.carrier, reversed_edge.carrier);
+            assert_eq!(forward_edge.pcurves[0], reversed_edge.pcurves[1]);
+            assert_eq!(forward_edge.pcurves[1], reversed_edge.pcurves[0]);
+        }
+
+        let counts_before = (
+            graph.surface_count(),
+            graph.curve_count(),
+            graph.curve2d_count(),
+        );
+        assert!(matches!(
+            persist_verified_graph_surface_intersections(&mut graph, &forward),
+            Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
+            ))
+        ));
+        assert_eq!(
+            (
+                graph.surface_count(),
+                graph.curve_count(),
+                graph.curve2d_count()
+            ),
+            counts_before,
+            "operation-local skew persistence must refuse before inserting descriptors"
+        );
+    }
+}
+
+#[test]
+fn non_right_skew_positive_pair_matches_independent_oracle_and_is_swap_stable() {
+    let frame = Frame::world();
+    let [first, second] = non_right_angle_axis_pair(frame, 0.0, 2.0);
+    let windows = [
+        cylinder_window(range(-5.0, 5.0)),
+        cylinder_window(range(-5.0, 5.0)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let forward = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let replay = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        second_handle,
+        windows[1],
+        first_handle,
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(forward, replay);
+    assert_non_right_two_sheet_result(&forward, [first, second], frame);
+    assert_non_right_two_sheet_result(&reversed, [second, first], frame);
+    assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    for (forward_edge, reversed_edge) in forward
+        .branch_graph
+        .edges
+        .iter()
+        .zip(&reversed.branch_graph.edges)
+    {
+        assert_eq!(forward_edge.carrier, reversed_edge.carrier);
+        assert_eq!(forward_edge.pcurves[0], reversed_edge.pcurves[1]);
+        assert_eq!(forward_edge.pcurves[1], reversed_edge.pcurves[0]);
+    }
+}
+
+#[test]
+fn perpendicular_skew_root_and_ulp_cases_keep_structured_evidence() {
     #[derive(Clone, Copy)]
     struct Fixture {
         name: &'static str,
@@ -678,12 +1082,6 @@ fn perpendicular_skew_positive_root_and_ulp_cases_keep_structured_evidence() {
     }
 
     let fixtures = [
-        Fixture {
-            name: "strict-positive-two-sheet-cover",
-            offset: 0.0,
-            code: SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-            capability: SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
-        },
         Fixture {
             name: "exact-repeated-zero",
             offset: 3.0,
@@ -739,6 +1137,7 @@ fn perpendicular_skew_positive_root_and_ulp_cases_keep_structured_evidence() {
                 result,
                 sources,
                 fixture.code,
+                SKEW_CYLINDER_DISCRIMINANT_WORK,
                 fixture.capability,
                 fixture.name,
             );
@@ -749,6 +1148,68 @@ fn perpendicular_skew_positive_root_and_ulp_cases_keep_structured_evidence() {
             "{} changed under operand reversal",
             fixture.name
         );
+    }
+}
+
+#[test]
+fn skew_two_sheet_refuses_narrow_and_nonperiodic_windows_without_partial_publication() {
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 0.0, 2.0);
+    let wide = skew_windows();
+    let fixtures = [
+        (
+            "one-sheet-height-window",
+            [
+                cylinder_window(range(-2.25, 0.0)),
+                cylinder_window(range(-1.25, 1.25)),
+            ],
+        ),
+        (
+            "non-full-angular-window",
+            [
+                [
+                    range(0.0, core::f64::consts::TAU.next_down()),
+                    range(-2.25, 2.25),
+                ],
+                wide[1],
+            ],
+        ),
+    ];
+
+    for (name, windows) in fixtures {
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+
+        for (result, sources) in [
+            (&forward, [first_handle, second_handle]),
+            (&reversed, [second_handle, first_handle]),
+        ] {
+            assert_single_skew_incomplete(
+                result,
+                sources,
+                SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
+                SKEW_CYLINDER_TWO_SHEET_WORK,
+                SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+                name,
+            );
+        }
+        assert_eq!(reversed.raw, forward.raw.clone().swapped(), "{name}");
     }
 }
 
@@ -883,6 +1344,77 @@ fn skew_discriminant_work_has_exact_n_and_atomic_n_minus_one_boundary() {
         observed_work(denied.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
         0,
         "a rejected single-stage debit must not partially consume work"
+    );
+}
+
+#[test]
+fn skew_two_sheet_work_has_exact_n_and_atomic_n_minus_one_boundary() {
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 0.0, 2.0);
+    let windows = skew_windows();
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+
+    let exact_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_TWO_SHEET_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
+    )])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        &exact_context,
+    );
+    assert_eq!(exact.result().unwrap().raw.curves.len(), 2);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_TWO_SHEET_WORK),
+        SKEW_CYLINDER_TWO_SHEET_EXACT_WORK
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_TWO_SHEET_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        SKEW_CYLINDER_TWO_SHEET_EXACT_WORK - 1,
+    )])
+    .unwrap();
+    let denied_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(denied_plan);
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_TWO_SHEET_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
+        allowed: SKEW_CYLINDER_TWO_SHEET_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_TWO_SHEET_WORK),
+        0,
+        "a rejected two-certificate debit must not consume or publish one sheet"
     );
 }
 

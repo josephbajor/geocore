@@ -5,17 +5,23 @@
 //! resulting exact quadratic in ruling height has an exact cyclic
 //! second-harmonic discriminant. A strictly negative discriminant proves a
 //! complete miss. A strictly positive discriminant proves the existence of two
-//! infinite-support sheets, but this first slice deliberately retains a
-//! structured carrier-construction gap. Contact roots and failed exact
-//! classification remain typed indeterminate; no sampled marcher is allowed to
-//! claim completion.
+//! infinite-support sheets. Full-cycle publication then requires paired
+//! residual certificates for the procedural carrier and both pcurves. Contact
+//! roots and failed exact classification remain typed indeterminate; no
+//! sampled marcher is allowed to claim completion.
 
 use kcore::error::CapabilityId;
 use kcore::operation::{DiagnosticCode, DiagnosticKind, OperationScope, StageId};
 use kcore::predicates::{Orientation, orient3d};
 use kcore::proof::{IncompleteCause, IncompleteEvidence};
+use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
+use kgraph::{
+    IntersectionCertificateError, PairedSkewCylinderBranchResidualCertificate,
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SkewCylinderSheet,
+    certify_paired_skew_cylinder_branch_residuals,
+};
 
 use super::bounded_trigonometric::{
     CYCLIC_SECOND_HARMONIC_EXACT_WORK, CyclicSecondHarmonicFailure, ExactTrigScalar,
@@ -24,13 +30,15 @@ use super::bounded_trigonometric::{
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
 use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult};
-use super::result::SurfaceSurfaceIntersections;
+use super::result::{
+    ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
+};
 
-const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires a certified two-sheet branch carrier";
+const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires a certified full-cycle contained two-sheet branch carrier";
 const CONTACT_TOPOLOGY_REASON: &str =
     "skew Cylinder/Cylinder discriminant contact roots require certified branch topology";
 const NUMERIC_RESOLUTION_REASON: &str =
-    "exact skew Cylinder/Cylinder discriminant classification did not finish";
+    "exact skew Cylinder/Cylinder classification or branch proof did not finish";
 const NONPARALLEL_REASON: &str =
     "skew Cylinder/Cylinder discriminant admission requires exact nonparallel axes";
 
@@ -43,6 +51,16 @@ pub const SKEW_CYLINDER_DISCRIMINANT_WORK: StageId =
 
 /// Exact atomic work charged by one admitted skew-cylinder classification.
 pub const SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK: u64 = 2 * CYCLIC_SECOND_HARMONIC_EXACT_WORK;
+
+/// Stable work stage for one atomic pair of certified procedural branches.
+pub const SKEW_CYLINDER_TWO_SHEET_WORK: StageId =
+    match StageId::new("kops.intersect.skew-cylinder-two-sheet-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid skew-cylinder two-sheet stage"),
+    };
+
+/// Atomic work charged before certifying both procedural skew branches.
+pub const SKEW_CYLINDER_TWO_SHEET_EXACT_WORK: u64 = 2 * SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK;
 
 /// Missing carrier for the two sheets proved by a strict-positive discriminant.
 pub const SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER: CapabilityId =
@@ -86,6 +104,13 @@ pub struct SkewCylinderStrictDiscriminantMiss {
     _private: (),
 }
 
+/// Complete graph inputs produced by the exact skew-cylinder admission.
+pub(super) struct CertifiedSkewCylinderIntersections {
+    pub(super) raw: SurfaceSurfaceIntersections,
+    pub(super) strict_miss: Option<SkewCylinderStrictDiscriminantMiss>,
+    pub(super) two_sheet_certificates: Option<[PairedSkewCylinderBranchResidualCertificate; 2]>,
+}
+
 impl SkewCylinderStrictDiscriminantMiss {
     const fn certified() -> Self {
         Self { _private: () }
@@ -112,15 +137,13 @@ struct SecondHarmonic {
 pub(super) fn intersect_certified_skew_cylinders(
     cylinders: [Cylinder; 2],
     ranges: [[ParamRange; 2]; 2],
+    tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
-) -> GraphSurfaceIntersectionResult<(
-    SurfaceSurfaceIntersections,
-    Option<SkewCylinderStrictDiscriminantMiss>,
-)> {
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
     validate_ranges(ranges[0], ranges[1])
         .map_err(IntersectionError::from)
         .map_err(GraphSurfaceIntersectionError::Intersection)?;
-    let (cylinders, _ranges) = canonical_pair(cylinders, ranges);
+    let (cylinders, ranges, reversed) = canonical_pair(cylinders, ranges);
     if !axes_are_exactly_nonparallel(cylinders) {
         return Err(GraphSurfaceIntersectionError::BranchCertificate(
             kgraph::IntersectionCertificateError::UnsupportedCarrierParameterization {
@@ -138,20 +161,121 @@ pub(super) fn intersect_certified_skew_cylinders(
     )?;
 
     let mut admission = classify_one_parameterization(cylinders);
+    let mut parameterization_reversed = false;
     if admission == DiscriminantAdmission::NumericResolution {
         admission = classify_one_parameterization([cylinders[1], cylinders[0]]);
+        parameterization_reversed = true;
     }
 
     match admission {
-        DiscriminantAdmission::Strict(StrictSign::Negative) => Ok((
-            SurfaceSurfaceIntersections::complete_empty(),
-            Some(SkewCylinderStrictDiscriminantMiss::certified()),
-        )),
-        DiscriminantAdmission::Strict(StrictSign::Positive) => {
-            Ok((two_sheet_incomplete(scope), None))
+        DiscriminantAdmission::Strict(StrictSign::Negative) => {
+            Ok(CertifiedSkewCylinderIntersections {
+                raw: SurfaceSurfaceIntersections::complete_empty(),
+                strict_miss: Some(SkewCylinderStrictDiscriminantMiss::certified()),
+                two_sheet_certificates: None,
+            })
         }
-        DiscriminantAdmission::Contact => Ok((contact_topology_incomplete(scope), None)),
-        DiscriminantAdmission::NumericResolution => Ok((numeric_resolution(scope), None)),
+        DiscriminantAdmission::Strict(StrictSign::Positive) => {
+            let (proof_cylinders, proof_ranges) = if parameterization_reversed {
+                ([cylinders[1], cylinders[0]], [ranges[1], ranges[0]])
+            } else {
+                (cylinders, ranges)
+            };
+            intersect_strict_positive_two_sheet(
+                proof_cylinders,
+                proof_ranges,
+                reversed ^ parameterization_reversed,
+                tolerance,
+                scope,
+            )
+        }
+        DiscriminantAdmission::Contact => Ok(CertifiedSkewCylinderIntersections {
+            raw: contact_topology_incomplete(scope),
+            strict_miss: None,
+            two_sheet_certificates: None,
+        }),
+        DiscriminantAdmission::NumericResolution => Ok(CertifiedSkewCylinderIntersections {
+            raw: numeric_resolution(scope, SKEW_CYLINDER_DISCRIMINANT_WORK),
+            strict_miss: None,
+            two_sheet_certificates: None,
+        }),
+    }
+}
+
+fn intersect_strict_positive_two_sheet(
+    cylinders: [Cylinder; 2],
+    ranges: [[ParamRange; 2]; 2],
+    reversed: bool,
+    tolerance: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    scope.ledger_mut().charge(
+        SKEW_CYLINDER_TWO_SHEET_WORK,
+        SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
+    )?;
+    let certified = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper].map(|sheet| {
+        certify_paired_skew_cylinder_branch_residuals(cylinders, ranges, sheet, tolerance)
+    });
+    let certificates = match certified {
+        [Ok(lower), Ok(upper)] => [lower, upper],
+        failures => {
+            let unsupported = failures.iter().any(|result| {
+                matches!(
+                    result,
+                    Err(
+                        IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
+                            | IntersectionCertificateError::InvalidCarrierRange
+                    )
+                )
+            });
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: if unsupported {
+                    two_sheet_incomplete(scope)
+                } else {
+                    numeric_resolution(scope, SKEW_CYLINDER_TWO_SHEET_WORK)
+                },
+                strict_miss: None,
+                two_sheet_certificates: None,
+            });
+        }
+    };
+    let certificates = if reversed {
+        certificates.map(PairedSkewCylinderBranchResidualCertificate::swapped)
+    } else {
+        certificates
+    };
+    let curves = certificates
+        .iter()
+        .map(raw_two_sheet_curve)
+        .collect::<Vec<_>>();
+    let raw = SurfaceSurfaceIntersections::canonicalized_complete(Vec::new(), curves)
+        .map_err(IntersectionError::from)
+        .map_err(GraphSurfaceIntersectionError::Intersection)?;
+    Ok(CertifiedSkewCylinderIntersections {
+        raw,
+        strict_miss: None,
+        two_sheet_certificates: Some(certificates),
+    })
+}
+
+fn raw_two_sheet_curve(
+    certificate: &PairedSkewCylinderBranchResidualCertificate,
+) -> SurfaceSurfaceCurve {
+    let carrier = certificate.carrier();
+    let range = certificate.carrier_range();
+    let traces = certificate.traces();
+    let endpoint = |trace: kgraph::SkewCylinderBranchTrace, parameter| {
+        let uv = trace.pcurve().eval(parameter);
+        [uv.x, uv.y]
+    };
+    SurfaceSurfaceCurve {
+        curve: SurfaceIntersectionCurve::SkewCylinder(carrier),
+        curve_range: range,
+        uv_a_start: endpoint(traces[0], range.lo),
+        uv_a_end: endpoint(traces[0], range.hi),
+        uv_b_start: endpoint(traces[1], range.lo),
+        uv_b_end: endpoint(traces[1], range.hi),
+        kind: ContactKind::Transverse,
     }
 }
 
@@ -200,11 +324,11 @@ enum ExactRulingDiscriminant {
 fn canonical_pair(
     cylinders: [Cylinder; 2],
     ranges: [[ParamRange; 2]; 2],
-) -> ([Cylinder; 2], [[ParamRange; 2]; 2]) {
+) -> ([Cylinder; 2], [[ParamRange; 2]; 2], bool) {
     if compare_cylinder_windows(&cylinders[0], ranges[0], &cylinders[1], ranges[1]).is_gt() {
-        ([cylinders[1], cylinders[0]], [ranges[1], ranges[0]])
+        ([cylinders[1], cylinders[0]], [ranges[1], ranges[0]], true)
     } else {
-        (cylinders, ranges)
+        (cylinders, ranges, false)
     }
 }
 
@@ -515,7 +639,7 @@ fn exact_determinant_expansion(
 
 fn two_sheet_incomplete(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceIntersections {
     scope.diagnose(
-        SKEW_CYLINDER_DISCRIMINANT_WORK,
+        SKEW_CYLINDER_TWO_SHEET_WORK,
         SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
         DiagnosticKind::ProofIncomplete,
         TWO_SHEET_REASON,
@@ -524,7 +648,7 @@ fn two_sheet_incomplete(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceInt
         TWO_SHEET_REASON,
         vec![IncompleteEvidence {
             code: SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-            stage: SKEW_CYLINDER_DISCRIMINANT_WORK,
+            stage: SKEW_CYLINDER_TWO_SHEET_WORK,
             cause: IncompleteCause::ProofMethodUnavailable {
                 capability: SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
             },
@@ -553,10 +677,13 @@ fn contact_topology_incomplete(scope: &mut OperationScope<'_, '_>) -> SurfaceSur
     )
 }
 
-fn numeric_resolution(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceIntersections {
-    scope.record_numeric_resolution(SKEW_CYLINDER_DISCRIMINANT_WORK);
+fn numeric_resolution(
+    scope: &mut OperationScope<'_, '_>,
+    stage: StageId,
+) -> SurfaceSurfaceIntersections {
+    scope.record_numeric_resolution(stage);
     scope.diagnose(
-        SKEW_CYLINDER_DISCRIMINANT_WORK,
+        stage,
         SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
         DiagnosticKind::NumericResolution,
         NUMERIC_RESOLUTION_REASON,
@@ -565,7 +692,7 @@ fn numeric_resolution(scope: &mut OperationScope<'_, '_>) -> SurfaceSurfaceInter
         NUMERIC_RESOLUTION_REASON,
         vec![IncompleteEvidence {
             code: SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
-            stage: SKEW_CYLINDER_DISCRIMINANT_WORK,
+            stage,
             cause: IncompleteCause::NumericResolution,
             message: NUMERIC_RESOLUTION_REASON,
         }],

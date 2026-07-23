@@ -2,6 +2,7 @@
 
 use super::graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_WORK,
+    SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_WORK,
 };
 use super::nurbs_surface_march::NurbsSurfaceMarchBudgetProfile;
 use kcore::operation::{AccountingMode, BudgetPlan, LimitSpec, ResourceKind, StageId};
@@ -50,6 +51,13 @@ impl GraphSurfaceBudgetProfile {
                         ResourceKind::Work,
                         AccountingMode::Cumulative,
                         SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK
+                            * MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE,
+                    ),
+                    LimitSpec::new(
+                        SKEW_CYLINDER_TWO_SHEET_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        SKEW_CYLINDER_TWO_SHEET_EXACT_WORK
                             * MAX_SKEW_CYLINDER_DISCRIMINANT_PROOFS_PER_SCOPE,
                     ),
                     LimitSpec::new(

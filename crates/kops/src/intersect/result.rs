@@ -8,6 +8,7 @@ use kgeom::nurbs::{CurvePairProjectionPlane, CurvePairRootCertificate, NurbsCurv
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
 use kgeom::vec::Point3;
+use kgraph::{SkewCylinderBranchCarrier, SkewCylinderSheet};
 
 const MISSING_COMPLETION_REASON: &str =
     "intersection algorithm did not provide complete-domain exclusion evidence";
@@ -587,6 +588,8 @@ pub enum SurfaceIntersectionCurve {
     Ellipse(Ellipse),
     /// Exact B-spline/NURBS intersection branch.
     Nurbs(NurbsCurve),
+    /// Certified procedural full-cycle sheet of a strict-positive skew pair.
+    SkewCylinder(SkewCylinderBranchCarrier),
 }
 
 impl SurfaceIntersectionCurve {
@@ -597,6 +600,7 @@ impl SurfaceIntersectionCurve {
             SurfaceIntersectionCurve::Circle(circle) => circle.eval(t),
             SurfaceIntersectionCurve::Ellipse(ellipse) => ellipse.eval(t),
             SurfaceIntersectionCurve::Nurbs(nurbs) => nurbs.eval(t),
+            SurfaceIntersectionCurve::SkewCylinder(carrier) => carrier.eval(t),
         }
     }
 
@@ -607,6 +611,7 @@ impl SurfaceIntersectionCurve {
             SurfaceIntersectionCurve::Circle(circle) => circle.param_range(),
             SurfaceIntersectionCurve::Ellipse(ellipse) => ellipse.param_range(),
             SurfaceIntersectionCurve::Nurbs(nurbs) => nurbs.param_range(),
+            SurfaceIntersectionCurve::SkewCylinder(carrier) => carrier.param_range(),
         }
     }
 }
@@ -1217,12 +1222,16 @@ impl SurfaceSurfaceIntersections {
                 .then(a.kind.cmp(&b.kind))
         });
         curves.sort_by(|a, b| {
-            a.curve_range
-                .lo
-                .total_cmp(&b.curve_range.lo)
-                .then(a.curve_range.hi.total_cmp(&b.curve_range.hi))
-                .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
-                .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
+            surface_curve_family_rank(&a.curve)
+                .cmp(&surface_curve_family_rank(&b.curve))
+                .then(
+                    a.curve_range
+                        .lo
+                        .total_cmp(&b.curve_range.lo)
+                        .then(a.curve_range.hi.total_cmp(&b.curve_range.hi))
+                        .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
+                        .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1])),
+                )
         });
         regions.sort_by(compare_regions);
     }
@@ -1280,6 +1289,19 @@ impl SurfaceSurfaceIntersections {
         }
         Self::sort_evidence(&mut self.points, &mut self.curves, &mut self.regions);
         self
+    }
+}
+
+const fn surface_curve_family_rank(curve: &SurfaceIntersectionCurve) -> u8 {
+    match curve {
+        SurfaceIntersectionCurve::SkewCylinder(carrier) => match carrier.sheet() {
+            SkewCylinderSheet::Lower => 0,
+            SkewCylinderSheet::Upper => 1,
+        },
+        SurfaceIntersectionCurve::Line(_)
+        | SurfaceIntersectionCurve::Circle(_)
+        | SurfaceIntersectionCurve::Ellipse(_)
+        | SurfaceIntersectionCurve::Nurbs(_) => 2,
     }
 }
 
