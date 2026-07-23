@@ -8,15 +8,16 @@
 //!
 //! - intersection is the contained-radius band over the axial overlap;
 //! - union is a whole containing-source copy when the contained axial window
-//!   is itself contained, or one tangent-shoulder shell when the contained
-//!   window has exactly one protruding axial tail;
+//!   is itself contained, or one canonical tangent chain when the contained
+//!   window has one or two protruding axial tails;
 //! - contained-minus-containing is the zero, one, or two contained-radius
 //!   bands selected by the shared interval sweep.
 //!
-//! A contained window that strictly covers the containing window needs two
-//! shoulders and a three-band theorem. Containing-minus-contained has a
-//! pinched tangent-annulus cross-section throughout the positive overlap.
-//! Both stay explicit allocation-free topology refusals here.
+//! Containing-minus-contained has a pinched tangent-annulus cross-section
+//! throughout the positive overlap and stays an explicit allocation-free
+//! topology refusal here.
+
+use core::cmp::Ordering;
 
 use kcore::operation::OperationScope;
 use kcore::predicates::{Orientation, affine_dot3};
@@ -72,6 +73,37 @@ struct BoundBoundary {
     axial_parameter: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TangentUnionBand {
+    operand: usize,
+    low: BoundBoundary,
+    high: BoundBoundary,
+    tail_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PreparedTangentUnionBand {
+    band: TangentUnionBand,
+    frame: Frame,
+    radius: f64,
+    low_center: Point3,
+    low_height: f64,
+    high_center: Point3,
+    high_height: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PreparedTangentUnionContact {
+    boundary: BoundBoundary,
+    outer_edge: AnalyticEdgeKey,
+    inner_edge: AnalyticEdgeKey,
+    outer_circle: Circle,
+    inner_circle: Circle,
+    plane: Plane,
+    outer_fin_sense: Sense,
+    inner_fin_sense: Sense,
+}
+
 /// Consume the exact internal-tangency relation without reclassifying radii or
 /// reconstructing containment direction from floating-point geometry.
 pub(super) fn execute_parallel_cylinder_internal_tangency(
@@ -113,10 +145,9 @@ pub(super) fn execute_parallel_cylinder_internal_tangency(
                     &[(bodies[containing].clone(), cylinders[containing])],
                     scope,
                 ),
-                [tail] => realize_internal_tangent_shoulder(
-                    edit, cylinders, relation, tail, linear, scope,
+                tails @ ([_] | [_, _]) => realize_internal_tangent_union_chain(
+                    edit, cylinders, relation, tails, linear, scope,
                 ),
-                [_, _] => refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported),
                 _ => refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported),
             }
         }
@@ -133,15 +164,15 @@ pub(super) fn execute_parallel_cylinder_internal_tangency(
     }
 }
 
-fn realize_internal_tangent_shoulder(
+fn realize_internal_tangent_union_chain(
     edit: &mut PartEdit<'_>,
     cylinders: [&CertifiedCylinderSource; 2],
     relation: &CertifiedParallelCylinderInternalRadialTangency,
-    tail: &PlannedAxialSpan,
+    tails: &[PlannedAxialSpan],
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
-    let input = match prepare_internal_tangent_shoulder(cylinders, relation, tail) {
+    let input = match prepare_internal_tangent_union_chain(cylinders, relation, tails) {
         Ok(input) => input,
         Err(
             InternalTangencyPlanGap::RelationBinding
@@ -155,59 +186,71 @@ fn realize_internal_tangent_shoulder(
     realize_analytic_shell_inputs(edit, &[input], linear, scope)
 }
 
-/// Replace one radial step by a compact tangent shoulder.
+/// Replace one or two radial steps by one canonical low-to-high tangent chain.
 ///
-/// Both contact circles are bounded complete-period edges with the same
-/// topology vertex at their parameter seam. The planar shoulder owns one
-/// two-fin boundary walk, so the shared vertex has one degree-four manifold
-/// link rather than two pinched face loops.
-fn prepare_internal_tangent_shoulder(
+/// Each contact owns two bounded complete-period circles with one shared
+/// topology vertex at their parameter seams. Every planar shoulder owns one
+/// two-fin boundary walk, so each tangent vertex has one degree-four manifold
+/// link rather than two pinched face loops. Bands and contacts are derived
+/// from the retained exact preorder; authored endpoint order never selects a
+/// configuration-specific construction path.
+fn prepare_internal_tangent_union_chain(
     cylinders: [&CertifiedCylinderSource; 2],
     relation: &CertifiedParallelCylinderInternalRadialTangency,
-    tail: &PlannedAxialSpan,
+    tails: &[PlannedAxialSpan],
 ) -> Result<AnalyticShellInput, InternalTangencyPlanGap> {
     bind_relation_boundaries(cylinders, relation.boundaries())?;
+    if !(1..=2).contains(&tails.len()) {
+        return Err(InternalTangencyPlanGap::IntervalContract);
+    }
     let contained = relation.contained_operand();
     let containing = relation.containing_operand();
     let contained_operand = operand_identity(contained);
     let containing_operand = operand_identity(containing);
-    if !tail.side_operands().contains(contained_operand)
-        || tail.side_operands().contains(containing_operand)
-    {
-        return Err(InternalTangencyPlanGap::IntervalContract);
-    }
-
-    let low = single_bound_boundary(bind_boundary_class(cylinders, relation, tail.low())?)?;
-    let high = single_bound_boundary(bind_boundary_class(cylinders, relation, tail.high())?)?;
-    let (outer_contact, inner_far) = match (low.operand, high.operand) {
-        (operand, far) if operand == containing_operand && far == contained_operand => (low, high),
-        (far, operand) if far == contained_operand && operand == containing_operand => (high, low),
-        _ => return Err(InternalTangencyPlanGap::IntervalContract),
-    };
     let outer_source = cylinders
         .get(containing)
         .ok_or(InternalTangencyPlanGap::RelationBinding)?;
     let inner_source = cylinders
         .get(contained)
         .ok_or(InternalTangencyPlanGap::RelationBinding)?;
-    let outer_far_index = match outer_contact.boundary_index {
-        0 => 1,
-        1 => 0,
-        _ => return Err(InternalTangencyPlanGap::RelationBinding),
-    };
-    let outer_far = *outer_source
-        .boundaries()
-        .get(outer_far_index)
-        .ok_or(InternalTangencyPlanGap::RelationBinding)?;
+
+    let [outer_low, outer_high] = ordered_operand_boundaries(cylinders, relation, containing)?;
+    let mut bands = Vec::with_capacity(tails.len() + 1);
+    for (tail_index, tail) in tails.iter().enumerate() {
+        if !tail.side_operands().contains(contained_operand)
+            || tail.side_operands().contains(containing_operand)
+        {
+            return Err(InternalTangencyPlanGap::IntervalContract);
+        }
+        let low = single_bound_boundary(bind_boundary_class(cylinders, relation, tail.low())?)?;
+        let high = single_bound_boundary(bind_boundary_class(cylinders, relation, tail.high())?)?;
+        if compare_boundaries(relation, low, high) != Ordering::Less {
+            return Err(InternalTangencyPlanGap::IntervalContract);
+        }
+        bands.push(TangentUnionBand {
+            operand: contained,
+            low,
+            high,
+            tail_index: Some(tail_index),
+        });
+    }
+    bands.push(TangentUnionBand {
+        operand: containing,
+        low: outer_low,
+        high: outer_high,
+        tail_index: None,
+    });
+    bands.sort_by(|first, second| compare_boundaries(relation, first.low, second.low));
+    validate_tangent_union_band_chain(&bands, relation, contained, containing)?;
 
     let outer_source_frame = *outer_source.cylinder().frame();
     let trial_frame = Frame::new(
-        outer_far.center(),
+        outer_low.boundary.center(),
         outer_source_frame.z(),
         outer_source_frame.x(),
     )
     .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let (_, trial_height) = exact_axial_projection(trial_frame, outer_contact.boundary.center())
+    let (_, trial_height) = exact_axial_projection(trial_frame, outer_high.boundary.center())
         .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
     let axis = if trial_height > 0.0 {
         outer_source_frame.z()
@@ -216,29 +259,23 @@ fn prepare_internal_tangent_shoulder(
     } else {
         return Err(InternalTangencyPlanGap::ArithmeticGuard);
     };
-    let axial_frame = Frame::new(outer_far.center(), axis, outer_source_frame.x())
+    let axial_frame = Frame::new(outer_low.boundary.center(), axis, outer_source_frame.x())
         .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let (outer_contact_center, outer_height) =
-        exact_axial_projection(axial_frame, outer_contact.boundary.center())
+    let (outer_high_center, outer_height) =
+        exact_axial_projection(axial_frame, outer_high.boundary.center())
             .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
     if !outer_height.is_finite() || outer_height <= 0.0 {
         return Err(InternalTangencyPlanGap::ArithmeticGuard);
     }
 
-    let (inner_contact_center, _) =
-        exact_axial_projection(*inner_source.cylinder().frame(), outer_contact_center)
+    let outer_low_center = outer_low.boundary.center();
+    let (inner_low_center, _) =
+        exact_axial_projection(*inner_source.cylinder().frame(), outer_low_center)
             .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
-    let radial = inner_contact_center - outer_contact_center;
-    let shoulder_frame = Frame::new(outer_contact_center, axis, radial)
+    let radial = inner_low_center - outer_low_center;
+    let outer_frame = Frame::new(outer_low_center, axis, radial)
         .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let outer_frame = shoulder_frame.with_origin(outer_far.center());
-    let inner_frame = shoulder_frame.with_origin(inner_contact_center);
-    let (inner_far_center, inner_height) =
-        exact_axial_projection(inner_frame, inner_far.boundary.center())
-            .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
-    if !inner_height.is_finite() || inner_height <= 0.0 {
-        return Err(InternalTangencyPlanGap::ArithmeticGuard);
-    }
+    let inner_frame = outer_frame.with_origin(inner_low_center);
 
     let outer_radius = outer_source.cylinder().radius();
     let inner_radius = inner_source.cylinder().radius();
@@ -249,148 +286,391 @@ fn prepare_internal_tangent_shoulder(
     {
         return Err(InternalTangencyPlanGap::RelationBinding);
     }
-    let outer_cylinder = Cylinder::new(outer_frame, outer_radius)
-        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let inner_cylinder = Cylinder::new(inner_frame, inner_radius)
-        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let outer_far_circle = Circle::new(outer_frame, outer_radius)
-        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let outer_contact_circle = Circle::new(shoulder_frame, outer_radius)
-        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let inner_contact_circle = Circle::new(inner_frame, inner_radius)
-        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
-    let inner_far_circle = Circle::new(inner_frame.with_origin(inner_far_center), inner_radius)
-        .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
 
-    const TANGENT: AnalyticVertexKey = AnalyticVertexKey::new(0);
-    const OUTER_FAR: AnalyticEdgeKey = AnalyticEdgeKey::new(0);
-    const OUTER_CONTACT: AnalyticEdgeKey = AnalyticEdgeKey::new(1);
-    const INNER_CONTACT: AnalyticEdgeKey = AnalyticEdgeKey::new(2);
-    const INNER_FAR: AnalyticEdgeKey = AnalyticEdgeKey::new(3);
-    let vertices = vec![AnalyticShellVertex::new(
-        TANGENT,
-        outer_contact_circle.eval(0.0),
-    )];
-    let edges = vec![
-        AnalyticShellEdge::new(
-            OUTER_CONTACT,
-            [TANGENT, TANGENT],
-            AnalyticShellCurve::Circle(outer_contact_circle),
-            outer_contact_circle.param_range(),
-        )
-        .with_source(EntityRef::Edge(outer_contact.boundary.edge())),
-        AnalyticShellEdge::new(
-            INNER_CONTACT,
-            [TANGENT, TANGENT],
-            AnalyticShellCurve::Circle(inner_contact_circle),
-            inner_contact_circle.param_range(),
-        )
-        .with_derived_sources([
-            EntityRef::Face(inner_source.side_face()),
-            EntityRef::Face(outer_contact.boundary.cap_face()),
-        ]),
-    ];
+    let prepared_bands = bands
+        .iter()
+        .copied()
+        .map(|band| {
+            prepare_tangent_union_band(
+                band,
+                contained,
+                outer_frame,
+                inner_frame,
+                outer_radius,
+                inner_radius,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let outer_band = prepared_bands
+        .iter()
+        .find(|band| band.band.operand == containing)
+        .ok_or(InternalTangencyPlanGap::IntervalContract)?;
+    if outer_band.low_height != 0.0
+        || outer_band.high_height != outer_height
+        || outer_band.low_center != outer_low_center
+        || outer_band.high_center != outer_high_center
+    {
+        return Err(InternalTangencyPlanGap::ArithmeticGuard);
+    }
+
+    let far_low_edge = AnalyticEdgeKey::new(0);
+    let far_high_edge = AnalyticEdgeKey::new(1 + 2 * tails.len() as u64);
+    let mut contacts = Vec::with_capacity(tails.len());
+    let mut vertices = Vec::with_capacity(tails.len());
+    let mut edges = Vec::with_capacity(2 * tails.len());
+    for contact_index in 0..tails.len() {
+        let left = prepared_bands[contact_index];
+        let right = prepared_bands[contact_index + 1];
+        let boundary = left.band.high;
+        let vertex = AnalyticVertexKey::new(contact_index as u64);
+        let outer_edge = AnalyticEdgeKey::new(1 + 2 * contact_index as u64);
+        let inner_edge = AnalyticEdgeKey::new(2 + 2 * contact_index as u64);
+        let outer_center = if left.band.operand == containing {
+            left.high_center
+        } else {
+            right.low_center
+        };
+        let inner_center = if left.band.operand == contained {
+            left.high_center
+        } else {
+            right.low_center
+        };
+        let outer_circle = Circle::new(outer_frame.with_origin(outer_center), outer_radius)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+        let inner_circle = Circle::new(inner_frame.with_origin(inner_center), inner_radius)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+        let outward_axis = if right.band.operand == contained {
+            axis
+        } else {
+            -axis
+        };
+        let plane = Plane::new(
+            Frame::new(outer_center, outward_axis, outer_frame.x())
+                .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+        );
+        let outer_fin_sense = if left.band.operand == containing {
+            Sense::Forward
+        } else {
+            Sense::Reversed
+        };
+        let inner_fin_sense = match outer_fin_sense {
+            Sense::Forward => Sense::Reversed,
+            Sense::Reversed => Sense::Forward,
+        };
+        vertices.push(AnalyticShellVertex::new(vertex, outer_circle.eval(0.0)));
+        edges.push(
+            AnalyticShellEdge::new(
+                outer_edge,
+                [vertex, vertex],
+                AnalyticShellCurve::Circle(outer_circle),
+                outer_circle.param_range(),
+            )
+            .with_source(EntityRef::Edge(boundary.boundary.edge())),
+        );
+        edges.push(
+            AnalyticShellEdge::new(
+                inner_edge,
+                [vertex, vertex],
+                AnalyticShellCurve::Circle(inner_circle),
+                inner_circle.param_range(),
+            )
+            .with_derived_sources([
+                EntityRef::Face(inner_source.side_face()),
+                EntityRef::Face(boundary.boundary.cap_face()),
+            ]),
+        );
+        contacts.push(PreparedTangentUnionContact {
+            boundary,
+            outer_edge,
+            inner_edge,
+            outer_circle,
+            inner_circle,
+            plane,
+            outer_fin_sense,
+            inner_fin_sense,
+        });
+    }
+
+    let first_band = prepared_bands
+        .first()
+        .copied()
+        .ok_or(InternalTangencyPlanGap::IntervalContract)?;
+    let last_band = prepared_bands
+        .last()
+        .copied()
+        .ok_or(InternalTangencyPlanGap::IntervalContract)?;
+    if operand_index(first_band.band.low.operand) != first_band.band.operand
+        || operand_index(last_band.band.high.operand) != last_band.band.operand
+    {
+        return Err(InternalTangencyPlanGap::Lineage);
+    }
+    let far_low_circle = Circle::new(
+        first_band.frame.with_origin(first_band.low_center),
+        first_band.radius,
+    )
+    .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+    let far_high_circle = Circle::new(
+        last_band.frame.with_origin(last_band.high_center),
+        last_band.radius,
+    )
+    .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
     let closed_edges = vec![
         AnalyticShellClosedEdge::new(
-            OUTER_FAR,
-            AnalyticShellCurve::Circle(outer_far_circle),
-            outer_far_circle.param_range(),
+            far_low_edge,
+            AnalyticShellCurve::Circle(far_low_circle),
+            far_low_circle.param_range(),
         )
-        .with_source(EntityRef::Edge(outer_far.edge())),
+        .with_source(EntityRef::Edge(first_band.band.low.boundary.edge())),
         AnalyticShellClosedEdge::new(
-            INNER_FAR,
-            AnalyticShellCurve::Circle(inner_far_circle),
-            inner_far_circle.param_range(),
+            far_high_edge,
+            AnalyticShellCurve::Circle(far_high_circle),
+            far_high_circle.param_range(),
         )
-        .with_source(EntityRef::Edge(inner_far.boundary.edge())),
+        .with_source(EntityRef::Edge(last_band.band.high.boundary.edge())),
     ];
 
-    let outer_side = AnalyticShellFace::new(
-        AnalyticFaceKey::new(0),
-        AnalyticShellSurface::Cylinder(outer_cylinder),
-        Sense::Forward,
-        FaceDomain::from_bounds(0.0, PERIOD, 0.0, outer_height)
-            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
-        vec![
-            AnalyticShellLoop::new(vec![side_fin(OUTER_FAR, Sense::Forward, 0.0)?]),
-            AnalyticShellLoop::new(vec![bounded_side_fin(
-                OUTER_CONTACT,
+    let mut faces = Vec::with_capacity(prepared_bands.len() + 2 + contacts.len());
+    for (band_index, band) in prepared_bands.iter().copied().enumerate() {
+        let low_fin = if band_index == 0 {
+            side_fin(far_low_edge, Sense::Forward, band.low_height)?
+        } else {
+            let contact = contacts[band_index - 1];
+            bounded_side_fin(
+                contact_edge_for_operand(contact, band.band.operand, contained, containing)?,
+                Sense::Forward,
+                band.low_height,
+            )?
+        };
+        let high_fin = if band_index + 1 == prepared_bands.len() {
+            side_fin(far_high_edge, Sense::Reversed, band.high_height)?
+        } else {
+            let contact = contacts[band_index];
+            bounded_side_fin(
+                contact_edge_for_operand(contact, band.band.operand, contained, containing)?,
                 Sense::Reversed,
-                outer_height,
-            )?]),
-        ],
-    )
-    .with_source(EntityRef::Face(outer_source.side_face()));
-    let inner_side = AnalyticShellFace::new(
-        AnalyticFaceKey::new(1),
-        AnalyticShellSurface::Cylinder(inner_cylinder),
-        Sense::Forward,
-        FaceDomain::from_bounds(0.0, PERIOD, 0.0, inner_height)
-            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
-        vec![
-            AnalyticShellLoop::new(vec![bounded_side_fin(INNER_CONTACT, Sense::Forward, 0.0)?]),
-            AnalyticShellLoop::new(vec![side_fin(INNER_FAR, Sense::Reversed, inner_height)?]),
-        ],
-    )
-    .with_source(EntityRef::Face(inner_source.side_face()));
+                band.high_height,
+            )?
+        };
+        let cylinder = Cylinder::new(band.frame, band.radius)
+            .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?;
+        let face = AnalyticShellFace::new(
+            AnalyticFaceKey::new(band_index as u64),
+            AnalyticShellSurface::Cylinder(cylinder),
+            Sense::Forward,
+            FaceDomain::from_bounds(0.0, PERIOD, band.low_height, band.high_height)
+                .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+            vec![
+                AnalyticShellLoop::new(vec![low_fin]),
+                AnalyticShellLoop::new(vec![high_fin]),
+            ],
+        );
+        let face = if let Some(tail_index) = band.band.tail_index {
+            lineaged_side_face(face, inner_source.side_face(), tails.len(), tail_index)?
+        } else {
+            face.with_source(EntityRef::Face(outer_source.side_face()))
+        };
+        faces.push(face);
+    }
 
-    let outer_far_plane = Plane::new(
-        Frame::new(outer_far.center(), -axis, shoulder_frame.x())
+    let cap_key_base = prepared_bands.len() as u64;
+    let low_plane = Plane::new(
+        Frame::new(first_band.low_center, -axis, outer_frame.x())
             .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
     );
-    let inner_far_plane = Plane::new(shoulder_frame.with_origin(inner_far_center));
-    let shoulder_plane = Plane::new(shoulder_frame);
-    let outer_cap = tangent_cap_face(
-        AnalyticFaceKey::new(2),
-        OUTER_FAR,
-        outer_far_plane,
-        outer_far_circle,
-        Sense::Reversed,
-        outer_radius,
-        outer_far.cap_face(),
-        true,
-    )?;
-    let inner_cap = tangent_cap_face(
-        AnalyticFaceKey::new(3),
-        INNER_FAR,
-        inner_far_plane,
-        inner_far_circle,
-        Sense::Forward,
-        inner_radius,
-        inner_far.boundary.cap_face(),
-        true,
-    )?;
-    let shoulder = AnalyticShellFace::new(
-        AnalyticFaceKey::new(4),
-        AnalyticShellSurface::Plane(shoulder_plane),
-        Sense::Forward,
-        FaceDomain::from_bounds(-outer_radius, outer_radius, -outer_radius, outer_radius)
+    let high_plane = Plane::new(
+        Frame::new(last_band.high_center, axis, outer_frame.x())
             .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
-        vec![AnalyticShellLoop::new(vec![
-            plane_circle_fin(
-                OUTER_CONTACT,
-                Sense::Forward,
-                shoulder_plane,
-                outer_contact_circle,
-                false,
-            )?,
-            plane_circle_fin(
-                INNER_CONTACT,
-                Sense::Reversed,
-                shoulder_plane,
-                inner_contact_circle,
-                false,
-            )?,
-        ])],
-    )
-    .with_source(EntityRef::Face(outer_contact.boundary.cap_face()));
+    );
+    faces.push(tangent_cap_face(
+        AnalyticFaceKey::new(cap_key_base),
+        far_low_edge,
+        low_plane,
+        far_low_circle,
+        Sense::Reversed,
+        first_band.radius,
+        first_band.band.low.boundary.cap_face(),
+        true,
+    )?);
+    faces.push(tangent_cap_face(
+        AnalyticFaceKey::new(cap_key_base + 1),
+        far_high_edge,
+        high_plane,
+        far_high_circle,
+        Sense::Forward,
+        last_band.radius,
+        last_band.band.high.boundary.cap_face(),
+        true,
+    )?);
+    for (contact_index, contact) in contacts.iter().copied().enumerate() {
+        let shoulder = AnalyticShellFace::new(
+            AnalyticFaceKey::new(cap_key_base + 2 + contact_index as u64),
+            AnalyticShellSurface::Plane(contact.plane),
+            Sense::Forward,
+            FaceDomain::from_bounds(-outer_radius, outer_radius, -outer_radius, outer_radius)
+                .map_err(|_| InternalTangencyPlanGap::ArithmeticGuard)?,
+            vec![AnalyticShellLoop::new(vec![
+                plane_circle_fin(
+                    contact.outer_edge,
+                    contact.outer_fin_sense,
+                    contact.plane,
+                    contact.outer_circle,
+                    false,
+                )?,
+                plane_circle_fin(
+                    contact.inner_edge,
+                    contact.inner_fin_sense,
+                    contact.plane,
+                    contact.inner_circle,
+                    false,
+                )?,
+            ])],
+        )
+        .with_source(EntityRef::Face(contact.boundary.boundary.cap_face()));
+        faces.push(shoulder);
+    }
 
-    Ok(AnalyticShellInput::new(
-        vertices,
-        edges,
-        vec![outer_side, inner_side, outer_cap, inner_cap, shoulder],
+    Ok(AnalyticShellInput::new(vertices, edges, faces).with_closed_edges(closed_edges))
+}
+
+fn ordered_operand_boundaries(
+    cylinders: [&CertifiedCylinderSource; 2],
+    relation: &CertifiedParallelCylinderInternalRadialTangency,
+    operand: usize,
+) -> Result<[BoundBoundary; 2], InternalTangencyPlanGap> {
+    let identity = operand_identity(operand);
+    let source = cylinders
+        .get(operand)
+        .ok_or(InternalTangencyPlanGap::RelationBinding)?;
+    let boundary = |boundary_index| {
+        Ok(BoundBoundary {
+            operand: identity,
+            boundary_index,
+            boundary: source.boundaries()[boundary_index],
+            axial_parameter: relation
+                .axial_parameter(operand, boundary_index)
+                .ok_or(InternalTangencyPlanGap::RelationBinding)?,
+        })
+    };
+    let boundaries = [boundary(0)?, boundary(1)?];
+    match compare_boundaries(relation, boundaries[0], boundaries[1]) {
+        Ordering::Less => Ok(boundaries),
+        Ordering::Greater => Ok([boundaries[1], boundaries[0]]),
+        Ordering::Equal => Err(InternalTangencyPlanGap::IntervalContract),
+    }
+}
+
+fn validate_tangent_union_band_chain(
+    bands: &[TangentUnionBand],
+    relation: &CertifiedParallelCylinderInternalRadialTangency,
+    contained: usize,
+    containing: usize,
+) -> Result<(), InternalTangencyPlanGap> {
+    if bands.len() < 2 || bands.len() > 3 {
+        return Err(InternalTangencyPlanGap::IntervalContract);
+    }
+    let mut contained_count = 0;
+    let mut containing_count = 0;
+    for band in bands {
+        if compare_boundaries(relation, band.low, band.high) != Ordering::Less {
+            return Err(InternalTangencyPlanGap::IntervalContract);
+        }
+        if band.operand == contained {
+            contained_count += 1;
+        } else if band.operand == containing {
+            containing_count += 1;
+        } else {
+            return Err(InternalTangencyPlanGap::IntervalContract);
+        }
+    }
+    if containing_count != 1 || contained_count + containing_count != bands.len() {
+        return Err(InternalTangencyPlanGap::IntervalContract);
+    }
+    for pair in bands.windows(2) {
+        let [left, right] = pair else {
+            return Err(InternalTangencyPlanGap::IntervalContract);
+        };
+        if left.operand == right.operand
+            || !same_bound_boundary(left.high, right.low)
+            || operand_index(left.high.operand) != containing
+        {
+            return Err(InternalTangencyPlanGap::IntervalContract);
+        }
+    }
+    Ok(())
+}
+
+fn prepare_tangent_union_band(
+    band: TangentUnionBand,
+    contained: usize,
+    outer_frame: Frame,
+    inner_frame: Frame,
+    outer_radius: f64,
+    inner_radius: f64,
+) -> Result<PreparedTangentUnionBand, InternalTangencyPlanGap> {
+    let (frame, radius) = if band.operand == contained {
+        (inner_frame, inner_radius)
+    } else {
+        (outer_frame, outer_radius)
+    };
+    let (low_center, low_height) = exact_axial_projection(frame, band.low.boundary.center())
+        .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
+    let (high_center, high_height) = exact_axial_projection(frame, band.high.boundary.center())
+        .ok_or(InternalTangencyPlanGap::ArithmeticGuard)?;
+    if !low_height.is_finite() || !high_height.is_finite() || low_height >= high_height {
+        return Err(InternalTangencyPlanGap::ArithmeticGuard);
+    }
+    Ok(PreparedTangentUnionBand {
+        band,
+        frame,
+        radius,
+        low_center,
+        low_height,
+        high_center,
+        high_height,
+    })
+}
+
+fn contact_edge_for_operand(
+    contact: PreparedTangentUnionContact,
+    operand: usize,
+    contained: usize,
+    containing: usize,
+) -> Result<AnalyticEdgeKey, InternalTangencyPlanGap> {
+    if operand == contained {
+        Ok(contact.inner_edge)
+    } else if operand == containing {
+        Ok(contact.outer_edge)
+    } else {
+        Err(InternalTangencyPlanGap::IntervalContract)
+    }
+}
+
+fn compare_boundaries(
+    relation: &CertifiedParallelCylinderInternalRadialTangency,
+    first: BoundBoundary,
+    second: BoundBoundary,
+) -> Ordering {
+    relation
+        .preorder()
+        .compare(boundary_contributor(first), boundary_contributor(second))
+}
+
+fn boundary_contributor(boundary: BoundBoundary) -> AxialEndpointContributor {
+    AxialEndpointContributor::new(
+        boundary.operand,
+        if boundary.boundary_index == 0 {
+            AuthoredAxialEndpoint::Start
+        } else {
+            AuthoredAxialEndpoint::End
+        },
     )
-    .with_closed_edges(closed_edges))
+}
+
+fn same_bound_boundary(first: BoundBoundary, second: BoundBoundary) -> bool {
+    first.operand == second.operand
+        && first.boundary_index == second.boundary_index
+        && first.boundary.cap_face() == second.boundary.cap_face()
+        && first.boundary.edge() == second.boundary.edge()
 }
 
 fn single_bound_boundary(

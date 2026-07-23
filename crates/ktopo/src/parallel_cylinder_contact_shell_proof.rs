@@ -1,13 +1,13 @@
-//! Shell theorem for two axially touching parallel-cylinder bands.
+//! Shell theorems for axially touching parallel-cylinder bands.
 //!
 //! Nested disks retain one shared two-loop annulus. Strict-secant disks retain
 //! two complementary coplanar disk differences, four bounded source-circle
 //! arcs, and a degree-four link at each of the two exact roots. Exact internal
-//! tangency retains one pinched shoulder loop whose two complete-period edges
-//! share the tangent vertex. In every family the far disks lie in opposite
-//! open half-spaces of the contact plane. Whole-fin incidence, loop layout,
+//! tangency retains one or two pinched shoulder loops whose complete-period
+//! edge pairs share exact tangent vertices. In every family the terminal far
+//! disks lie beyond the contact planes. Whole-fin incidence, loop layout,
 //! exact or outward-interval radial predicates, and coherent winding identify
-//! the shell with the regularized boundary after the shared interface is
+//! the shell with the regularized boundary after each shared interface is
 //! removed.
 
 use super::mixed_profile_prism_proof::{
@@ -31,6 +31,10 @@ mod strict_secant_tests;
 #[cfg(test)]
 #[path = "parallel_cylinder_contact_shell_proof/internal_tangent_tests.rs"]
 mod internal_tangent_tests;
+
+#[cfg(test)]
+#[path = "parallel_cylinder_contact_shell_proof/internal_tangent_chain_tests.rs"]
+mod internal_tangent_chain_tests;
 
 #[path = "parallel_cylinder_contact_shell_proof/internal_tangent.rs"]
 mod internal_tangent;
@@ -80,10 +84,11 @@ pub(super) fn certify_parallel_cylinder_contact_shell(
     scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
     let shell = store.get(shell_id)?;
-    if !matches!(shell.faces.len(), 5 | 6) || !shell.edges.is_empty() || shell.vertex.is_some() {
+    if !matches!(shell.faces.len(), 5 | 6 | 7) || !shell.edges.is_empty() || shell.vertex.is_some()
+    {
         return Ok(None);
     }
-    let mut cylinders = Vec::with_capacity(2);
+    let mut cylinders = Vec::with_capacity(3);
     let mut planes = Vec::with_capacity(4);
     for &face_id in &shell.faces {
         let face = store.get(face_id)?;
@@ -96,10 +101,9 @@ pub(super) fn certify_parallel_cylinder_contact_shell(
             _ => return Ok(None),
         }
     }
-    let [(first_face, first), (second_face, second)] = cylinders.as_slice() else {
-        return Ok(None);
-    };
-    if !matches!(planes.len(), 3 | 4) || planes.len() + cylinders.len() != shell.faces.len() {
+    if !matches!((cylinders.len(), planes.len()), (2, 3) | (2, 4) | (3, 4))
+        || planes.len() + cylinders.len() != shell.faces.len()
+    {
         return Ok(None);
     }
 
@@ -117,6 +121,12 @@ pub(super) fn certify_parallel_cylinder_contact_shell(
             .charge(PARALLEL_CYLINDER_CONTACT_SHELL_WORK, work)?;
     }
 
+    if cylinders.len() == 3 {
+        return internal_tangent::certify_internal_tangent_contact(store, shell_id, &cylinders);
+    }
+    let [(first_face, first), (second_face, second)] = cylinders.as_slice() else {
+        return Ok(None);
+    };
     if planes.len() == 4 {
         return certify_strict_secant_contact(
             store,
@@ -132,11 +142,7 @@ pub(super) fn certify_parallel_cylinder_contact_shell(
     if nested.is_some() {
         return Ok(nested);
     }
-    internal_tangent::certify_internal_tangent_contact(
-        store,
-        shell_id,
-        [(*first_face, *first), (*second_face, *second)],
-    )
+    internal_tangent::certify_internal_tangent_contact(store, shell_id, &cylinders)
 }
 
 fn certify_nested_contact(

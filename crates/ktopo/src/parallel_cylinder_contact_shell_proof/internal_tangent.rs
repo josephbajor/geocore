@@ -1,11 +1,12 @@
-//! Compact internally tangent radius-transition shell theorem.
+//! Internally tangent radius-transition shell theorem.
 //!
-//! Two bounded full-period contact circles share one exact tangent vertex and
-//! form the two fins of one pinched shoulder loop. The remaining endpoint of
-//! each cylinder is an endpoint-free far cap. Exact circle tangency, complete
-//! fin incidence, certified local loops, opposite axial sides, and coherent
-//! winding identify the regularized union boundary without relying on
-//! constructor or face-storage order.
+//! Every cylinder band has exactly two complete ring boundaries. Bounded
+//! contact rings form a connected path of one or two exact tangent shoulders;
+//! the two degree-one bands own the only endpoint-free far caps. Each shoulder
+//! is one two-fin pinched loop whose complete-period edges share one tangent
+//! vertex. This incidence graph covers both the compact two-band shoulder and
+//! the three-band/two-shoulder chain without relying on face storage order,
+//! cylinder order, or authored axis direction.
 
 use super::*;
 use crate::analytic_tangency::{
@@ -13,147 +14,127 @@ use crate::analytic_tangency::{
 };
 use crate::loop_proof::is_one_vertex_full_period_circle_edge;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct TangentBoundary {
     ring: RingBoundary,
     vertex: VertexId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+enum TangentBandBoundary {
+    Far(RingBoundary),
+    Contact(TangentBoundary),
+}
+
+impl TangentBandBoundary {
+    const fn ring(self) -> RingBoundary {
+        match self {
+            Self::Far(ring) => ring,
+            Self::Contact(contact) => contact.ring,
+        }
+    }
+
+    const fn contact(self) -> Option<TangentBoundary> {
+        match self {
+            Self::Far(_) => None,
+            Self::Contact(contact) => Some(contact),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 struct TangentBand {
     face: FaceId,
     cylinder: Cylinder,
-    far: RingBoundary,
+    boundaries: [TangentBandBoundary; 2],
+}
+
+impl TangentBand {
+    fn contacts(&self) -> impl Iterator<Item = TangentBoundary> + '_ {
+        self.boundaries
+            .iter()
+            .filter_map(|boundary| boundary.contact())
+    }
+
+    fn contact_count(&self) -> usize {
+        self.contacts().count()
+    }
+
+    fn other_ring(&self, edge: EdgeId) -> Option<RingBoundary> {
+        let mut matching = 0;
+        let mut other = None;
+        for boundary in self.boundaries {
+            let ring = boundary.ring();
+            if ring.edge == edge {
+                matching += 1;
+            } else if other.replace(ring).is_some() {
+                return None;
+            }
+        }
+        if matching == 1 { other } else { None }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShoulderSide {
+    band: usize,
     contact: TangentBoundary,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TangentShoulder {
+    face: FaceId,
+    plane: kgeom::surface::Plane,
+    sides: [ShoulderSide; 2],
+    outer: usize,
+}
+
+impl TangentShoulder {
+    const fn vertex(self) -> VertexId {
+        self.sides[0].contact.vertex
+    }
 }
 
 pub(super) fn certify_internal_tangent_contact(
     store: &Store,
     shell_id: ShellId,
-    cylinders: [(FaceId, Cylinder); 2],
+    cylinders: &[(FaceId, Cylinder)],
 ) -> Result<Option<ShellCertification>> {
-    let [(first_face, first), (second_face, second)] = cylinders;
-    if !vectors_are_exactly_parallel(first.frame().z(), second.frame().z()) {
+    if !matches!(cylinders.len(), 2 | 3) {
         return Ok(None);
     }
-    let (Some(first), Some(second)) = (
-        prepare_tangent_band(store, shell_id, first_face, first)?,
-        prepare_tangent_band(store, shell_id, second_face, second)?,
-    ) else {
-        return Ok(None);
-    };
-    if first.contact.ring.cap_face != second.contact.ring.cap_face
-        || first.far.cap_face == second.far.cap_face
-        || first.contact.ring.edge == second.contact.ring.edge
-        || first.contact.vertex != second.contact.vertex
+    let reference_axis = cylinders[0].1.frame().z();
+    if !cylinders
+        .iter()
+        .all(|(_, cylinder)| vectors_are_exactly_parallel(reference_axis, cylinder.frame().z()))
     {
-        return Ok(None);
-    }
-    let shoulder_face_id = first.contact.ring.cap_face;
-    let shoulder = store.get(shoulder_face_id)?;
-    let [shoulder_loop_id] = shoulder.loops.as_slice() else {
-        return Ok(None);
-    };
-    let shoulder_loop = store.get(*shoulder_loop_id)?;
-    if shoulder_loop.face != shoulder_face_id
-        || shoulder_loop.fins.len() != 2
-        || !shoulder_loop.fins.iter().all(|fin_id| {
-            store.get(*fin_id).is_ok_and(|fin| {
-                [first.contact.ring.edge, second.contact.ring.edge].contains(&fin.edge)
-            })
-        })
-        || certify_loop_simplicity(store, *shoulder_loop_id)? != LoopSimplicity::Certified
-        || certify_loop_orientation(store, shoulder_face_id, *shoulder_loop_id)?.is_none()
-    {
-        return Ok(None);
-    }
-    let SurfaceGeom::Plane(shoulder_plane) = store.get(shoulder.surface)? else {
-        return Ok(None);
-    };
-
-    let (outer, inner) = if first.contact.ring.circle.radius() > second.contact.ring.circle.radius()
-    {
-        (&first, &second)
-    } else if second.contact.ring.circle.radius() > first.contact.ring.circle.radius() {
-        (&second, &first)
-    } else {
-        return Ok(None);
-    };
-    let tangent_point = store.vertex_position(first.contact.vertex)?;
-    if outer.cylinder.radius().to_bits() != outer.contact.ring.circle.radius().to_bits()
-        || inner.cylinder.radius().to_bits() != inner.contact.ring.circle.radius().to_bits()
-        || !circles_are_exactly_internal_tangent(
-            outer.contact.ring.circle,
-            inner.contact.ring.circle,
-        )
-        || !contact_vertex_incidence(store, outer, tangent_point)?
-        || !contact_vertex_incidence(store, inner, tangent_point)?
-    {
-        return Ok(None);
-    }
-    if !all_faces_consumed(
-        store,
-        shell_id,
-        &[
-            first.face,
-            second.face,
-            first.far.cap_face,
-            second.far.cap_face,
-            shoulder_face_id,
-        ],
-    )? {
         return Ok(None);
     }
 
-    let raw_outer_far_side = exact_affine_sign(
-        shoulder_plane.frame().z(),
-        outer.far.circle.frame().origin(),
-        shoulder_plane.frame().origin(),
-    );
-    let raw_inner_far_side = exact_affine_sign(
-        shoulder_plane.frame().z(),
-        inner.far.circle.frame().origin(),
-        shoulder_plane.frame().origin(),
-    );
-    if !matches!(
-        (raw_outer_far_side, raw_inner_far_side),
-        (
-            Some(PredicateOrientation::Negative),
-            Some(PredicateOrientation::Positive)
-        ) | (
-            Some(PredicateOrientation::Positive),
-            Some(PredicateOrientation::Negative)
-        )
-    ) {
+    let mut bands = Vec::with_capacity(3);
+    for &(face, cylinder) in cylinders {
+        let Some(band) = prepare_tangent_band(store, shell_id, face, cylinder)? else {
+            return Ok(None);
+        };
+        bands.push(band);
+    }
+    let Some(shoulders) = prepare_tangent_shoulders(store, shell_id, &bands)? else {
+        return Ok(None);
+    };
+    if !tangent_chain_structure_valid(&bands, &shoulders)
+        || !all_tangent_faces_consumed(store, shell_id, &bands, &shoulders)?
+        || !shoulders_straddle_adjacent_band_interiors(&bands, &shoulders)
+    {
         return Ok(None);
     }
 
-    let shoulder_outward = shoulder_plane.frame().z() * sense_factor(shoulder.sense);
-    let shoulder_orientation_valid = exact_affine_sign(
-        shoulder_outward,
-        outer.far.circle.frame().origin(),
-        shoulder_plane.frame().origin(),
-    ) == Some(PredicateOrientation::Negative)
-        && exact_affine_sign(
-            shoulder_outward,
-            inner.far.circle.frame().origin(),
-            shoulder_plane.frame().origin(),
-        ) == Some(PredicateOrientation::Positive);
-    let outer_band = ContactBand {
-        face: outer.face,
-        cylinder: outer.cylinder,
-        far: outer.far,
-        contact: outer.contact.ring,
-    };
-    let inner_band = ContactBand {
-        face: inner.face,
-        cylinder: inner.cylinder,
-        far: inner.far,
-        contact: inner.contact.ring,
-    };
-    let orientation_valid = shoulder_orientation_valid
-        && band_orientation_valid(store, &outer_band, BandRole::Outer)?
-        && band_orientation_valid(store, &inner_band, BandRole::Inner)?;
+    let mut orientation_valid = true;
+    for shoulder in &shoulders {
+        orientation_valid &= tangent_shoulder_orientation_valid(store, &bands, shoulder)?;
+    }
+    for (band_index, band) in bands.iter().enumerate() {
+        orientation_valid &= tangent_band_orientation_valid(store, band_index, band, &shoulders)?;
+    }
     Ok(Some(ShellCertification {
         embedding: ShellEmbedding::Certified,
         orientation: if orientation_valid {
@@ -164,15 +145,318 @@ pub(super) fn certify_internal_tangent_contact(
     }))
 }
 
-fn contact_vertex_incidence(store: &Store, band: &TangentBand, point: Point3) -> Result<bool> {
-    let edge = store.get(band.contact.ring.edge)?;
+fn prepare_tangent_shoulders(
+    store: &Store,
+    shell_id: ShellId,
+    bands: &[TangentBand],
+) -> Result<Option<Vec<TangentShoulder>>> {
+    let mut shoulder_faces = Vec::with_capacity(2);
+    for band in bands {
+        for contact in band.contacts() {
+            if !shoulder_faces.contains(&contact.ring.cap_face) {
+                shoulder_faces.push(contact.ring.cap_face);
+            }
+        }
+    }
+    if shoulder_faces.len() + 1 != bands.len() {
+        return Ok(None);
+    }
+
+    let mut shoulders = Vec::with_capacity(2);
+    for face in shoulder_faces {
+        let mut sides = Vec::with_capacity(2);
+        for (band_index, band) in bands.iter().enumerate() {
+            for contact in band.contacts() {
+                if contact.ring.cap_face == face {
+                    sides.push(ShoulderSide {
+                        band: band_index,
+                        contact,
+                    });
+                }
+            }
+        }
+        let [first, second] = sides.as_slice() else {
+            return Ok(None);
+        };
+        let Some(shoulder) =
+            prepare_tangent_shoulder(store, shell_id, bands, face, [*first, *second])?
+        else {
+            return Ok(None);
+        };
+        shoulders.push(shoulder);
+    }
+    if shoulders.len() == 2 && shoulders[0].vertex() == shoulders[1].vertex() {
+        return Ok(None);
+    }
+    Ok(Some(shoulders))
+}
+
+fn prepare_tangent_shoulder(
+    store: &Store,
+    shell_id: ShellId,
+    bands: &[TangentBand],
+    face_id: FaceId,
+    sides: [ShoulderSide; 2],
+) -> Result<Option<TangentShoulder>> {
+    let [first, second] = sides;
+    if first.band == second.band
+        || first.contact.ring.edge == second.contact.ring.edge
+        || first.contact.vertex != second.contact.vertex
+        || first.contact.ring.cap_face != face_id
+        || second.contact.ring.cap_face != face_id
+    {
+        return Ok(None);
+    }
+
+    let face = store.get(face_id)?;
+    let [loop_id] = face.loops.as_slice() else {
+        return Ok(None);
+    };
+    let loop_ = store.get(*loop_id)?;
+    let [first_fin, second_fin] = loop_.fins.as_slice() else {
+        return Ok(None);
+    };
+    let expected_edges = [first.contact.ring.edge, second.contact.ring.edge];
+    let actual_edges = [store.get(*first_fin)?.edge, store.get(*second_fin)?.edge];
+    if face.shell != shell_id
+        || loop_.face != face_id
+        || actual_edges[0] == actual_edges[1]
+        || !actual_edges
+            .iter()
+            .all(|edge| expected_edges.contains(edge))
+        || certify_loop_simplicity(store, *loop_id)? != LoopSimplicity::Certified
+        || certify_loop_orientation(store, face_id, *loop_id)?.is_none()
+    {
+        return Ok(None);
+    }
+    let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
+        return Ok(None);
+    };
+
+    let first_band = bands[first.band];
+    let second_band = bands[second.band];
+    let tangent_point = store.vertex_position(first.contact.vertex)?;
+    if exact_affine_sign(
+        plane.frame().z(),
+        first.contact.ring.circle.frame().origin(),
+        plane.frame().origin(),
+    ) != Some(PredicateOrientation::Zero)
+        || exact_affine_sign(
+            plane.frame().z(),
+            second.contact.ring.circle.frame().origin(),
+            plane.frame().origin(),
+        ) != Some(PredicateOrientation::Zero)
+        || first_band.cylinder.radius().to_bits() != first.contact.ring.circle.radius().to_bits()
+        || second_band.cylinder.radius().to_bits() != second.contact.ring.circle.radius().to_bits()
+        || !circles_are_exactly_internal_tangent(
+            first.contact.ring.circle,
+            second.contact.ring.circle,
+        )
+        || !contact_vertex_incidence(store, first.contact, tangent_point)?
+        || !contact_vertex_incidence(store, second.contact, tangent_point)?
+    {
+        return Ok(None);
+    }
+    let outer = if first.contact.ring.circle.radius() > second.contact.ring.circle.radius() {
+        0
+    } else if second.contact.ring.circle.radius() > first.contact.ring.circle.radius() {
+        1
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(TangentShoulder {
+        face: face_id,
+        plane: *plane,
+        sides,
+        outer,
+    }))
+}
+
+fn tangent_chain_structure_valid(bands: &[TangentBand], shoulders: &[TangentShoulder]) -> bool {
+    if shoulders.len() + 1 != bands.len() {
+        return false;
+    }
+    let mut far_count = 0;
+    for (band_index, band) in bands.iter().enumerate() {
+        let degree = shoulders
+            .iter()
+            .flat_map(|shoulder| shoulder.sides)
+            .filter(|side| side.band == band_index)
+            .count();
+        if degree == 0 || degree != band.contact_count() {
+            return false;
+        }
+        far_count += band
+            .boundaries
+            .iter()
+            .filter(|boundary| matches!(boundary, TangentBandBoundary::Far(_)))
+            .count();
+    }
+    if far_count != 2 {
+        return false;
+    }
+
+    let mut reached = [false; 3];
+    reached[0] = true;
+    for _ in 0..bands.len() {
+        for shoulder in shoulders {
+            let [first, second] = shoulder.sides;
+            if reached[first.band] || reached[second.band] {
+                reached[first.band] = true;
+                reached[second.band] = true;
+            }
+        }
+    }
+    reached[..bands.len()].iter().all(|value| *value)
+}
+
+fn all_tangent_faces_consumed(
+    store: &Store,
+    shell_id: ShellId,
+    bands: &[TangentBand],
+    shoulders: &[TangentShoulder],
+) -> Result<bool> {
+    let mut roles = Vec::with_capacity(7);
+    roles.extend(bands.iter().map(|band| band.face));
+    for band in bands {
+        for boundary in band.boundaries {
+            if let TangentBandBoundary::Far(far) = boundary {
+                roles.push(far.cap_face);
+            }
+        }
+    }
+    roles.extend(shoulders.iter().map(|shoulder| shoulder.face));
+    all_faces_consumed(store, shell_id, &roles)
+}
+
+fn shoulders_straddle_adjacent_band_interiors(
+    bands: &[TangentBand],
+    shoulders: &[TangentShoulder],
+) -> bool {
+    shoulders.iter().all(|shoulder| {
+        let [first, second] = shoulder.sides;
+        let contact_origin = first.contact.ring.circle.frame().origin();
+        let Some(first_other) = bands[first.band].other_ring(first.contact.ring.edge) else {
+            return false;
+        };
+        let Some(second_other) = bands[second.band].other_ring(second.contact.ring.edge) else {
+            return false;
+        };
+        let first_side = exact_affine_sign(
+            shoulder.plane.frame().z(),
+            first_other.circle.frame().origin(),
+            contact_origin,
+        );
+        let second_side = exact_affine_sign(
+            shoulder.plane.frame().z(),
+            second_other.circle.frame().origin(),
+            contact_origin,
+        );
+        matches!(
+            (first_side, second_side),
+            (
+                Some(PredicateOrientation::Negative),
+                Some(PredicateOrientation::Positive)
+            ) | (
+                Some(PredicateOrientation::Positive),
+                Some(PredicateOrientation::Negative)
+            )
+        )
+    })
+}
+
+fn tangent_shoulder_orientation_valid(
+    store: &Store,
+    bands: &[TangentBand],
+    shoulder: &TangentShoulder,
+) -> Result<bool> {
+    let face = store.get(shoulder.face)?;
+    let outward = shoulder.plane.frame().z() * sense_factor(face.sense);
+    let contact_origin = shoulder.sides[0].contact.ring.circle.frame().origin();
+    for (side_index, side) in shoulder.sides.iter().enumerate() {
+        let Some(other) = bands[side.band].other_ring(side.contact.ring.edge) else {
+            return Ok(false);
+        };
+        let expected = if side_index == shoulder.outer {
+            PredicateOrientation::Negative
+        } else {
+            PredicateOrientation::Positive
+        };
+        if exact_affine_sign(outward, other.circle.frame().origin(), contact_origin)
+            != Some(expected)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn tangent_band_orientation_valid(
+    store: &Store,
+    band_index: usize,
+    band: &TangentBand,
+    shoulders: &[TangentShoulder],
+) -> Result<bool> {
+    if store.get(band.face)?.sense != Sense::Forward {
+        return Ok(false);
+    }
+    let [first, second] = band.boundaries;
+    let (low, high) = if first.ring().axial_parameter < second.ring().axial_parameter {
+        (first, second)
+    } else if second.ring().axial_parameter < first.ring().axial_parameter {
+        (second, first)
+    } else {
+        return Ok(false);
+    };
+    if !low.ring().side_traverses_positive_u || high.ring().side_traverses_positive_u {
+        return Ok(false);
+    }
+    for (boundary, base_expected) in [(low, -1), (high, 1)] {
+        let expected = match boundary.contact() {
+            Some(contact) => {
+                let Some(inner) = contact_is_inner(shoulders, band_index, contact.ring.edge) else {
+                    return Ok(false);
+                };
+                if inner { -base_expected } else { base_expected }
+            }
+            None => base_expected,
+        };
+        let ring = boundary.ring();
+        let cap = store.get(ring.cap_face)?;
+        if oriented_axis_alignment(ring.cap_axis_alignment, cap.sense) != Some(expected) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn contact_is_inner(shoulders: &[TangentShoulder], band: usize, edge: EdgeId) -> Option<bool> {
+    let mut found = None;
+    for shoulder in shoulders {
+        for (side_index, side) in shoulder.sides.iter().enumerate() {
+            if side.band == band && side.contact.ring.edge == edge {
+                if found.replace(side_index != shoulder.outer).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    found
+}
+
+fn contact_vertex_incidence(
+    store: &Store,
+    contact: TangentBoundary,
+    point: Point3,
+) -> Result<bool> {
+    let edge = store.get(contact.ring.edge)?;
     let Some((lo, hi)) = edge.bounds else {
         return Ok(false);
     };
     Ok([lo, hi].into_iter().all(|parameter| {
         point_is_within_circle_endpoint_envelope(
             point,
-            band.contact.ring.circle,
+            contact.ring.circle,
             parameter,
             LINEAR_RESOLUTION,
         )
@@ -191,44 +475,45 @@ fn prepare_tangent_band(
     {
         return Ok(None);
     }
-    let mut far = None;
-    let mut contact = None;
+    let mut boundaries = Vec::with_capacity(2);
     for &loop_id in &face.loops {
         let loop_ = store.get(loop_id)?;
         let [fin_id] = loop_.fins.as_slice() else {
             return Ok(None);
         };
         let edge = store.get(store.get(*fin_id)?.edge)?;
-        if edge.bounds.is_none() {
+        let boundary = if edge.bounds.is_none() {
             let Some(candidate) = prepare_boundary(store, shell_id, face_id, cylinder, loop_id)?
             else {
                 return Ok(None);
             };
-            if store.get(candidate.cap_face)?.loops.len() != 1 || far.replace(candidate).is_some() {
+            if store.get(candidate.cap_face)?.loops.len() != 1 {
                 return Ok(None);
             }
+            TangentBandBoundary::Far(candidate)
         } else {
             let Some(candidate) =
                 prepare_tangent_boundary(store, shell_id, face_id, cylinder, loop_id)?
             else {
                 return Ok(None);
             };
-            if contact.replace(candidate).is_some() {
-                return Ok(None);
-            }
-        }
+            TangentBandBoundary::Contact(candidate)
+        };
+        boundaries.push(boundary);
     }
-    let (Some(far), Some(contact)) = (far, contact) else {
+    let [first, second] = boundaries.as_slice() else {
         return Ok(None);
     };
-    if far.edge == contact.ring.edge || far.cap_face == contact.ring.cap_face {
+    if first.ring().edge == second.ring().edge
+        || first.ring().cap_face == second.ring().cap_face
+        || first.contact().is_none() && second.contact().is_none()
+    {
         return Ok(None);
     }
     Ok(Some(TangentBand {
         face: face_id,
         cylinder,
-        far,
-        contact,
+        boundaries: [*first, *second],
     }))
 }
 
@@ -328,6 +613,11 @@ fn prepare_tangent_boundary(
         || side_use.closure_winding().is_some()
         || cap_use.closure_winding().is_some()
         || cap_circle.radius().to_bits() != circle.radius().to_bits()
+        || !axis_parameter_identity_is_exact(
+            circle.frame().origin(),
+            *cylinder.frame(),
+            side_line.origin().y,
+        )
     {
         return Ok(None);
     }
@@ -365,4 +655,21 @@ fn prepare_tangent_boundary(
         },
         vertex,
     }))
+}
+
+/// Prove the pcurve height against the authored cylinder axis without making
+/// a rounded frame evaluation into topology authority.
+fn axis_parameter_identity_is_exact(point: Point3, frame: Frame, parameter: f64) -> bool {
+    let point = point.to_array();
+    let origin = frame.origin().to_array();
+    let axis = frame.z().to_array();
+    (0..3).all(|component| {
+        affine_dot3(
+            [1.0, axis[component], -1.0],
+            [origin[component], parameter, point[component]],
+            [0.0; 3],
+            0.0,
+        )
+        .is_some_and(|value| value.sign() == PredicateOrientation::Zero)
+    })
 }

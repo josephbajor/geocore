@@ -65,8 +65,9 @@ commits the certified containment, coincidence, and strict-secancy families
 above. Exact external tangency returns two independent source copies. Through
 positive axial overlap, exact internal tangency also returns contained-radius
 intersection/difference bands, covered-window source copies, and a compact
-one-tail Unite shoulder; two-tail Unite and containing-minus-contained remain
-typed topology gaps.
+one-tail Unite shoulder or canonical two-tail 7F/6E/2V shoulder chain;
+containing-minus-contained remains a typed pinched-topology gap. Skew
+Cylinder/Cylinder SSI is the next curved-intersection frontier.
 
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic
