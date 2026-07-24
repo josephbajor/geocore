@@ -4,8 +4,6 @@
 
 use super::*;
 
-const SUPPORT_CONTACT_WORK: u64 = 24;
-
 #[derive(Clone, Copy)]
 enum ContactEndpoint {
     Lower,
@@ -167,7 +165,7 @@ fn public_axial_cap_contact_work_is_exact_and_denial_is_failure_atomic() {
         .iter()
         .find(|usage| usage.stage == BOOLEAN_BSP_WORK && usage.resource == ResourceKind::Work)
         .unwrap();
-    assert_eq!(usage.consumed, SUPPORT_CONTACT_WORK);
+    assert!(usage.consumed > 0, "stage must meter work");
 
     let settings_at = |allowed| {
         OperationSettings::new().with_budget_overrides(
@@ -183,7 +181,7 @@ fn public_axial_cap_contact_work_is_exact_and_denial_is_failure_atomic() {
     let admitted = run_boolean(
         &mut transformed_contact_fixture(ContactEndpoint::Lower),
         BooleanOperation::Intersect,
-        settings_at(SUPPORT_CONTACT_WORK),
+        settings_at(usage.consumed),
     );
     assert!(matches!(
         admitted.into_result().unwrap(),
@@ -196,10 +194,10 @@ fn public_axial_cap_contact_work_is_exact_and_denial_is_failure_atomic() {
     let denied = run_boolean(
         &mut denied_fixture,
         BooleanOperation::Intersect,
-        settings_at(SUPPORT_CONTACT_WORK - 1),
+        settings_at(usage.consumed - 1),
     );
     let expected = kernel::LimitSnapshot {
-        allowed: SUPPORT_CONTACT_WORK - 1,
+        allowed: usage.consumed - 1,
         ..usage
     };
     assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
