@@ -768,10 +768,10 @@ fn source_plane(store: &Store, face: RawFaceId) -> Result<Plane, ContactPlanGap>
     }
 }
 
-fn source_face_data<'a>(
-    store: &'a Store,
+fn source_face_data(
+    store: &Store,
     face: RawFaceId,
-) -> Result<&'a ktopo::entity::Face, ContactPlanGap> {
+) -> Result<&ktopo::entity::Face, ContactPlanGap> {
     store.get(face).map_err(|_| ContactPlanGap::SourceTopology)
 }
 

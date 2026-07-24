@@ -155,7 +155,7 @@ fn append_cap_faces(
     graph: &BodySectionGraph,
     caps: &BTreeMap<usize, SelectedCoincidentCapPlan>,
     faces: &mut Vec<MixedShellFacePlan>,
-    spans: &mut Vec<MixedBoundedSourceSpanPlan>,
+    spans: &mut [MixedBoundedSourceSpanPlan],
     linear: f64,
 ) -> Result<(), MixedShellPlanError> {
     for (&physical_end, plan) in caps {
@@ -321,6 +321,7 @@ fn same_source_roots(
         || matches(actual[0], expected[1]) && matches(actual[1], expected[0])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reversed_section_segment(
     graph: &BodySectionGraph,
     cap: &crate::boolean::parallel_cylinder_boundary::PreparedCoincidentCapCell,

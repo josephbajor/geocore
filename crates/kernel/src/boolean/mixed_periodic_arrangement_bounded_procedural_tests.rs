@@ -56,17 +56,17 @@ fn procedural_endpoint_signature(graph: &BodySectionGraph) -> Vec<(usize, [usize
         .curve_fragments()
         .iter()
         .enumerate()
-        .filter_map(|(fragment_index, fragment)| {
+        .filter(|(_, fragment)| {
             matches!(
                 fragment.span(),
                 SectionCurveFragmentSpan::BoundedProcedural { .. }
             )
-            .then(|| {
-                (
-                    fragment_index,
-                    fragment_endpoints(fragment_index, fragment).unwrap(),
-                )
-            })
+        })
+        .map(|(fragment_index, fragment)| {
+            (
+                fragment_index,
+                fragment_endpoints(fragment_index, fragment).unwrap(),
+            )
         })
         .collect()
 }

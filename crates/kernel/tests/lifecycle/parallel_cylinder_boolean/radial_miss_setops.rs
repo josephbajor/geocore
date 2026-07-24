@@ -484,9 +484,7 @@ fn assert_certified_relation(case: CylinderRelationCase) {
 
 fn exact_contact_perpendicular(frame: Frame) -> Vec3 {
     let axis = frame.z();
-    if axis.x == 0.0 && axis.y == 0.0 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else if axis.x == 0.0 {
+    if axis.x == 0.0 {
         Vec3::new(1.0, 0.0, 0.0)
     } else if axis.y == 0.0 {
         Vec3::new(0.0, 1.0, 0.0)
@@ -951,10 +949,10 @@ fn assert_created_source_copies(
             assert_eq!(sources, [fixture.outer.clone(), fixture.inner.clone()]);
         }
         SetOperation::Subtract if swapped => {
-            assert_eq!(sources, [fixture.inner.clone()]);
+            assert_eq!(sources, std::slice::from_ref(&fixture.inner));
         }
         SetOperation::Subtract => {
-            assert_eq!(sources, [fixture.outer.clone()]);
+            assert_eq!(sources, std::slice::from_ref(&fixture.outer));
         }
     }
     let bodies = created.bodies().to_vec();

@@ -434,10 +434,11 @@ fn contact_is_inner(shoulders: &[TangentShoulder], band: usize, edge: EdgeId) ->
     let mut found = None;
     for shoulder in shoulders {
         for (side_index, side) in shoulder.sides.iter().enumerate() {
-            if side.band == band && side.contact.ring.edge == edge {
-                if found.replace(side_index != shoulder.outer).is_some() {
-                    return None;
-                }
+            if side.band == band
+                && side.contact.ring.edge == edge
+                && found.replace(side_index != shoulder.outer).is_some()
+            {
+                return None;
             }
         }
     }

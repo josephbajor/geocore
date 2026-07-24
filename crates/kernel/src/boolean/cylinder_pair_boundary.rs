@@ -961,7 +961,7 @@ mod tests {
                 coverage[face.operand][cut.key().fragment()] += 1;
             }
         }
-        for fragment in 0..graph.curve_fragments().len() {
+        for (fragment, _) in graph.curve_fragments().iter().enumerate() {
             assert_eq!(
                 [coverage[0][fragment], coverage[1][fragment]],
                 [1, 1],

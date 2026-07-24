@@ -703,9 +703,7 @@ impl SurfacePatch {
                 let x = interval_vec_dot(frame.x(), axis);
                 let y = interval_vec_dot(frame.y(), axis);
                 let amplitude = (x.square() + y.square()).sqrt()? * Interval::point(radius);
-                if !finite_interval(amplitude).is_some() {
-                    return None;
-                }
+                finite_interval(amplitude)?;
                 finite_interval(center + Interval::new(-amplitude.hi().abs(), amplitude.hi().abs()))
             }
         }?;

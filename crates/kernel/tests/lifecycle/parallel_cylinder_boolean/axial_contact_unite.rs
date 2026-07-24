@@ -19,6 +19,11 @@ const UPPER_HEIGHT: f64 = 0.5;
 // internal `(0,0,4,5,8,8) => N=26`, coincident `(0,0,2,3,4,4) => N=14`,
 // and strict secant `(2,4,2,6,8,12) => N=35`.
 
+/// Deterministic inverse cosine over the kernel-owned `atan2`.
+fn deterministic_acos(value: f64) -> f64 {
+    kcore::math::atan2((1.0 - value * value).sqrt(), value)
+}
+
 fn contact_shell_stage() -> kernel::StageId {
     kernel::StageId::new("ktopo.check.parallel-cylinder-contact-shell-work").unwrap()
 }
@@ -269,12 +274,12 @@ fn disk_overlap_area(case: ContactCase, fixture: &ContactFixture) -> f64 {
     match case.radial_overlap {
         RadialOverlap::StrictSecant => {
             let distance = fixture.radial_distance;
-            let first_angle = ((distance.powi(2) + first.powi(2) - second.powi(2))
-                / (2.0 * distance * first))
-                .acos();
-            let second_angle = ((distance.powi(2) + second.powi(2) - first.powi(2))
-                / (2.0 * distance * second))
-                .acos();
+            let first_angle = deterministic_acos(
+                (distance.powi(2) + first.powi(2) - second.powi(2)) / (2.0 * distance * first),
+            );
+            let second_angle = deterministic_acos(
+                (distance.powi(2) + second.powi(2) - first.powi(2)) / (2.0 * distance * second),
+            );
             let radical = (-distance + first + second)
                 * (distance + first - second)
                 * (distance - first + second)

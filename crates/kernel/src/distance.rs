@@ -408,6 +408,9 @@ impl BodyDistanceRefusal {
 }
 
 /// Full-check evidence paired with a certified distance or a typed refusal.
+// The certified distance stays inline so the public outcome hands the
+// certificate off by value without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum BodyDistanceOutcome {
     /// Both Full checks and the whole-body distance theorem certified.
@@ -452,6 +455,9 @@ impl BodyDistanceOutcome {
 }
 
 /// Full-check evidence paired with a clearance assessment or distance refusal.
+// The certified assessment stays inline so the public outcome hands the
+// certificate off by value without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum BodyClashOutcome {
     /// The distance certificate supports a threshold assessment.

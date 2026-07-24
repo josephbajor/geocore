@@ -721,8 +721,8 @@ fn assert_contained_skew_branch(
             "Section traversal opposes the first-outward-normal cross second-outward-normal rule"
         );
 
-        for operand in 0..2 {
-            let uv = pcurves[operand].eval(parameter);
+        for (operand, pcurve) in pcurves.iter().enumerate() {
+            let uv = pcurve.eval(parameter);
             let face = part.face(branch.faces()[operand].clone()).unwrap();
             let lifted = part
                 .evaluate_surface(SurfaceEvaluationRequest::new(
@@ -1029,14 +1029,11 @@ fn assert_bounded_procedural_fragment(
         for operand in 0..2 {
             let uv = skew_pcurve(branch, operand).eval(end.inside_carrier_parameter());
             let uv = [uv.x, uv.y];
-            for coordinate in 0..2 {
+            for (coordinate, &uv_value) in uv.iter().enumerate() {
                 assert!(
-                    root.corridor().pcurves()[operand].stored_uv()[coordinate]
-                        .contains(uv[coordinate])
+                    root.corridor().pcurves()[operand].stored_uv()[coordinate].contains(uv_value)
                 );
-                assert!(
-                    adjacent.pcurves()[operand].stored_uv()[coordinate].contains(uv[coordinate])
-                );
+                assert!(adjacent.pcurves()[operand].stored_uv()[coordinate].contains(uv_value));
             }
         }
 

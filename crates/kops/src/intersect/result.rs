@@ -578,6 +578,9 @@ pub fn accept_curve_surface_candidate(
 }
 
 /// Curve geometry carrying a surface/surface intersection branch.
+// The skew composite carrier stays inline so the established value-carrier
+// contract survives branch handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum SurfaceIntersectionCurve {
     /// Straight intersection branch.

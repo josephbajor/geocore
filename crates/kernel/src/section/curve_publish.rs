@@ -27,6 +27,7 @@ pub(super) struct PublishedCurves {
     pub(super) has_mixed_stitch_defects: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn publish_curves(
     part: &PartId,
     branches: &[SectionBranch],

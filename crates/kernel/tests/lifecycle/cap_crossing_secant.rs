@@ -12,7 +12,12 @@ use kernel::{
 
 const RADIUS: f64 = 1.5;
 const OFFSET_X: f64 = 0.5;
-const ROOT_Y: f64 = 1.414_213_562_373_095_1;
+const ROOT_Y: f64 = core::f64::consts::SQRT_2;
+
+/// Deterministic inverse cosine over the kernel-owned `atan2`.
+fn deterministic_acos(value: f64) -> f64 {
+    kcore::math::atan2((1.0 - value * value).sqrt(), value)
+}
 const CYLINDER_HEIGHT: f64 = 2.0;
 const OUTER_X: f64 = 2.5;
 const BLOCK_Y: f64 = 6.0;
@@ -383,12 +388,8 @@ fn assert_graph(
             .collect::<Vec<_>>()
     });
     for branch in graph.branches() {
-        for slot in 0..2 {
-            assert!(
-                operand_faces[slot].contains(&branch.faces()[slot]),
-                "{}",
-                case.name
-            );
+        for (slot, faces) in operand_faces.iter().enumerate() {
+            assert!(faces.contains(&branch.faces()[slot]), "{}", case.name);
         }
     }
 
@@ -532,14 +533,14 @@ fn mesh_volume(positions: &[Point3], triangles: &[[u32; 3]]) -> f64 {
 }
 
 fn cap_crossing_segment_volume() -> f64 {
-    let segment_area = RADIUS * RADIUS * (OFFSET_X / RADIUS).acos()
+    let segment_area = RADIUS * RADIUS * deterministic_acos(OFFSET_X / RADIUS)
         - OFFSET_X * (RADIUS * RADIUS - OFFSET_X * OFFSET_X).sqrt();
     segment_area * CYLINDER_HEIGHT
 }
 
 fn expected_surface_area(operation: BooleanOperation, case: CapCrossingCase) -> f64 {
     let chord = 2.0 * ROOT_Y;
-    let theta = (OFFSET_X / RADIUS).acos();
+    let theta = deterministic_acos(OFFSET_X / RADIUS);
     let arc = 2.0 * RADIUS * theta;
     let segment = RADIUS * RADIUS * theta - OFFSET_X * ROOT_Y;
     let block =
@@ -599,7 +600,7 @@ impl AnalyticMass {
 }
 
 fn cap_crossing_mass(operation: BooleanOperation, case: CapCrossingCase) -> AnalyticMass {
-    let theta = (OFFSET_X / RADIUS).acos();
+    let theta = deterministic_acos(OFFSET_X / RADIUS);
     let segment_area = RADIUS * RADIUS * theta - OFFSET_X * ROOT_Y;
     let segment_first_x = 4.0 * ROOT_Y / 3.0;
     let segment_second_x = 81.0 * theta / 64.0 + 7.0 * ROOT_Y / 32.0;

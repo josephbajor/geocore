@@ -213,6 +213,9 @@ impl CertifiedDiskCapChord {
 }
 
 /// Fail-closed result of clipping one circular cap disk.
+// The certified chord stays inline so the clip outcome hands the certificate
+// off by value without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum DiskCapClipOutcome {
     Chord(CertifiedDiskCapChord),

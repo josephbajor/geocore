@@ -95,6 +95,9 @@ impl PreparedCoincidentCapCell {
 }
 
 /// Opaque payload preserved through representation-independent selection.
+// The prepared cap cell stays inline so selection replays the certified
+// payload by value without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParallelCoincidentBoundaryPayload {
     Arranged,
@@ -102,6 +105,9 @@ pub(crate) enum ParallelCoincidentBoundaryPayload {
 }
 
 /// Exact selected side use that bounds one coalesced planar cap.
+// The source-span witnesses stay inline so the established Copy selection
+// contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectedCoincidentCapBoundaryUse {
     SourceSpan {
@@ -398,12 +404,12 @@ pub(crate) fn prepare_parallel_cylinder_coincident_boundary(
             boundary,
         });
         let mut contributors = 0_usize;
-        for operand in 0..2 {
+        for (operand, body) in bodies.iter().enumerate() {
             let Some(source) = end.source(operand) else {
                 continue;
             };
             contributors += 1;
-            let target_face = FaceId::new(bodies[operand].part().clone(), source.cap_face());
+            let target_face = FaceId::new(body.part().clone(), source.cap_face());
             let target_source = source_face_key(store, graph, &target_face, operand)
                 .map_err(|_| MixedBoundaryError::SourceTopology)?;
             let cap = PreparedCoincidentCapCell {

@@ -391,13 +391,16 @@ mod tests {
         );
     }
 
+    /// One named directed-cycle case: symbolic edges plus the expected order.
+    type DirectedCycleCase<'a> = (
+        &'a str,
+        &'a [(SymbolicSource, SymbolicEndpoint, SymbolicEndpoint)],
+        &'a [SymbolicSource],
+    );
+
     #[test]
     fn mixed_family_cycles_share_one_directed_endpoint_graph() {
-        let cases: &[(
-            &str,
-            &[(SymbolicSource, SymbolicEndpoint, SymbolicEndpoint)],
-            &[SymbolicSource],
-        )] = &[
+        let cases: &[DirectedCycleCase] = &[
             (
                 "planar chord plus arc",
                 &[
@@ -456,14 +459,17 @@ mod tests {
         }
     }
 
+    /// One named refusal case: occurrences, cycle count, expected defects.
+    type RefusalCase<'a> = (
+        &'a str,
+        &'a [EndpointPairOccurrence<SymbolicSource>],
+        usize,
+        &'a [MixedStitchDefect],
+    );
+
     #[test]
     fn open_and_branching_symbolic_incidence_are_refused() {
-        let cases: &[(
-            &str,
-            &[EndpointPairOccurrence<SymbolicSource>],
-            usize,
-            &[MixedStitchDefect],
-        )] = &[
+        let cases: &[RefusalCase] = &[
             (
                 "open chord",
                 &[EndpointPairOccurrence {

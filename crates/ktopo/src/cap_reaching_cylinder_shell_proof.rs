@@ -694,6 +694,7 @@ fn rulings_biject_vertices(
     Ok(used.len() == rulings.len())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn certification_from_orientation(
     store: &Store,
     host_face: FaceId,

@@ -15,6 +15,16 @@ const BOUNDED_LOWER: f64 = 1.8;
 const BOUNDED_UPPER: f64 = 1.9;
 const TRANSVERSE_HALF_HEIGHT: f64 = 1.25;
 const TRANSVERSE_RADIUS: f64 = 2.0;
+
+/// Deterministic inverse cosine over the kernel-owned `atan2`.
+fn deterministic_acos(value: f64) -> f64 {
+    kcore::math::atan2((1.0 - value * value).sqrt(), value)
+}
+
+/// Deterministic inverse sine over the kernel-owned `atan2`.
+fn deterministic_asin(value: f64) -> f64 {
+    kcore::math::atan2(value, (1.0 - value * value).sqrt())
+}
 const EXPECTED_LOBE_PROPERTY_WORK: u64 = 1_463_426;
 
 struct Fixture {
@@ -137,27 +147,27 @@ fn oracle() -> LobeOracle {
     };
     fn section_area(z: f64) -> f64 {
         let threshold = (TRANSVERSE_RADIUS * TRANSVERSE_RADIUS - z * z).sqrt();
-        threshold.acos() - threshold * (1.0 - threshold * threshold).sqrt()
+        deterministic_acos(threshold) - threshold * (1.0 - threshold * threshold).sqrt()
     }
     fn section_y_moment(z: f64) -> f64 {
         let threshold2 = TRANSVERSE_RADIUS * TRANSVERSE_RADIUS - z * z;
-        (2.0 / 3.0) * (1.0 - threshold2).powf(1.5)
+        (2.0 / 3.0) * (1.0 - threshold2) * (1.0 - threshold2).sqrt()
     }
     fn section_z_moment(z: f64) -> f64 {
         z * section_area(z)
     }
     fn section_xx(z: f64) -> f64 {
         let threshold = (TRANSVERSE_RADIUS * TRANSVERSE_RADIUS - z * z).sqrt();
-        let theta = threshold.asin();
+        let theta = deterministic_asin(threshold);
         core::f64::consts::PI / 8.0
             - theta / 4.0
-            - (2.0 * theta).sin() / 6.0
-            - (4.0 * theta).sin() / 48.0
+            - kcore::math::sin(2.0 * theta) / 6.0
+            - kcore::math::sin(4.0 * theta) / 48.0
     }
     fn section_yy(z: f64) -> f64 {
         let threshold = (TRANSVERSE_RADIUS * TRANSVERSE_RADIUS - z * z).sqrt();
-        let theta = threshold.asin();
-        core::f64::consts::PI / 8.0 - theta / 4.0 + (4.0 * theta).sin() / 16.0
+        let theta = deterministic_asin(threshold);
+        core::f64::consts::PI / 8.0 - theta / 4.0 + kcore::math::sin(4.0 * theta) / 16.0
     }
     fn section_zz(z: f64) -> f64 {
         z * z * section_area(z)

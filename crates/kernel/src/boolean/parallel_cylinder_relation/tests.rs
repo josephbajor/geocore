@@ -589,8 +589,8 @@ fn coincident_cap_periodic_projection_excludes_boundary_overlays_and_rejects_hos
         assert_eq!(overlay_fragments.len(), 2 * shared_ends);
 
         let part = fixture.session.part(fixture.part.clone()).unwrap();
-        for operand in 0..2 {
-            let face = FaceId::new(fixture.part.clone(), sources[operand].side_face());
+        for (operand, source) in sources.iter().enumerate() {
+            let face = FaceId::new(fixture.part.clone(), source.side_face());
             let selected = relation.periodic_fragment_subset(operand);
             assert!(selected.windows(2).all(|pair| pair[0] < pair[1]));
             assert_eq!(

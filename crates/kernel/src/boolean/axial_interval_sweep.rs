@@ -136,8 +136,8 @@ impl CertifiedAxialEndpointPreorder {
         comparisons: [AxialEndpointComparison; 6],
     ) -> Result<Self, AxialEndpointPreorderError> {
         let mut relations = [[None; 4]; 4];
-        for index in 0..4 {
-            relations[index][index] = Some(Ordering::Equal);
+        for (index, row) in relations.iter_mut().enumerate() {
+            row[index] = Some(Ordering::Equal);
         }
         for comparison in comparisons {
             let first = comparison.first.index();

@@ -706,16 +706,10 @@ pub(crate) fn certify_periodic_range_window_lift(
         return Some(0);
     }
     let period_interval = Interval::point(period);
-    let Some(lower_turn) =
-        (Interval::point(window.lo) - Interval::point(value.lo)).checked_div(period_interval)
-    else {
-        return None;
-    };
-    let Some(upper_turn) =
-        (Interval::point(window.hi) - Interval::point(value.hi)).checked_div(period_interval)
-    else {
-        return None;
-    };
+    let lower_turn =
+        (Interval::point(window.lo) - Interval::point(value.lo)).checked_div(period_interval)?;
+    let upper_turn =
+        (Interval::point(window.hi) - Interval::point(value.hi)).checked_div(period_interval)?;
     if !finite_interval(lower_turn)
         || !finite_interval(upper_turn)
         || lower_turn.width() >= 1.0

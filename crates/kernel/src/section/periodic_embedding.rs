@@ -629,6 +629,7 @@ struct PeriodicCertificationInput<'a> {
     linear: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn certify_periodic_faces(
     store: &Store,
     part: &PartId,
@@ -1127,6 +1128,7 @@ fn maximal_linear_runs(carried: &[bool]) -> Vec<Vec<usize>> {
     runs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn certify_boundary_trace(
     branches: &[SectionBranch],
     fragments: &[SectionCurveFragment],
@@ -2358,7 +2360,7 @@ fn certify_boundary_pairings(
     }
     certify_universal_cover_matching(transverse)?;
 
-    for source_loop in 0..2 {
+    for (source_loop, &count) in source_root_counts.iter().enumerate() {
         let returning = pairings
             .iter()
             .filter(|pairing| pairing.loops == [source_loop; 2])
@@ -2367,7 +2369,6 @@ fn certify_boundary_pairings(
             for second in (first + 1)..returning.len() {
                 let [first_start, first_end] = returning[first].cyclic_orders;
                 let [second_start, second_end] = returning[second].cyclic_orders;
-                let count = source_root_counts[source_loop];
                 if cyclically_between(second_start, first_start, first_end, count)
                     != cyclically_between(second_end, first_start, first_end, count)
                 {

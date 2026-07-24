@@ -1062,6 +1062,7 @@ fn cylinder_circle_fin(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tangent_cap_face(
     key: AnalyticFaceKey,
     edge: AnalyticEdgeKey,

@@ -8,6 +8,9 @@
 //! preserves shared endpoint identity, and runs read-only analytic-shell
 //! preflight before any transaction is opened.
 
+// The shared plan error retains exact mixed-shell diagnostics inline.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use ktopo::entity::{EdgeId as RawEdgeId, FinId as RawFinId, LoopId as RawLoopId, Sense};
@@ -1668,6 +1671,7 @@ fn planar_loop(
     Ok(MixedShellLoopPlan { uses, vertices })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn disk_loop(
     graph: &BodySectionGraph,
     cell: MixedShellCellKey,
@@ -1739,6 +1743,7 @@ fn disk_loop(
     Ok(MixedShellLoopPlan { uses, vertices })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn periodic_loop(
     graph: &BodySectionGraph,
     cell: MixedShellCellKey,
@@ -2236,8 +2241,8 @@ mod tests {
             other => panic!("fixture lost certified coincident-cap relation: {other:?}"),
         };
         let mut saw_face_local_trace = false;
-        for operand in 0..2 {
-            let face = FaceId::new(part_id.clone(), sources[operand].side_face());
+        for (operand, operand_source) in sources.iter().enumerate() {
+            let face = FaceId::new(part_id.clone(), operand_source.side_face());
             let evidence = crate::section::certify_periodic_face_fragment_subset(
                 &part.state.store,
                 face.clone().part(),

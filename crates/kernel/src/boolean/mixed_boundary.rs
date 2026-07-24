@@ -13,6 +13,9 @@
 //! side's endpoint-free whole-loop identity without inventing a seam vertex;
 //! cut caps retain their finite source-arc and Section-chord lineage.
 
+// The shared boundary error retains exact arrangement diagnostics inline.
+#![allow(clippy::result_large_err)]
+
 use std::collections::BTreeMap;
 
 use kcore::operation::OperationScope;

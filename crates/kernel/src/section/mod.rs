@@ -2391,6 +2391,7 @@ fn adapt_site(part: &PartId, key: stitch::SiteKey) -> SectionSite {
 
 /// Intersect, clip, and merge one surviving candidate pair, appending its
 /// certified spans as stitch segments in canonical along-carrier order.
+#[allow(clippy::too_many_arguments)]
 fn process_pair(
     store: &Store,
     a: &AdmittedFace,

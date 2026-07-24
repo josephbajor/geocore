@@ -10,6 +10,9 @@
 //! spans. No rounded UV or model-space representative is used for an
 //! arrangement decision.
 
+// The shared arrangement error retains exact periodic diagnostics inline.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use ktopo::entity::LoopId as RawLoopId;
@@ -783,11 +786,11 @@ fn adapt_boundary_traces(
                     },
                 );
             }
-            if !covered
+            if covered
                 .entry(owner)
                 .or_default()
                 .insert(component_ordinal, actual_fragment)
-                .is_none()
+                .is_some()
                 || !seen_fragments.insert(actual_fragment)
             {
                 return Err(MixedPeriodicArrangementError::DuplicateFragment(

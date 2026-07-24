@@ -29,6 +29,9 @@ pub(crate) enum CylinderSourceGap {
 }
 
 /// Fail-closed source extraction result.
+// The certified source payload stays inline so the established extraction
+// contract hands the certificate off by value without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CylinderSourceOutcome {
     Ready(CertifiedCylinderSource),

@@ -71,10 +71,7 @@ fn pcurve_context(
     pcurve_use: FinPcurve,
     tolerance: f64,
 ) -> Result<(kgraph::VerifiedSkewCylinderOpenSpanCurveDescriptor, usize), PersistentSkewIncidence> {
-    let (descriptor, source_slot) = match certify_edge_context(store, edge, surface, tolerance) {
-        Ok(value) => value,
-        Err(result) => return Err(result),
-    };
+    let (descriptor, source_slot) = certify_edge_context(store, edge, surface, tolerance)?;
     let certificate = descriptor.certificate();
 
     if descriptor.pcurves()[source_slot] != pcurve_use.curve() {

@@ -409,9 +409,9 @@ pub(super) fn build_verified_cylinder_cylinder_ruling_branch(
         ]
     };
     for operand in 0..2 {
-        for endpoint in 0..2 {
-            endpoint_parameters[operand][endpoint][1] = source_window_parameter_representative(
-                endpoint_parameters[operand][endpoint][1],
+        for endpoint in &mut endpoint_parameters[operand] {
+            endpoint[1] = source_window_parameter_representative(
+                endpoint[1],
                 surface_ranges[operand][1],
                 tolerance,
             )

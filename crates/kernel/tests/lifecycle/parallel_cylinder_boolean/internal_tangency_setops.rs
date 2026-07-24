@@ -471,8 +471,8 @@ fn endpoint_sources(
     source_layouts: &[CylinderEntityLayout; 2],
 ) -> (JournalEntity, Vec<JournalEntity>) {
     let contained_operand = operand_for_role(containing_operand, RadialRole::Contained);
-    for endpoint in 0..2 {
-        if intervals[RadialRole::Contained.index()][endpoint].to_bits() == parameter.to_bits() {
+    for (endpoint, interval) in intervals[RadialRole::Contained.index()].iter().enumerate() {
+        if interval.to_bits() == parameter.to_bits() {
             return (
                 source_layouts[contained_operand].caps[endpoint].clone(),
                 vec![source_layouts[contained_operand].rings[endpoint].clone()],
@@ -480,8 +480,8 @@ fn endpoint_sources(
         }
     }
     let containing_operand = operand_for_role(containing_operand, RadialRole::Containing);
-    for endpoint in 0..2 {
-        if intervals[RadialRole::Containing.index()][endpoint].to_bits() == parameter.to_bits() {
+    for (endpoint, interval) in intervals[RadialRole::Containing.index()].iter().enumerate() {
+        if interval.to_bits() == parameter.to_bits() {
             let cap = source_layouts[containing_operand].caps[endpoint].clone();
             return (
                 cap.clone(),
@@ -571,9 +571,9 @@ fn assert_rebuilt_band_lineage(
     }
 
     for (layout, span) in result_layouts.iter().zip(spans) {
-        for endpoint in 0..2 {
+        for (endpoint, &span_parameter) in span.iter().enumerate() {
             let (cap_source, ring_sources) = endpoint_sources(
-                span[endpoint],
+                span_parameter,
                 intervals,
                 containing_operand,
                 &source_layouts,

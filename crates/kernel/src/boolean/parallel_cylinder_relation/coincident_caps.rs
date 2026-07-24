@@ -209,6 +209,9 @@ struct BoundCoincidentEndpoint {
     overlap_end: usize,
 }
 
+/// Trim-endpoint occurrences as `(endpoint index, per-operand root ordinals)`.
+type CoincidentEndpointOccurrences = Vec<(usize, [usize; 2])>;
+
 /// Upgrade metric cap ordering with Section's exact dual-source endpoint proof.
 ///
 /// Rounded authored frames can give two semantically shared cap centers a
@@ -232,7 +235,7 @@ pub(super) fn reconcile_shared_overlap_ends(
         return Ok(source_ends);
     }
 
-    let mut pairs: Vec<([usize; 2], Vec<(usize, [usize; 2])>)> = Vec::new();
+    let mut pairs: Vec<([usize; 2], CoincidentEndpointOccurrences)> = Vec::new();
     for fragment in graph.curve_fragments() {
         let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
             continue;
@@ -616,10 +619,10 @@ fn certify_coincident_ruling(
         }
         let mut matching_end = None;
         for (overlap_end, source_end) in source_ends.iter().copied().enumerate() {
-            if ruling_endpoint_matches_source_end(graph, cylinders, source_end, branch, end)? {
-                if matching_end.replace(overlap_end).is_some() {
-                    return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
-                }
+            if ruling_endpoint_matches_source_end(graph, cylinders, source_end, branch, end)?
+                && matching_end.replace(overlap_end).is_some()
+            {
+                return Err(ParallelCylinderRelationGap::SectionEndpointProvenance);
             }
         }
         let overlap_end =

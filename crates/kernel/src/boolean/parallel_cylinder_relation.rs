@@ -1445,13 +1445,11 @@ fn certify_cap_arc(
 ) -> core::result::Result<PendingCapArc, ParallelCylinderRelationGap> {
     let mut matching_contributors = Vec::new();
     for (overlap_end, source_end) in overlap_ends.into_iter().enumerate() {
-        for cap_operand in 0..2 {
+        for (cap_operand, cylinder) in cylinders.iter().enumerate() {
             let Some(boundary) = source_end.boundary_for(cap_operand) else {
                 continue;
             };
-            if branch.faces()[cap_operand].raw()
-                == cylinders[cap_operand].boundaries()[boundary].cap_face()
-            {
+            if branch.faces()[cap_operand].raw() == cylinder.boundaries()[boundary].cap_face() {
                 matching_contributors.push((overlap_end, source_end, cap_operand, boundary));
             }
         }
@@ -1548,12 +1546,11 @@ fn bind_endpoint(
         .ok_or(ParallelCylinderRelationGap::SectionEndpointProvenance)?;
     let mut matching_contributors = Vec::new();
     for (overlap_end, source_end) in overlap_ends.into_iter().enumerate() {
-        for cap_operand in 0..2 {
+        for (cap_operand, cylinder) in cylinders.iter().enumerate() {
             let Some(boundary) = source_end.boundary_for(cap_operand) else {
                 continue;
             };
-            if source_parameter.edge().raw() == cylinders[cap_operand].boundaries()[boundary].edge()
-            {
+            if source_parameter.edge().raw() == cylinder.boundaries()[boundary].edge() {
                 matching_contributors.push((overlap_end, source_end, cap_operand, boundary));
             }
         }

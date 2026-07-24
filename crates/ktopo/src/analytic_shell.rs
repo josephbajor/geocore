@@ -137,6 +137,9 @@ impl AnalyticShellSurface {
 }
 
 /// Exact analytic 3D carrier of one bounded topological edge.
+// The persistent skew composite stays inline so the established Copy
+// carrier contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnalyticShellCurve {
     /// Unit-speed line carrier.
@@ -158,6 +161,9 @@ impl AnalyticShellCurve {
 }
 
 /// Exact analytic pcurve representation for one face use.
+// The persistent skew chart stays inline so the established Copy carrier
+// contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnalyticShellPcurve {
     /// Unit-speed parameter-space line.
@@ -759,6 +765,9 @@ impl AnalyticShellInput {
 }
 
 /// Whole-interval proof retained for one pair of analytic face uses.
+// Complete exact proof payloads stay inline so the established Copy
+// certificate contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnalyticEdgeProof {
     /// A finite line lifted through two planar pcurves.
@@ -787,6 +796,9 @@ impl AnalyticEdgeProof {
     }
 }
 
+// Bounded edges keep their complete proof payload inline so the established
+// Copy declaration contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum AnalyticEdgeDeclaration {
     Bounded(AnalyticShellEdge),

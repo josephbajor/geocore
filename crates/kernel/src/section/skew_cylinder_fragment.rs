@@ -849,12 +849,8 @@ fn published_physical_root_parameter(
     section_end: usize,
     evidence: &CertifiedBoundedSkewCylinderEnd,
 ) -> Option<SectionSkewCylinderInterval> {
-    let Some(source) = embedding.source_root_corridor(section_end) else {
-        return None;
-    };
-    let Some(root) = embedding.root_corridor(section_end) else {
-        return None;
-    };
+    let source = embedding.source_root_corridor(section_end)?;
+    let root = embedding.root_corridor(section_end)?;
     let expected_guard = if section_end == 0 {
         embedding.range().lo
     } else {
@@ -885,13 +881,11 @@ fn published_physical_root_parameter(
     {
         return None;
     }
-    let Some(projective) = exact_chart_root_longitude(
+    let projective = exact_chart_root_longitude(
         evidence.carrier_root.chart,
         evidence.carrier_root.projective.lo(),
         evidence.carrier_root.projective.hi(),
-    ) else {
-        return None;
-    };
+    )?;
     periodic_root_interval_matches(projective, source.root_parameter())
         .then_some(physical_parameter)
 }

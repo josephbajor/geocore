@@ -6,6 +6,9 @@
 //! validates the closed two-manifold adjacency contract again, and partitions
 //! faces without consulting geometry, layout names, or raw-handle ordering.
 
+// The shared component error retains exact mixed-shell diagnostics inline.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::materialize::{

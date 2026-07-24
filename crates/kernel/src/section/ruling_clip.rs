@@ -6,6 +6,7 @@
 //! Supported trims are deliberately exact-family and fail closed:
 //! - polygonal loops (including holes and non-convex loops) on a plane, and
 //! - vertex-less whole-period horizontal ring loops on a cylinder.
+//!
 //! Crossings retain conservative carrier- and source-edge-parameter
 //! enclosures.  Root ordinals are intentionally absent: the section
 //! operation's shared root-identity authority assigns them after both

@@ -84,8 +84,7 @@ pub(super) fn certify_parallel_cylinder_contact_shell(
     scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
     let shell = store.get(shell_id)?;
-    if !matches!(shell.faces.len(), 5 | 6 | 7) || !shell.edges.is_empty() || shell.vertex.is_some()
-    {
+    if !matches!(shell.faces.len(), 5..=7) || !shell.edges.is_empty() || shell.vertex.is_some() {
         return Ok(None);
     }
     let mut cylinders = Vec::with_capacity(3);

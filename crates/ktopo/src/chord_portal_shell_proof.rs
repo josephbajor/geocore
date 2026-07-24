@@ -218,10 +218,10 @@ fn proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
         .and_then(|value| value.checked_add(size.checked_mul(32)?)))
 }
 
-fn classify_host(
-    store: &Store,
-    shell_id: ShellId,
-) -> Result<Option<(Vec<HostFacet>, Vec<(Portal, Vec<FaceId>)>)>> {
+/// Recognized host facets plus every portal with its attached feature faces.
+type HostClassification = (Vec<HostFacet>, Vec<(Portal, Vec<FaceId>)>);
+
+fn classify_host(store: &Store, shell_id: ShellId) -> Result<Option<HostClassification>> {
     let shell = store.get(shell_id)?;
     let mut host = Vec::new();
     let mut portals = Vec::new();
@@ -900,7 +900,7 @@ mod tests {
         let bottom_circle = Circle::new(cylinder_frame, radius).unwrap();
         let top_frame = cylinder_frame.with_origin(Point3::new(0.0, 0.0, 2.0));
         let top_circle = Circle::new(top_frame, radius).unwrap();
-        let alpha = (2.0_f64.sqrt()).atan2(0.5);
+        let alpha = kcore::math::atan2(2.0_f64.sqrt(), 0.5);
         let arc = if pocket {
             ParamRange::new(-alpha, alpha)
         } else {

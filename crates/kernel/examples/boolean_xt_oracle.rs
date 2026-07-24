@@ -920,10 +920,15 @@ fn cap_retaining_cylinder_volume() -> f64 {
     core::f64::consts::PI * BOUNDED_ARC_RADIUS * BOUNDED_ARC_RADIUS * BOUNDED_ARC_CYLINDER_HEIGHT
 }
 
+/// Deterministic inverse cosine over the kernel-owned `atan2`.
+fn deterministic_acos(value: f64) -> f64 {
+    kcore::math::atan2((1.0 - value * value).sqrt(), value)
+}
+
 fn cap_crossing_circular_segment_volume() -> f64 {
     let radius = BOUNDED_ARC_RADIUS;
     let offset = CAP_CROSSING_OFFSET_X;
-    let area = radius * radius * (offset / radius).acos()
+    let area = radius * radius * deterministic_acos(offset / radius)
         - offset * (radius * radius - offset * offset).sqrt();
     area * BOUNDED_ARC_CYLINDER_HEIGHT
 }

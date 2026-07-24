@@ -327,9 +327,8 @@ fn assert_complete_common_lineage(
             let body = part.body(body).unwrap();
             body.faces()
                 .unwrap()
-                .into_iter()
                 .map(JournalEntity::Face)
-                .chain(body.edges().unwrap().into_iter().map(JournalEntity::Edge))
+                .chain(body.edges().unwrap().map(JournalEntity::Edge))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -340,9 +339,8 @@ fn assert_complete_common_lineage(
             let body = part.body(body.clone()).unwrap();
             body.faces()
                 .unwrap()
-                .into_iter()
                 .map(JournalEntity::Face)
-                .chain(body.edges().unwrap().into_iter().map(JournalEntity::Edge))
+                .chain(body.edges().unwrap().map(JournalEntity::Edge))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
