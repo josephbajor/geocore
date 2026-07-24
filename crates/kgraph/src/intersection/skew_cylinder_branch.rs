@@ -63,6 +63,7 @@ pub use persistent_family::{
     PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_CELLS_PER_BOUND,
     PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS,
     PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_BOUND,
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_SHEET,
     PersistentSkewCylinderAxialBoundOutcome, PersistentSkewCylinderAxialBoundTag,
     PersistentSkewCylinderAxialBoundary, PersistentSkewCylinderAxialRelation,
     PersistentSkewCylinderAxialRootEventInput, PersistentSkewCylinderFiniteWindowEndpointProof,
@@ -70,7 +71,8 @@ pub use persistent_family::{
     PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
     PersistentSkewCylinderFiniteWindowFamilyReissue,
     PersistentSkewCylinderFiniteWindowMemberCertificate,
-    PersistentSkewCylinderFiniteWindowMemberInput,
+    PersistentSkewCylinderFiniteWindowMemberInput, PersistentSkewCylinderFiniteWindowRootEvent,
+    PersistentSkewCylinderFiniteWindowRootEventKind,
     PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
     PersistentSkewCylinderRootInsideSide, certify_persistent_skew_cylinder_finite_window_family,
     reissue_persistent_skew_cylinder_finite_window_family,
@@ -91,10 +93,15 @@ pub use axial_bound::{
 #[path = "skew_cylinder_finite_window_topology.rs"]
 mod finite_window_topology;
 pub use finite_window_topology::{
-    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowTopologyCertificate,
-    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
-    SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide,
-    classify_skew_cylinder_open_spans,
+    SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER,
+    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_QUERY_COUNT,
+    SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK, SkewCylinderFiniteSheetTopology,
+    SkewCylinderFiniteWindowRootEvent, SkewCylinderFiniteWindowRootEventKind,
+    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
+    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    SkewCylinderOpenSpanTopologyInput, SkewCylinderRootClusterQueryPlan,
+    SkewCylinderRootInsideSide, classify_skew_cylinder_open_spans,
+    plan_skew_cylinder_root_clusters,
 };
 
 #[cfg(test)]

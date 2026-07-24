@@ -1245,13 +1245,24 @@ fn tagged_persistent_vertices(
             return Ok(None);
         };
         let mut endpoints = membership.member().endpoints();
+        let mut endpoint_ordinals = [0, 1];
         if certificate.orientation() == PersistentSkewCylinderOpenSpanOrientation::Reversed {
             endpoints.swap(0, 1);
+            endpoint_ordinals.swap(0, 1);
         }
-        for (index, (vertex, proof)) in [first, second].into_iter().zip(endpoints).enumerate() {
+        for (index, ((vertex, proof), endpoint_ordinal)) in [first, second]
+            .into_iter()
+            .zip(endpoints)
+            .zip(endpoint_ordinals)
+            .enumerate()
+        {
+            let Some(root) = membership.endpoint_root(endpoint_ordinal, 0) else {
+                return Ok(None);
+            };
             if output
                 .iter()
                 .any(|value: &TaggedVertex| value.vertex == vertex)
+                || proof.root_count() != 1
                 || !point_bits_equal(
                     store.vertex_position(vertex)?,
                     certificate.endpoint_points()[index],
@@ -1261,8 +1272,8 @@ fn tagged_persistent_vertices(
             }
             output.push(TaggedVertex {
                 vertex,
-                tag: proof.tag(),
-                bound: proof.bound(),
+                tag: root.tag,
+                bound: root.bound,
             });
         }
     }

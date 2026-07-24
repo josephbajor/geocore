@@ -67,6 +67,24 @@ impl SecondHarmonicCoefficients {
             && self.a2.is_zero()
             && self.b2.is_zero()
     }
+
+    pub(crate) fn half_angle_polynomial(
+        &self,
+        chart: HalfAngleChart,
+    ) -> Result<ExactPolynomial, RootIsolationFailure> {
+        let tangent = tangent_half_angle_coefficients(self)?;
+        let coefficients = match chart {
+            HalfAngleChart::Tangent => tangent,
+            HalfAngleChart::Cotangent => [
+                tangent[4].clone(),
+                tangent[3].clone(),
+                tangent[2].clone(),
+                tangent[1].clone(),
+                tangent[0].clone(),
+            ],
+        };
+        ExactPolynomial::new(Vec::from(coefficients))
+    }
 }
 
 /// A strict exact sign on an open cyclic cell.
@@ -199,16 +217,8 @@ pub fn classify_cyclic_second_harmonic(
         });
     }
 
-    let tangent_coefficients = tangent_half_angle_coefficients(coefficients)?;
-    let cotangent_coefficients = [
-        tangent_coefficients[4].clone(),
-        tangent_coefficients[3].clone(),
-        tangent_coefficients[2].clone(),
-        tangent_coefficients[1].clone(),
-        tangent_coefficients[0].clone(),
-    ];
-    let tangent = ExactPolynomial::new(Vec::from(tangent_coefficients))?;
-    let cotangent = ExactPolynomial::new(Vec::from(cotangent_coefficients))?;
+    let tangent = coefficients.half_angle_polynomial(HalfAngleChart::Tangent)?;
+    let cotangent = coefficients.half_angle_polynomial(HalfAngleChart::Cotangent)?;
 
     let tangent_roots = complete_roots(&tangent)?;
     let cotangent_roots = complete_roots(&cotangent)?;

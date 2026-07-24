@@ -104,7 +104,7 @@ fn family_fixture_for(
             let residual = certify_paired_skew_cylinder_branch_subrange_residuals(
                 cylinders, ranges, span.range, span.sheet, tolerance,
             )
-            .unwrap();
+            .unwrap_or_else(|error| panic!("span {:?} failed: {error:?}", span.range));
             let roots = span.root_longitude_intervals(ranges[0][0]).unwrap();
             let root_corridors = [
                 residual
@@ -144,6 +144,13 @@ fn exact_topology_mints_complete_deterministic_family_without_added_work() {
     let fixture = family_fixture();
     let family = certify_fixture(&fixture).unwrap();
 
+    assert!(
+        core::mem::size_of::<PersistentSkewCylinderFiniteWindowRootEvent>() <= 32
+            && core::mem::size_of::<PersistentSkewCylinderFiniteWindowEndpointProof>() <= 32
+            && core::mem::size_of::<PersistentSkewCylinderFiniteWindowFamilyCertificate>()
+                <= 16 * 1024,
+        "persistent root clusters must reference the already-owned bound outcomes"
+    );
     assert_eq!(
         PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS,
         4 * PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_CELLS_PER_BOUND
@@ -152,14 +159,29 @@ fn exact_topology_mints_complete_deterministic_family_without_added_work() {
         PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_BOUND,
         2 * PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_CELLS_PER_BOUND
     );
-    assert_eq!(family.version(), 1);
+    assert_eq!(family.version(), 2);
     assert_eq!(family.member_count(), 4);
+    assert_eq!(
+        family.root_cluster_query_plan(),
+        fixture.topology.root_cluster_query_plan()
+    );
     assert_eq!(
         family.work(),
         PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK
             + 4 * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
     );
     assert_eq!(family.work(), 896 + 260 * 4);
+    assert_eq!(family.root_event_count(SkewCylinderSheet::Lower), 0);
+    assert_eq!(family.root_event_count(SkewCylinderSheet::Upper), 8);
+    assert!(
+        (0..family.root_event_count(SkewCylinderSheet::Upper)).all(|ordinal| {
+            family
+                .root_event(SkewCylinderSheet::Upper, ordinal)
+                .is_some_and(|event| {
+                    event.kind() == PersistentSkewCylinderFiniteWindowRootEventKind::Boundary
+                })
+        })
+    );
     assert_eq!(
         family.sheet_occupancy(SkewCylinderSheet::Lower),
         PersistentSkewCylinderFiniteWindowSheetOccupancy::Outside
@@ -188,6 +210,42 @@ fn exact_topology_mints_complete_deterministic_family_without_added_work() {
         validate_finite_window_family_membership(membership, input.residual, input.root_corridors)
             .unwrap();
     }
+}
+
+#[test]
+fn exact_corner_clusters_are_persisted_and_accounted_without_zero_length_members() {
+    let cylinders = [
+        Cylinder::new(Frame::world(), 13.0).unwrap(),
+        Cylinder::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap(),
+            20.0,
+        )
+        .unwrap(),
+    ];
+    let ranges = [
+        [ParamRange::new(0.0, TAU), ParamRange::new(16.0, 17.0)],
+        [ParamRange::new(0.0, TAU), ParamRange::new(-14.0, 5.0)],
+    ];
+    let fixture = family_fixture_for(cylinders, ranges, TEST_TOLERANCE);
+    let family = certify_fixture(&fixture).unwrap();
+
+    assert_eq!(family.version(), 2);
+    assert_eq!(family.root_cluster_query_plan().query_count(), 1);
+    assert_eq!(family.root_cluster_query_plan().work(), 32);
+    assert_eq!(family.member_count(), 2);
+    assert_eq!(family.work(), 896 + 32 + 260 * 2);
+    assert_eq!(family.root_event_count(SkewCylinderSheet::Upper), 6);
+    let isolated = (0..family.root_event_count(SkewCylinderSheet::Upper))
+        .filter_map(|ordinal| family.root_event(SkewCylinderSheet::Upper, ordinal))
+        .filter(|event| event.kind() == PersistentSkewCylinderFiniteWindowRootEventKind::Isolated)
+        .collect::<Vec<_>>();
+    assert_eq!(isolated.len(), 2);
+    assert!(isolated.iter().all(|event| event.root_count() == 2));
 }
 
 #[test]

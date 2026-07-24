@@ -190,6 +190,7 @@ fn validate_reissued_shape(
 ) -> Result<(), IntersectionCertificateError> {
     if source.formula_windows() != reissued.formula_windows()
         || source.formula_to_source() != reissued.formula_to_source()
+        || source.root_cluster_query_plan() != reissued.root_cluster_query_plan()
         || source.member_count() != reissued.member_count()
         || source.sheet_occupancy(SkewCylinderSheet::Lower)
             != reissued.sheet_occupancy(SkewCylinderSheet::Lower)
@@ -198,6 +199,31 @@ fn validate_reissued_shape(
     {
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
+    for sheet in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper] {
+        if source.root_event_count(sheet) != reissued.root_event_count(sheet) {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        for ordinal in 0..source.root_event_count(sheet) {
+            let original = source
+                .root_event(sheet, ordinal)
+                .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
+            let transformed = reissued
+                .root_event(sheet, ordinal)
+                .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
+            if original.sheet() != transformed.sheet()
+                || original.kind() != transformed.kind()
+                || original.root_count() != transformed.root_count()
+                || (0..original.root_count()).any(|root_ordinal| {
+                    source
+                        .root_event_root(sheet, ordinal, root_ordinal)
+                        .zip(reissued.root_event_root(sheet, ordinal, root_ordinal))
+                        .is_none_or(|roots| !same_root_shape(roots))
+                })
+            {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
+        }
+    }
     for ordinal in 0..source.member_count() {
         let original = source
             .member(ordinal)
@@ -205,17 +231,43 @@ fn validate_reissued_shape(
         let transformed = reissued
             .member(ordinal)
             .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
-        let endpoint_identity_matches = original
-            .endpoints()
-            .into_iter()
-            .zip(transformed.endpoints())
-            .all(|(original, transformed)| {
-                original.tag() == transformed.tag()
-                    && original.inside_side() == transformed.inside_side()
-            });
+        let endpoint_identity_matches = original.endpoints().into_iter().enumerate().all(
+            |(endpoint_ordinal, original_endpoint)| {
+                let transformed_endpoint = transformed.endpoints()[endpoint_ordinal];
+                original_endpoint.sheet() == transformed_endpoint.sheet()
+                    && original_endpoint.inside_side() == transformed_endpoint.inside_side()
+                    && original_endpoint.root_count() == transformed_endpoint.root_count()
+                    && (0..original_endpoint.root_count()).all(|root_ordinal| {
+                        source
+                            .member_endpoint_root(ordinal, endpoint_ordinal, root_ordinal)
+                            .zip(reissued.member_endpoint_root(
+                                ordinal,
+                                endpoint_ordinal,
+                                root_ordinal,
+                            ))
+                            .is_some_and(same_root_shape)
+                    })
+            },
+        );
         if original.sheet() != transformed.sheet() || !endpoint_identity_matches {
             return Err(IntersectionCertificateError::InvalidTraceFamily);
         }
     }
     Ok(())
+}
+
+fn same_root_shape(
+    (original, transformed): (
+        super::PersistentSkewCylinderAxialRootEventInput,
+        super::PersistentSkewCylinderAxialRootEventInput,
+    ),
+) -> bool {
+    original.tag == transformed.tag
+        && original.bound.to_bits() == transformed.bound.to_bits()
+        && original.sheet == transformed.sheet
+        && original.cyclic_ordinal == transformed.cyclic_ordinal
+        && original.half_angle_chart == transformed.half_angle_chart
+        && original.before == transformed.before
+        && original.after == transformed.after
+        && original.repeated == transformed.repeated
 }

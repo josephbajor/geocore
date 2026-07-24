@@ -276,6 +276,9 @@ fn valid_family_member(
     for (graph_end, (proof, section_end)) in
         member.endpoints().into_iter().zip(graph_ends).enumerate()
     {
+        let Some(root) = membership.endpoint_root(graph_end, 0) else {
+            return false;
+        };
         let trim = section_end.trim();
         let projective = trim.carrier_root();
         let expected_boundary = match trim.axial_boundary() {
@@ -296,14 +299,15 @@ fn valid_family_member(
             PersistentSkewCylinderRootInsideSide::Before
         };
         let expected_inside_parameter = if graph_end == 0 { range.lo } else { range.hi };
-        let bracket = proof.half_angle_bracket();
-        if proof.sheet() != residual.sheet()
-            || proof.tag().source_slot() != trim.operand()
-            || proof.tag().boundary() != expected_boundary
-            || proof.bound().to_bits() != trim.authored_bound().to_bits()
+        let bracket = root.half_angle_bracket;
+        if proof.root_count() != 1
+            || proof.sheet() != residual.sheet()
+            || root.tag.source_slot() != trim.operand()
+            || root.tag.boundary() != expected_boundary
+            || root.bound.to_bits() != trim.authored_bound().to_bits()
             || proof.inside_side() != expected_inside_side
             || proof.inside_parameter().to_bits() != expected_inside_parameter.to_bits()
-            || proof.root().half_angle_chart != expected_chart
+            || root.half_angle_chart != expected_chart
             || bracket.map(f64::to_bits) != [projective.lo(), projective.hi()].map(f64::to_bits)
         {
             return false;
@@ -560,12 +564,14 @@ mod tests {
                 };
                 assert_eq!(input.physical_roots(), expected_graph_roots);
                 assert_eq!(input.endpoint_slabs(), expected_graph_slabs);
-                for (endpoint, slab) in membership
+                for (endpoint_ordinal, (endpoint, slab)) in membership
                     .member()
                     .endpoints()
                     .into_iter()
                     .zip(expected_graph_slabs)
+                    .enumerate()
                 {
+                    let root = membership.endpoint_root(endpoint_ordinal, 0).unwrap();
                     let expected_boundary = match slab.boundary() {
                         SectionSkewCylinderAxialBoundary::Lower => {
                             PersistentSkewCylinderAxialBoundary::Lower
@@ -574,9 +580,10 @@ mod tests {
                             PersistentSkewCylinderAxialBoundary::Upper
                         }
                     };
-                    assert_eq!(endpoint.tag().source_slot(), slab.source_operand());
-                    assert_eq!(endpoint.tag().boundary(), expected_boundary);
-                    assert_eq!(endpoint.bound().to_bits(), slab.bound().to_bits());
+                    assert_eq!(endpoint.root_count(), 1);
+                    assert_eq!(root.tag.source_slot(), slab.source_operand());
+                    assert_eq!(root.tag.boundary(), expected_boundary);
+                    assert_eq!(root.bound.to_bits(), slab.bound().to_bits());
                 }
                 assert_eq!(
                     input.physical_endpoint_points(),

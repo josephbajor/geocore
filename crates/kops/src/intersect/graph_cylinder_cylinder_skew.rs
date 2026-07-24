@@ -25,15 +25,17 @@ use kgraph::{
     IntersectionCertificateError, PairedSkewCylinderBranchResidualCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
+    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
+    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowRootEventKind,
     SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
-    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanTopologyInput,
-    SkewCylinderRootInsideSide, SkewCylinderSheet,
+    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide, SkewCylinderSheet,
     SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
     certify_persistent_skew_cylinder_finite_window_family,
     classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
+    plan_skew_cylinder_root_clusters,
 };
 
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
@@ -96,6 +98,17 @@ pub const SKEW_CYLINDER_AXIAL_CLIP_WORK: StageId =
 
 /// Atomic work charged before classifying all four finite axial bounds.
 pub const SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK: u64 = SKEW_CYLINDER_AXIAL_BOUNDS_EXACT_WORK;
+
+/// Stable work stage for exact equality queries between overlapping
+/// finite-window root corridors.
+pub const SKEW_CYLINDER_ROOT_CLUSTER_WORK: StageId =
+    match StageId::new("kops.intersect.skew-cylinder-root-cluster-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid skew-cylinder root-cluster stage"),
+    };
+
+/// Maximum atomic root-cluster work for one four-bound family.
+pub const SKEW_CYLINDER_ROOT_CLUSTER_MAX_WORK: u64 = SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK;
 
 /// Stable work stage for independently certified bounded skew-sheet spans.
 pub const SKEW_CYLINDER_OPEN_SPAN_WORK: StageId =
@@ -342,21 +355,58 @@ fn intersect_strict_positive_two_sheet(
             });
         }
     };
-    let finite_topology =
-        match classify_skew_cylinder_open_spans(SkewCylinderOpenSpanTopologyInput {
-            topologies: &topologies,
-            ranges,
-            canonical_to_source,
-        }) {
-            Ok(topology) => topology,
-            Err(_) => {
-                return Ok(CertifiedSkewCylinderIntersections {
-                    raw: clipped_topology_incomplete(scope),
-                    strict_miss: None,
-                    branches: None,
-                });
-            }
-        };
+    let topology_input = SkewCylinderOpenSpanTopologyInput {
+        topologies: &topologies,
+        ranges,
+        canonical_to_source,
+    };
+    let root_cluster_plan = match plan_skew_cylinder_root_clusters(topology_input) {
+        Ok(plan) => plan,
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: clipped_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+            });
+        }
+    };
+    if root_cluster_plan.work() > 0 {
+        scope
+            .ledger_mut()
+            .charge(SKEW_CYLINDER_ROOT_CLUSTER_WORK, root_cluster_plan.work())?;
+    }
+    let finite_topology = match classify_skew_cylinder_open_spans(topology_input) {
+        Ok(topology) => topology,
+        Err(SkewCylinderOpenSpanFailure::ExactRootRelationIndeterminate) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: numeric_resolution(scope, SKEW_CYLINDER_ROOT_CLUSTER_WORK),
+                strict_miss: None,
+                branches: None,
+            });
+        }
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: clipped_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+            });
+        }
+    };
+    if finite_topology.root_cluster_query_plan() != root_cluster_plan
+        || [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
+            .into_iter()
+            .flat_map(|sheet| finite_topology.root_events(sheet))
+            .any(|event| {
+                event.kind() != SkewCylinderFiniteWindowRootEventKind::Boundary
+                    || event.root_count() != 1
+            })
+    {
+        return Ok(CertifiedSkewCylinderIntersections {
+            raw: clipped_topology_incomplete(scope),
+            strict_miss: None,
+            branches: None,
+        });
+    }
     publish_finite_window_topology(
         strict_positive,
         finite_topology,
@@ -369,6 +419,7 @@ fn intersect_strict_positive_two_sheet(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_finite_window_topology(
     strict_positive: SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     finite_topology: SkewCylinderFiniteWindowTopologyCertificate,
@@ -434,8 +485,7 @@ fn publish_finite_window_topology(
                     });
                     branches.push(CertifiedSkewCylinderBranch {
                         proof: CertifiedSkewCylinderBranchProof::OpenSpan(Box::new(open_span)),
-                        endpoint_proofs: [span.start, span.end]
-                            .map(|proof| Some(graph_endpoint_proof(proof))),
+                        endpoint_proofs: [span.start, span.end].map(graph_endpoint_proof),
                     });
                 }
             }
@@ -642,36 +692,43 @@ fn open_span_certificate_failure(
 
 fn graph_endpoint_proof(
     proof: SkewCylinderOpenSpanEndpointProof,
-) -> IntersectionBranchEndpointProof {
-    let root = proof.root;
-    IntersectionBranchEndpointProof::SkewCylinderAxialRoot(SkewCylinderAxialRootEndpointProof {
-        source_operand: root.provenance.source_operand,
-        boundary: match root.provenance.boundary {
-            SkewCylinderAxialBoundary::Lower => SkewCylinderAxialBoundaryProof::Lower,
-            SkewCylinderAxialBoundary::Upper => SkewCylinderAxialBoundaryProof::Upper,
+) -> Option<IntersectionBranchEndpointProof> {
+    if proof.event.kind() != SkewCylinderFiniteWindowRootEventKind::Boundary
+        || proof.event.root_count() != 1
+    {
+        return None;
+    }
+    let root = proof.event.root(0)?;
+    Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(
+        SkewCylinderAxialRootEndpointProof {
+            source_operand: root.provenance.source_operand,
+            boundary: match root.provenance.boundary {
+                SkewCylinderAxialBoundary::Lower => SkewCylinderAxialBoundaryProof::Lower,
+                SkewCylinderAxialBoundary::Upper => SkewCylinderAxialBoundaryProof::Upper,
+            },
+            bound: root.provenance.value,
+            sheet: root.sheet,
+            cyclic_ordinal: root.cyclic_ordinal,
+            half_angle_chart: match root.bracket.chart {
+                SkewCylinderHalfAngleChart::Tangent => SkewCylinderHalfAngleChartProof::Tangent,
+                SkewCylinderHalfAngleChart::Cotangent => SkewCylinderHalfAngleChartProof::Cotangent,
+            },
+            half_angle_bracket: [root.bracket.lo, root.bracket.hi],
+            before: match root.before {
+                SkewCylinderAxialRelation::Below => SkewCylinderAxialRelationProof::Below,
+                SkewCylinderAxialRelation::Above => SkewCylinderAxialRelationProof::Above,
+            },
+            after: match root.after {
+                SkewCylinderAxialRelation::Below => SkewCylinderAxialRelationProof::Below,
+                SkewCylinderAxialRelation::Above => SkewCylinderAxialRelationProof::Above,
+            },
+            inside_side: match proof.inside_side {
+                SkewCylinderRootInsideSide::Before => SkewCylinderRootInsideSideProof::Before,
+                SkewCylinderRootInsideSide::After => SkewCylinderRootInsideSideProof::After,
+            },
+            inside_parameter: proof.carrier_parameter,
         },
-        bound: root.provenance.value,
-        sheet: root.sheet,
-        cyclic_ordinal: root.cyclic_ordinal,
-        half_angle_chart: match root.bracket.chart {
-            SkewCylinderHalfAngleChart::Tangent => SkewCylinderHalfAngleChartProof::Tangent,
-            SkewCylinderHalfAngleChart::Cotangent => SkewCylinderHalfAngleChartProof::Cotangent,
-        },
-        half_angle_bracket: [root.bracket.lo, root.bracket.hi],
-        before: match root.before {
-            SkewCylinderAxialRelation::Below => SkewCylinderAxialRelationProof::Below,
-            SkewCylinderAxialRelation::Above => SkewCylinderAxialRelationProof::Above,
-        },
-        after: match root.after {
-            SkewCylinderAxialRelation::Below => SkewCylinderAxialRelationProof::Below,
-            SkewCylinderAxialRelation::Above => SkewCylinderAxialRelationProof::Above,
-        },
-        inside_side: match proof.inside_side {
-            SkewCylinderRootInsideSide::Before => SkewCylinderRootInsideSideProof::Before,
-            SkewCylinderRootInsideSide::After => SkewCylinderRootInsideSideProof::After,
-        },
-        inside_parameter: proof.carrier_parameter,
-    })
+    ))
 }
 
 fn raw_skew_curve(
@@ -695,6 +752,9 @@ fn raw_skew_curve(
     }
 }
 
+// The strict-positive admission certificate stays inline so the established
+// Copy certificate contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DiscriminantAdmission {
     StrictPositive(SkewCylinderStrictPositiveTwoSheetAdmissionCertificate),

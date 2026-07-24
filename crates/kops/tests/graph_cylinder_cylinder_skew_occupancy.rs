@@ -18,7 +18,8 @@ use kgraph::{
     PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PersistentSkewCylinderAxialBoundary,
     PersistentSkewCylinderFiniteWindowSheetOccupancy, SKEW_CYLINDER_BRANCH_PCURVE_ALL_CELLS_WORK,
     SKEW_CYLINDER_BRANCH_PCURVE_CELL_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SkewCylinderBranchGuardedEnd, SkewCylinderSheet,
+    SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS, SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK,
+    SkewCylinderBranchGuardedEnd, SkewCylinderSheet,
 };
 use kops::intersect::{
     ContactKind, GraphSurfaceIntersectionError, IntersectionBranchEndpointEvent,
@@ -26,8 +27,9 @@ use kops::intersect::{
     SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,
     SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY, SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
     SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH, SKEW_CYLINDER_OPEN_SPAN_WORK,
-    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-    SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderAxialBoundaryProof, SkewCylinderAxialRelationProof,
+    SKEW_CYLINDER_ROOT_CLUSTER_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SKEW_CYLINDER_TWO_SHEET_WORK,
+    SkewCylinderAxialBoundaryProof, SkewCylinderAxialRelationProof,
     SkewCylinderRootInsideSideProof, SurfaceIntersectionCurve, intersect_bounded_graph_surfaces,
     intersect_bounded_graph_surfaces_with_context,
 };
@@ -47,6 +49,18 @@ fn perpendicular_pair() -> [Cylinder; 2] {
         Cylinder::new(
             Frame::new(frame.origin(), frame.x(), frame.y()).unwrap(),
             2.0,
+        )
+        .unwrap(),
+    ]
+}
+
+fn exact_corner_pair() -> [Cylinder; 2] {
+    let frame = Frame::world();
+    [
+        Cylinder::new(frame, 13.0).unwrap(),
+        Cylinder::new(
+            Frame::new(frame.origin(), frame.x(), frame.y()).unwrap(),
+            20.0,
         )
         .unwrap(),
     ]
@@ -214,8 +228,8 @@ fn assert_single_upper_open_span(
     source_cylinders: [Cylinder; 2],
     boundary_surfaces: [bool; 2],
 ) {
-    const EXPECTED_LO: f64 = 2.082_769_014_844_373;
-    const EXPECTED_HI: f64 = 4.200_416_292_335_213;
+    const EXPECTED_LO: f64 = 2.091_041_074_522_298;
+    const EXPECTED_HI: f64 = 4.192_144_232_657_061;
     const PARAMETER_TOLERANCE: f64 = 1.0e-12;
 
     assert_eq!(result.branch_graph.source_surfaces, sources);
@@ -439,7 +453,7 @@ fn assert_upper_open_span_endpoint_proofs(
         [raw_branch.uv_a_start, raw_branch.uv_b_start],
         [raw_branch.uv_a_end, raw_branch.uv_b_end],
     ];
-    for endpoint_slot in 0..2 {
+    for (endpoint_slot, raw_parameter) in raw_parameters.into_iter().enumerate() {
         let vertex = &result.branch_graph.vertices[edge.endpoint_vertices[endpoint_slot]];
         assert_eq!(
             vertex.event,
@@ -447,7 +461,7 @@ fn assert_upper_open_span_endpoint_proofs(
                 surfaces: boundary_surfaces,
             }
         );
-        assert_eq!(vertex.surface_parameters, raw_parameters[endpoint_slot]);
+        assert_eq!(vertex.surface_parameters, raw_parameter);
         let parameter = if endpoint_slot == 0 {
             edge.carrier_range.lo
         } else {
@@ -680,9 +694,11 @@ fn assert_four_upper_open_spans(
             assert!(proof.half_angle_bracket.into_iter().all(f64::is_finite));
             assert!(proof.half_angle_bracket[0] <= proof.half_angle_bracket[1]);
             let family_endpoint = member.endpoints()[endpoint_slot];
-            assert_eq!(family_endpoint.tag().source_slot(), proof.source_operand);
+            let family_root = membership.endpoint_root(endpoint_slot, 0).unwrap();
+            assert_eq!(family_endpoint.root_count(), 1);
+            assert_eq!(family_root.tag.source_slot(), proof.source_operand);
             assert_eq!(
-                family_endpoint.tag().boundary(),
+                family_root.tag.boundary(),
                 match proof.boundary {
                     SkewCylinderAxialBoundaryProof::Lower => {
                         PersistentSkewCylinderAxialBoundary::Lower
@@ -692,13 +708,13 @@ fn assert_four_upper_open_spans(
                     }
                 }
             );
-            assert_eq!(family_endpoint.bound().to_bits(), proof.bound.to_bits());
+            assert_eq!(family_root.bound.to_bits(), proof.bound.to_bits());
             assert_eq!(
                 family_endpoint.inside_parameter().to_bits(),
                 proof.inside_parameter.to_bits()
             );
             assert_eq!(
-                family_endpoint.half_angle_bracket().map(f64::to_bits),
+                family_root.half_angle_bracket.map(f64::to_bits),
                 proof.half_angle_bracket.map(f64::to_bits)
             );
             assert_eq!(
@@ -1064,6 +1080,104 @@ fn axial_clip_work_has_exact_n_and_atomic_n_minus_one_boundary() {
         observed_work(denied.report(), SKEW_CYLINDER_AXIAL_CLIP_WORK),
         0,
         "the rejected four-query debit must not consume a prefix"
+    );
+}
+
+#[test]
+fn root_cluster_work_has_exact_n_and_atomic_n_minus_one_boundary() {
+    let required_work = SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK;
+    assert_eq!(required_work, 32);
+    let cylinders = exact_corner_pair();
+    let windows = [
+        cylinder_window(range(16.0, 17.0)),
+        cylinder_window(range(-14.0, 5.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+    let graph_counts = (
+        graph.surface_count(),
+        graph.curve_count(),
+        graph.curve2d_count(),
+    );
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+
+    let exact_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_ROOT_CLUSTER_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        required_work,
+    )])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &exact_context,
+    );
+    let exact_result = exact.result();
+    let exact_result = exact_result.as_ref().unwrap();
+    assert_single_typed_gap(
+        exact_result,
+        handles,
+        SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
+        SKEW_CYLINDER_AXIAL_CLIP_WORK,
+        SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY,
+    );
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_ROOT_CLUSTER_WORK),
+        required_work
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_ROOT_CLUSTER_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        required_work - 1,
+    )])
+    .unwrap();
+    let denied_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(denied_plan);
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_ROOT_CLUSTER_WORK,
+        resource: ResourceKind::Work,
+        consumed: required_work,
+        allowed: required_work - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_ROOT_CLUSTER_WORK),
+        0,
+        "the rejected common-root debit must not consume a query prefix"
+    );
+    assert_eq!(
+        (
+            graph.surface_count(),
+            graph.curve_count(),
+            graph.curve2d_count(),
+        ),
+        graph_counts,
+        "N-1 refusal must not publish spans, isolated points, or mutate the source graph"
     );
 }
 

@@ -243,6 +243,21 @@ impl SkewCylinderAxialBoundTopology {
     pub fn open_cell_relations(&self) -> &[[SkewCylinderAxialRelation; 2]] {
         &self.open_cell_relations
     }
+
+    pub(crate) fn exact_root_polynomial(
+        &self,
+        chart: SkewCylinderHalfAngleChart,
+    ) -> Result<ExactPolynomial, SkewCylinderAxialRootFailure> {
+        let canonical_operand =
+            canonical_operand(self.formula_to_source, self.provenance.source_operand)?;
+        let coefficients = ExactSkewCylinderAlgebra::new(self.formula_cylinders)?
+            .axial_equation(canonical_operand, self.provenance.value)?
+            .coefficients();
+        Ok(coefficients.half_angle_polynomial(match chart {
+            SkewCylinderHalfAngleChart::Tangent => HalfAngleChart::Tangent,
+            SkewCylinderHalfAngleChart::Cotangent => HalfAngleChart::Cotangent,
+        })?)
+    }
 }
 
 /// Stable fail-closed causes for one exact axial-bound query.
@@ -324,6 +339,9 @@ impl SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
 }
 
 /// Complete exact discriminant outcome for one ruling parameterization.
+// The strict-positive admission certificate stays inline so the established
+// Copy certificate contract survives value handoff without indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SkewCylinderExactDiscriminantTopology {
     /// Both regular infinite-support sheets exist over the complete cycle.
@@ -404,7 +422,6 @@ pub fn classify_skew_cylinder_axial_bound(
     let coefficients = equation.coefficients();
     let topology = classify_cyclic_second_harmonic(&coefficients, work_limit)?;
     topology_from_classification(
-        algebra,
         equation,
         cylinders,
         canonical_to_source,
@@ -461,7 +478,6 @@ impl AxialEquation {
 }
 
 fn topology_from_classification(
-    algebra: ExactSkewCylinderAlgebra,
     equation: AxialEquation,
     formula_cylinders: [Cylinder; 2],
     formula_to_source: [usize; 2],
@@ -507,7 +523,6 @@ fn topology_from_classification(
                 .map(|root| selector_sign_at_root(selector, *root))
                 .collect::<Result<Vec<_>, _>>()?;
             selected_sheet_topology(
-                algebra,
                 equation,
                 formula_cylinders,
                 formula_to_source,
@@ -547,7 +562,6 @@ fn root_free_relations(
 }
 
 fn selected_sheet_topology(
-    _algebra: ExactSkewCylinderAlgebra,
     equation: AxialEquation,
     formula_cylinders: [Cylinder; 2],
     formula_to_source: [usize; 2],

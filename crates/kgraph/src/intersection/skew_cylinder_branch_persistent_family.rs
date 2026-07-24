@@ -2,10 +2,10 @@
 //!
 //! Four exact axial-bound equations determine the complete finite occupancy
 //! of the two strict-positive sheets.  Each equation is cyclic second
-//! harmonic and therefore has at most four distinct cyclic cuts.  The v1
+//! harmonic and therefore has at most four distinct cyclic cuts.  The v2
 //! sweep therefore has at most sixteen physical cuts. Each cut can contribute
-//! at most two sheet-owned transverse events, while every non-wrapping open
-//! component consumes two events. The v1 representation consequently has
+//! at most two sheet-owned events, while every non-wrapping open
+//! component consumes two events. The v2 representation consequently has
 //! room for exactly sixteen open members; this is an analytic degree bound,
 //! not a sampling or defensive limit.
 
@@ -27,7 +27,7 @@ pub use reissue::{
 };
 
 /// Schema version for strict-positive finite-window skew-cylinder families.
-pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_VERSION: u16 = 1;
+pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_VERSION: u16 = 2;
 
 /// Maximum open members across both sheets under the analytic event bound.
 pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS: usize = 16;
@@ -36,6 +36,9 @@ pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS: usize = 16;
 ///
 /// A shared-height cut may belong to both sheets, hence `2 * 4`.
 pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_BOUND: usize = 8;
+
+/// Maximum distinct physical root events retained on one sheet.
+pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_SHEET: usize = 16;
 
 /// Maximum open cells retained by one second-harmonic axial-bound outcome.
 pub const PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_CELLS_PER_BOUND: usize = 4;
@@ -135,47 +138,122 @@ pub struct PersistentSkewCylinderAxialRootEventInput {
     pub before: PersistentSkewCylinderAxialRelation,
     /// Strict relation immediately after the cut.
     pub after: PersistentSkewCylinderAxialRelation,
+    /// Whether this sheet root has even multiplicity and preserves its strict
+    /// relation across the cut.
+    pub repeated: bool,
 }
 
-/// Exact root plus the retained finite-window side.
+/// Closed-set role of one persistent physical finite-window event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistentSkewCylinderFiniteWindowRootEventKind {
+    /// Open occupancy changes across the event.
+    Boundary,
+    /// Open occupancy remains inside on both sides.
+    Contact,
+    /// Open occupancy is outside on both sides but the event itself is inside
+    /// every closed authored bound.
+    Isolated,
+}
+
+/// Persistent exact-source roots grouped at one physical sheet event.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersistentSkewCylinderFiniteWindowRootEvent {
+    sheet: SkewCylinderSheet,
+    kind: PersistentSkewCylinderFiniteWindowRootEventKind,
+    roots: [PersistentSkewCylinderRootReference;
+        SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER],
+    root_count: u8,
+    carrier_parameter: f64,
+}
+
+impl PersistentSkewCylinderFiniteWindowRootEvent {
+    /// Ordered quadratic sheet owning this event.
+    pub const fn sheet(self) -> SkewCylinderSheet {
+        self.sheet
+    }
+
+    /// Closed-set role of this event.
+    pub const fn kind(self) -> PersistentSkewCylinderFiniteWindowRootEventKind {
+        self.kind
+    }
+
+    /// Number of exact bound roots grouped at this event.
+    pub const fn root_count(self) -> usize {
+        self.root_count as usize
+    }
+
+    const fn root_reference(self, index: usize) -> Option<PersistentSkewCylinderRootReference> {
+        if index < self.root_count as usize {
+            Some(self.roots[index])
+        } else {
+            None
+        }
+    }
+
+    /// Deterministic carrier-chart representative of the physical root.
+    pub const fn carrier_parameter(self) -> f64 {
+        self.carrier_parameter
+    }
+}
+
+/// Compact reference into one already-owned persistent bound outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PersistentSkewCylinderRootReference {
+    outcome: u8,
+    root: u8,
+}
+
+const EMPTY_ROOT_REFERENCE: PersistentSkewCylinderRootReference =
+    PersistentSkewCylinderRootReference {
+        outcome: 0,
+        root: 0,
+    };
+
+/// Exact root references plus the retained finite-window side.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PersistentSkewCylinderFiniteWindowEndpointProof {
-    root: PersistentSkewCylinderAxialRootEventInput,
+    roots: [PersistentSkewCylinderRootReference;
+        SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER],
+    root_count: u8,
+    sheet: SkewCylinderSheet,
     inside_side: PersistentSkewCylinderRootInsideSide,
     inside_parameter: f64,
 }
 
 impl PersistentSkewCylinderFiniteWindowEndpointProof {
     const fn new(
-        root: PersistentSkewCylinderAxialRootEventInput,
+        roots: [PersistentSkewCylinderRootReference;
+            SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER],
+        root_count: usize,
+        sheet: SkewCylinderSheet,
         inside_side: PersistentSkewCylinderRootInsideSide,
         inside_parameter: f64,
     ) -> Self {
         Self {
-            root,
+            roots,
+            root_count: root_count as u8,
+            sheet,
             inside_side,
             inside_parameter,
         }
     }
 
-    /// Exact root event.
-    pub const fn root(self) -> PersistentSkewCylinderAxialRootEventInput {
-        self.root
+    /// Number of exact bound roots active at this physical endpoint.
+    pub const fn root_count(self) -> usize {
+        self.root_count as usize
     }
 
-    /// Caller-order source-window tag.
-    pub const fn tag(self) -> PersistentSkewCylinderAxialBoundTag {
-        self.root.tag
-    }
-
-    /// Exact caller-authored axial bound.
-    pub const fn bound(self) -> f64 {
-        self.root.bound
+    const fn root_reference(self, index: usize) -> Option<PersistentSkewCylinderRootReference> {
+        if index < self.root_count as usize {
+            Some(self.roots[index])
+        } else {
+            None
+        }
     }
 
     /// Sheet owning the endpoint.
     pub const fn sheet(self) -> SkewCylinderSheet {
-        self.root.sheet
+        self.sheet
     }
 
     /// Retained side of the exact root.
@@ -186,11 +264,6 @@ impl PersistentSkewCylinderFiniteWindowEndpointProof {
     /// Representable parameter on the retained side.
     pub const fn inside_parameter(self) -> f64 {
         self.inside_parameter
-    }
-
-    /// Exact projective root enclosure.
-    pub const fn half_angle_bracket(self) -> [f64; 2] {
-        self.root.half_angle_bracket
     }
 }
 
@@ -344,6 +417,10 @@ pub struct PersistentSkewCylinderFiniteWindowFamilyCertificate {
     formula_windows: [[ParamRange; 2]; 2],
     formula_to_source: [usize; 2],
     axial_bound_outcomes: [PersistentSkewCylinderAxialBoundOutcome; 4],
+    root_cluster_query_plan: SkewCylinderRootClusterQueryPlan,
+    root_events: [[Option<PersistentSkewCylinderFiniteWindowRootEvent>;
+        PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_SHEET]; 2],
+    root_event_counts: [u8; 2],
     sheet_occupancy: [PersistentSkewCylinderFiniteWindowSheetOccupancy; 2],
     members: [Option<PersistentSkewCylinderFiniteWindowMemberCertificate>;
         PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS],
@@ -400,6 +477,62 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
         }
     }
 
+    /// Exact bound-pair/chart work plan represented by this family.
+    pub const fn root_cluster_query_plan(&self) -> SkewCylinderRootClusterQueryPlan {
+        self.root_cluster_query_plan
+    }
+
+    /// Number of persistent physical root events on one sheet.
+    pub const fn root_event_count(&self, sheet: SkewCylinderSheet) -> usize {
+        self.root_event_counts[sheet_index(sheet)] as usize
+    }
+
+    /// Persistent physical root event by sheet-local ordinal.
+    pub const fn root_event(
+        &self,
+        sheet: SkewCylinderSheet,
+        ordinal: usize,
+    ) -> Option<PersistentSkewCylinderFiniteWindowRootEvent> {
+        let sheet = sheet_index(sheet);
+        if ordinal < self.root_event_counts[sheet] as usize {
+            self.root_events[sheet][ordinal]
+        } else {
+            None
+        }
+    }
+
+    /// Exact bound root grouped into one persistent physical event.
+    pub fn root_event_root(
+        &self,
+        sheet: SkewCylinderSheet,
+        event_ordinal: usize,
+        root_ordinal: usize,
+    ) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        let event = self.root_event(sheet, event_ordinal)?;
+        self.resolve_root_reference(event.root_reference(root_ordinal)?)
+    }
+
+    /// Exact bound root grouped into one member endpoint.
+    pub fn member_endpoint_root(
+        &self,
+        member_ordinal: usize,
+        endpoint_ordinal: usize,
+        root_ordinal: usize,
+    ) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        let member = self.members.get(member_ordinal).copied().flatten()?;
+        let endpoint = member.endpoints.get(endpoint_ordinal)?;
+        self.resolve_root_reference(endpoint.root_reference(root_ordinal)?)
+    }
+
+    fn resolve_root_reference(
+        &self,
+        reference: PersistentSkewCylinderRootReference,
+    ) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.axial_bound_outcomes
+            .get(reference.outcome as usize)?
+            .root(reference.root as usize)
+    }
+
     /// Complete occupancy for Lower or Upper.
     pub const fn sheet_occupancy(
         self,
@@ -433,6 +566,7 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
     /// Existing logical work represented by the complete family.
     pub const fn work(self) -> u64 {
         PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK
+            + self.root_cluster_query_plan.work()
             + self.member_count as u64 * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
     }
 
@@ -479,6 +613,16 @@ impl PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate {
             None => panic!("sealed family membership always names one member"),
         }
     }
+
+    /// Exact bound root grouped into one endpoint of this member.
+    pub fn endpoint_root(
+        &self,
+        endpoint_ordinal: usize,
+        root_ordinal: usize,
+    ) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.family
+            .member_endpoint_root(self.ordinal as usize, endpoint_ordinal, root_ordinal)
+    }
 }
 
 /// Mint a complete finite-window family without adding proof work.
@@ -519,21 +663,20 @@ pub fn certify_persistent_skew_cylinder_finite_window_family(
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
 
+    let geometry = FamilyMemberGeometry {
+        formula_cylinders,
+        formula_windows,
+        source_cylinders,
+    };
     let mut certified_members = [None; PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS];
     for (ordinal, (input, derived)) in members.iter().copied().zip(derived_members).enumerate() {
         certified_members[ordinal] = Some(certify_family_member(
-            ordinal,
-            input,
-            derived,
-            formula_cylinders,
-            formula_windows,
-            source_cylinders,
-            &outcomes,
-            tolerance,
+            ordinal, input, derived, geometry, &outcomes, tolerance,
         )?);
     }
     validate_member_order(&certified_members[..members.len()])?;
     let occupancy = certify_sheet_occupancy(finite_topology, members.len())?;
+    let (root_events, root_event_counts) = certify_root_events(finite_topology, &outcomes)?;
 
     Ok(PersistentSkewCylinderFiniteWindowFamilyCertificate {
         admission,
@@ -541,6 +684,9 @@ pub fn certify_persistent_skew_cylinder_finite_window_family(
         formula_windows,
         formula_to_source,
         axial_bound_outcomes: outcomes,
+        root_cluster_query_plan: finite_topology.root_cluster_query_plan(),
+        root_events,
+        root_event_counts,
         sheet_occupancy: occupancy,
         members: certified_members,
         member_count: members.len() as u8,
@@ -561,9 +707,11 @@ pub(super) fn validate_finite_window_family_membership(
     };
     validate_member_input_identity(
         input,
-        family.formula_cylinders,
-        family.formula_windows,
-        family.source_cylinders(),
+        FamilyMemberGeometry {
+            formula_cylinders: family.formula_cylinders,
+            formula_windows: family.formula_windows,
+            source_cylinders: family.source_cylinders(),
+        },
         family.tolerance,
     )?;
     let guarded = residual.carrier_range();
@@ -581,7 +729,13 @@ pub(super) fn validate_finite_window_family_membership(
             .endpoints()
             .into_iter()
             .zip(root_corridors)
-            .all(|(endpoint, corridor)| root_pcurves_contain_bound(corridor, endpoint))
+            .all(|(endpoint, corridor)| {
+                endpoint_root_pcurves_contain_bounds(
+                    corridor,
+                    endpoint,
+                    &family.axial_bound_outcomes,
+                )
+            })
     {
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
@@ -739,35 +893,171 @@ fn validate_root_event(
         || lo > hi
         || !chart_owned
         || (lo < 0.0 && hi > 0.0)
-        || root.before == root.after
+        || (!root.repeated && root.before == root.after)
+        || (root.repeated && root.before != root.after)
     {
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
     Ok(())
 }
 
+/// Per-sheet ordinal tables of certified persistent root events.
+type PersistentRootEventTables = [[Option<PersistentSkewCylinderFiniteWindowRootEvent>;
+    PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_SHEET];
+    2];
+
+fn certify_root_events(
+    finite_topology: &SkewCylinderFiniteWindowTopologyCertificate,
+    outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
+) -> Result<(PersistentRootEventTables, [u8; 2]), IntersectionCertificateError> {
+    validate_root_event_partition(finite_topology)?;
+    let mut result = [[None; PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_SHEET]; 2];
+    let mut counts = [0_u8; 2];
+    for sheet in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper] {
+        let sheet_slot = sheet_index(sheet);
+        let source = finite_topology.root_events(sheet);
+        if source.len() > PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_SHEET {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        let mut previous_parameter = None;
+        for (ordinal, event) in source.iter().copied().enumerate() {
+            if event.sheet() != sheet
+                || event.root_count() == 0
+                || event.root_count() > SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER
+                || !event.carrier_parameter().is_finite()
+                || previous_parameter.is_some_and(|previous| previous >= event.carrier_parameter())
+            {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
+            let persistent = persistent_finite_window_root_event(event, outcomes)?;
+            for root_index in 0..persistent.root_count() {
+                let root = persistent
+                    .root_reference(root_index)
+                    .and_then(|reference| resolve_root_reference(outcomes, reference))
+                    .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
+                if root.sheet != sheet
+                    || (0..root_index).any(|previous| {
+                        persistent
+                            .root_reference(previous)
+                            .and_then(|reference| resolve_root_reference(outcomes, reference))
+                            .is_some_and(|candidate| candidate.tag == root.tag)
+                    })
+                    || !outcomes.iter().any(|outcome| {
+                        outcome.tag == root.tag
+                            && outcome.roots[..outcome.root_count as usize]
+                                .iter()
+                                .flatten()
+                                .any(|candidate| *candidate == root)
+                    })
+                {
+                    return Err(IntersectionCertificateError::InvalidTraceFamily);
+                }
+            }
+            result[sheet_slot][ordinal] = Some(persistent);
+            previous_parameter = Some(event.carrier_parameter());
+        }
+        counts[sheet_slot] = source.len() as u8;
+    }
+    Ok((result, counts))
+}
+
+fn validate_root_event_partition(
+    finite_topology: &SkewCylinderFiniteWindowTopologyCertificate,
+) -> Result<(), IntersectionCertificateError> {
+    for sheet in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper] {
+        let mut endpoint_events = Vec::new();
+        if let SkewCylinderFiniteSheetTopology::Open(spans) = finite_topology.sheet(sheet) {
+            for span in spans {
+                if span.sheet != sheet {
+                    return Err(IntersectionCertificateError::InvalidTraceFamily);
+                }
+                endpoint_events.extend([span.start.event, span.end.event]);
+            }
+        }
+        let boundary_events = finite_topology
+            .root_events(sheet)
+            .iter()
+            .copied()
+            .filter(|event| event.kind() == SkewCylinderFiniteWindowRootEventKind::Boundary)
+            .collect::<Vec<_>>();
+        if boundary_events.len() != endpoint_events.len()
+            || boundary_events.iter().any(|event| {
+                endpoint_events
+                    .iter()
+                    .filter(|candidate| *candidate == event)
+                    .count()
+                    != 1
+            })
+            || endpoint_events.iter().any(|event| {
+                event.kind() != SkewCylinderFiniteWindowRootEventKind::Boundary
+                    || boundary_events
+                        .iter()
+                        .filter(|candidate| *candidate == event)
+                        .count()
+                        != 1
+            })
+        {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+    }
+    Ok(())
+}
+
+fn persistent_finite_window_root_event(
+    event: SkewCylinderFiniteWindowRootEvent,
+    outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
+) -> Result<PersistentSkewCylinderFiniteWindowRootEvent, IntersectionCertificateError> {
+    let mut roots = [EMPTY_ROOT_REFERENCE; SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER];
+    for (index, slot) in roots.iter_mut().enumerate().take(event.root_count()) {
+        let root = persistent_root_event(
+            event
+                .root(index)
+                .ok_or(IntersectionCertificateError::InvalidTraceFamily)?,
+        );
+        *slot = find_root_reference(outcomes, root)
+            .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
+    }
+    Ok(PersistentSkewCylinderFiniteWindowRootEvent {
+        sheet: event.sheet(),
+        kind: match event.kind() {
+            SkewCylinderFiniteWindowRootEventKind::Boundary => {
+                PersistentSkewCylinderFiniteWindowRootEventKind::Boundary
+            }
+            SkewCylinderFiniteWindowRootEventKind::Contact => {
+                PersistentSkewCylinderFiniteWindowRootEventKind::Contact
+            }
+            SkewCylinderFiniteWindowRootEventKind::Isolated => {
+                PersistentSkewCylinderFiniteWindowRootEventKind::Isolated
+            }
+        },
+        roots,
+        root_count: event.root_count() as u8,
+        carrier_parameter: event.carrier_parameter(),
+    })
+}
+
+/// Shared exact formula/source geometry validated for every family member.
+#[derive(Clone, Copy)]
+struct FamilyMemberGeometry {
+    formula_cylinders: [Cylinder; 2],
+    formula_windows: [[ParamRange; 2]; 2],
+    source_cylinders: [Cylinder; 2],
+}
+
 fn certify_family_member(
     ordinal: usize,
     input: PersistentSkewCylinderFiniteWindowMemberInput,
     derived: SkewCylinderOpenSpan,
-    formula_cylinders: [Cylinder; 2],
-    formula_windows: [[ParamRange; 2]; 2],
-    source_cylinders: [Cylinder; 2],
+    geometry: FamilyMemberGeometry,
     outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
     tolerance: f64,
 ) -> Result<PersistentSkewCylinderFiniteWindowMemberCertificate, IntersectionCertificateError> {
-    validate_member_input_identity(
-        input,
-        formula_cylinders,
-        formula_windows,
-        source_cylinders,
-        tolerance,
-    )?;
+    validate_member_input_identity(input, geometry, tolerance)?;
     let residual = input.residual;
     let guarded = residual.carrier_range();
     let [lower, upper] = input.root_corridors;
     let expected_roots = derived
-        .root_longitude_intervals(formula_windows[0][0])
+        .root_longitude_intervals(geometry.formula_windows[0][0])
         .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
     if derived.sheet != residual.sheet()
         || !exact_range(derived.range, guarded)
@@ -779,8 +1069,8 @@ fn certify_family_member(
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
     let endpoints = [
-        persistent_endpoint(derived.start),
-        persistent_endpoint(derived.end),
+        persistent_endpoint(derived.start, outcomes)?,
+        persistent_endpoint(derived.end, outcomes)?,
     ];
     validate_derived_endpoints(endpoints, outcomes, input)?;
     let (carrier_box, pcurve_boxes, residual_bounds) = member_enclosures(input)?;
@@ -799,11 +1089,14 @@ fn certify_family_member(
 
 fn validate_member_input_identity(
     input: PersistentSkewCylinderFiniteWindowMemberInput,
-    formula_cylinders: [Cylinder; 2],
-    formula_windows: [[ParamRange; 2]; 2],
-    source_cylinders: [Cylinder; 2],
+    geometry: FamilyMemberGeometry,
     tolerance: f64,
 ) -> Result<(), IntersectionCertificateError> {
+    let FamilyMemberGeometry {
+        formula_cylinders,
+        formula_windows,
+        source_cylinders,
+    } = geometry;
     let residual = input.residual;
     let guarded = residual.carrier_range();
     let [lower, upper] = input.root_corridors;
@@ -846,34 +1139,45 @@ fn validate_derived_endpoints(
         PersistentSkewCylinderRootInsideSide::Before,
     ];
     for (index, endpoint) in endpoints.into_iter().enumerate() {
-        let required_relation = match endpoint.tag().boundary() {
-            PersistentSkewCylinderAxialBoundary::Lower => {
-                PersistentSkewCylinderAxialRelation::Above
-            }
-            PersistentSkewCylinderAxialBoundary::Upper => {
-                PersistentSkewCylinderAxialRelation::Below
-            }
-        };
-        let inside_relation = match endpoint.inside_side() {
-            PersistentSkewCylinderRootInsideSide::Before => endpoint.root().before,
-            PersistentSkewCylinderRootInsideSide::After => endpoint.root().after,
-        };
         let expected_parameter = if index == 0 { guarded.lo } else { guarded.hi };
-        let outcome_contains_root = outcomes.iter().any(|outcome| {
-            outcome.tag == endpoint.tag()
-                && outcome.roots[..outcome.root_count as usize]
-                    .iter()
-                    .flatten()
-                    .any(|root| *root == endpoint.root())
-        });
-        if endpoint.sheet() != input.residual.sheet()
+        if endpoint.root_count() == 0
+            || endpoint.sheet() != input.residual.sheet()
             || endpoint.inside_side() != expected_sides[index]
             || endpoint.inside_parameter().to_bits() != expected_parameter.to_bits()
-            || inside_relation != required_relation
-            || !outcome_contains_root
-            || !root_pcurves_contain_bound(input.root_corridors[index], endpoint)
         {
             return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        for root_index in 0..endpoint.root_count() {
+            let root = endpoint
+                .root_reference(root_index)
+                .and_then(|reference| resolve_root_reference(outcomes, reference))
+                .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
+            let required_relation = match root.tag.boundary() {
+                PersistentSkewCylinderAxialBoundary::Lower => {
+                    PersistentSkewCylinderAxialRelation::Above
+                }
+                PersistentSkewCylinderAxialBoundary::Upper => {
+                    PersistentSkewCylinderAxialRelation::Below
+                }
+            };
+            let inside_relation = match endpoint.inside_side() {
+                PersistentSkewCylinderRootInsideSide::Before => root.before,
+                PersistentSkewCylinderRootInsideSide::After => root.after,
+            };
+            let outcome_contains_root = outcomes.iter().any(|outcome| {
+                outcome.tag == root.tag
+                    && outcome.roots[..outcome.root_count as usize]
+                        .iter()
+                        .flatten()
+                        .any(|candidate| *candidate == root)
+            });
+            if root.sheet != input.residual.sheet()
+                || inside_relation != required_relation
+                || !outcome_contains_root
+                || !root_pcurves_contain_bound(input.root_corridors[index], root)
+            {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
         }
     }
     Ok(())
@@ -881,11 +1185,24 @@ fn validate_derived_endpoints(
 
 fn root_pcurves_contain_bound(
     corridor: SkewCylinderBranchPcurveRootCorridorCertificate,
-    endpoint: PersistentSkewCylinderFiniteWindowEndpointProof,
+    root: PersistentSkewCylinderAxialRootEventInput,
 ) -> bool {
-    let pcurve = corridor.root_pcurves()[endpoint.tag().source_slot()];
-    pcurve.stored_uv()[1].contains(endpoint.bound())
-        && pcurve.source_uv()[1].contains(endpoint.bound())
+    let pcurve = corridor.root_pcurves()[root.tag.source_slot()];
+    pcurve.stored_uv()[1].contains(root.bound) && pcurve.source_uv()[1].contains(root.bound)
+}
+
+fn endpoint_root_pcurves_contain_bounds(
+    corridor: SkewCylinderBranchPcurveRootCorridorCertificate,
+    endpoint: PersistentSkewCylinderFiniteWindowEndpointProof,
+    outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
+) -> bool {
+    endpoint.root_count() > 0
+        && (0..endpoint.root_count()).all(|index| {
+            endpoint
+                .root_reference(index)
+                .and_then(|reference| resolve_root_reference(outcomes, reference))
+                .is_some_and(|root| root_pcurves_contain_bound(corridor, root))
+        })
 }
 
 fn member_enclosures(
@@ -1049,20 +1366,65 @@ fn persistent_root_event(root: SkewCylinderAxialRoot) -> PersistentSkewCylinderA
         half_angle_bracket: [root.bracket.lo, root.bracket.hi],
         before: persistent_relation(root.before),
         after: persistent_relation(root.after),
+        repeated: root.repeated,
     }
+}
+
+fn find_root_reference(
+    outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
+    root: PersistentSkewCylinderAxialRootEventInput,
+) -> Option<PersistentSkewCylinderRootReference> {
+    for (outcome_index, outcome) in outcomes.iter().enumerate() {
+        for root_index in 0..outcome.root_count() {
+            if outcome.root(root_index) == Some(root) {
+                return Some(PersistentSkewCylinderRootReference {
+                    outcome: outcome_index as u8,
+                    root: root_index as u8,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn resolve_root_reference(
+    outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
+    reference: PersistentSkewCylinderRootReference,
+) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+    outcomes
+        .get(reference.outcome as usize)?
+        .root(reference.root as usize)
 }
 
 fn persistent_endpoint(
     endpoint: SkewCylinderOpenSpanEndpointProof,
-) -> PersistentSkewCylinderFiniteWindowEndpointProof {
-    PersistentSkewCylinderFiniteWindowEndpointProof::new(
-        persistent_root_event(endpoint.root),
+    outcomes: &[PersistentSkewCylinderAxialBoundOutcome; 4],
+) -> Result<PersistentSkewCylinderFiniteWindowEndpointProof, IntersectionCertificateError> {
+    let mut roots = [EMPTY_ROOT_REFERENCE; SKEW_CYLINDER_FINITE_WINDOW_MAX_ROOT_EVENTS_PER_CLUSTER];
+    for (index, slot) in roots
+        .iter_mut()
+        .enumerate()
+        .take(endpoint.event.root_count())
+    {
+        let root = persistent_root_event(
+            endpoint
+                .event
+                .root(index)
+                .ok_or(IntersectionCertificateError::InvalidTraceFamily)?,
+        );
+        *slot = find_root_reference(outcomes, root)
+            .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
+    }
+    Ok(PersistentSkewCylinderFiniteWindowEndpointProof::new(
+        roots,
+        endpoint.event.root_count(),
+        endpoint.event.sheet(),
         match endpoint.inside_side {
             SkewCylinderRootInsideSide::Before => PersistentSkewCylinderRootInsideSide::Before,
             SkewCylinderRootInsideSide::After => PersistentSkewCylinderRootInsideSide::After,
         },
         endpoint.carrier_parameter,
-    )
+    ))
 }
 
 const fn sheet_index(sheet: SkewCylinderSheet) -> usize {

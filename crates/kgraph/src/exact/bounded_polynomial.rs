@@ -601,6 +601,45 @@ impl ExactPolynomial {
     }
 }
 
+/// Return an exact polynomial whose roots are the common roots of `lhs` and
+/// `rhs`, or `None` when exact pseudo-division proves that they are coprime.
+///
+/// Coefficient normalization is deliberately unnecessary: every nonzero
+/// pseudo-remainder scale is exact and preserves the root set. The degree
+/// falls on every iteration, so the quartic degree bound also fixes the work.
+pub(super) fn common_root_polynomial(
+    lhs: &ExactPolynomial,
+    rhs: &ExactPolynomial,
+) -> Result<Option<ExactPolynomial>, RootIsolationFailure> {
+    if lhs.is_zero() || rhs.is_zero() {
+        return Err(RootIsolationFailure::ZeroPolynomial);
+    }
+    if lhs.degree() == 0 || rhs.degree() == 0 {
+        return Ok(None);
+    }
+
+    let (mut dividend, mut divisor) = if lhs.degree() >= rhs.degree() {
+        (lhs.clone(), rhs.clone())
+    } else {
+        (rhs.clone(), lhs.clone())
+    };
+    for _ in 0..MAX_STURM_POLYNOMIALS {
+        if divisor.degree() == 0 {
+            return Ok(None);
+        }
+        let remainder = signed_negative_pseudo_remainder(&dividend, &divisor)?;
+        if remainder.is_zero() {
+            return Ok(Some(divisor));
+        }
+        if remainder.degree() >= divisor.degree() {
+            return Err(RootIsolationFailure::SturmChainLimit);
+        }
+        dividend = divisor;
+        divisor = remainder;
+    }
+    Err(RootIsolationFailure::SturmChainLimit)
+}
+
 /// A closed interval containing exactly one distinct root.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RootBracket {
