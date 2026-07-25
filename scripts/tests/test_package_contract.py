@@ -5,8 +5,10 @@ import unittest
 from scripts.package_contract import (
     ContractError,
     KERNEL_PACKAGE_FILES,
+    SPINE_FROZEN_FILENAMES,
     validate_facade_client,
     validate_package_files,
+    validate_spine_freeze,
 )
 
 
@@ -53,6 +55,31 @@ class FacadeClientDependencyTests(unittest.TestCase):
                     ]
                 )
             )
+
+
+class SpineFreezeTests(unittest.TestCase):
+    SOURCE = """fn certify_shell_impl() {
+    if body_kind != BodyKind::Solid {}
+    certify_whole_closed_surface();
+    certify_cylindrical_host_shell();
+}
+fn indeterminate() {}
+"""
+
+    def test_reviewed_certifiers_and_filenames_pass(self) -> None:
+        validate_spine_freeze(self.SOURCE, SPINE_FROZEN_FILENAMES)
+
+    def test_new_certifier_or_frozen_filename_fails(self) -> None:
+        source = self.SOURCE.replace(
+            "\nfn indeterminate()", "\n    certify_new_shell();\nfn indeterminate()"
+        )
+        paths = SPINE_FROZEN_FILENAMES | {
+            "crates/kernel/src/boolean/parallel_cylinder_new.rs"
+        }
+        with self.assertRaisesRegex(
+            ContractError, "new_certifiers=.*certify_new_shell.*new_filenames="
+        ):
+            validate_spine_freeze(source, paths)
 
 
 if __name__ == "__main__":

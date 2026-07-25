@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,11 +19,6 @@ KERNEL_PACKAGE_FILES = {
     "README.md",
     "examples/boolean_xt_oracle.rs",
     "src/boolean/boundary_select.rs",
-    "src/boolean/convex_containment.rs",
-    "src/boolean/curved_cavity.rs",
-    "src/boolean/curved_contact.rs",
-    "src/boolean/curved_host.rs",
-    "src/boolean/curved_host_bands.rs",
     "src/boolean/curved_pipeline.rs",
     "src/boolean/curved_realize.rs",
     "src/boolean/curved_source.rs",
@@ -152,6 +148,28 @@ KERNEL_PACKAGE_FILES = {
     "tests/lifecycle/parallel_cylinder_boolean/radial_miss_setops.rs",
 }
 
+LIVE_SHELL_CERTIFIERS = frozenset(
+    "certify_whole_closed_surface certify_sphere_cap_shell certify_cylinder_band_shell "
+    "certify_cylindrical_host_shell certify_bounded_skew_lobe_shell "
+    "certify_mixed_profile_prism certify_cap_reaching_cylinder_shell "
+    "certify_two_host_axial_chain_shell certify_portal_cylinder_shell "
+    "certify_chord_portal_shell certify_convex_cylindrical_shell "
+    "certify_planar_profile_prism certify_convex_planar_shell "
+    "certify_semantic_planar_shell_in_scope certify_general_planar_shell_in_scope".split()
+)
+SPINE_FROZEN_FILENAMES = frozenset(
+    """
+crates/kernel/src/boolean/mixed_shell_plan/parallel_cylinder_lens.rs crates/kernel/src/boolean/parallel_cylinder_boundary.rs
+crates/kernel/src/boolean/parallel_cylinder_pipeline.rs crates/kernel/src/boolean/parallel_cylinder_relation.rs
+crates/kernel/src/boolean/transverse_cylinder_pipeline.rs crates/kernel/tests/lifecycle/parallel_cylinder_boolean.rs
+crates/kops/tests/parallel_cylinder_radial_relation.rs crates/ktopo/src/bounded_skew_lobe_shell_proof.rs
+crates/ktopo/src/cap_reaching_cylinder_shell_proof.rs crates/ktopo/src/chord_portal_shell_proof.rs
+crates/ktopo/src/convex_cylindrical_shell_proof.rs crates/ktopo/src/planar_shell_proof.rs
+crates/ktopo/src/portal_cylinder_shell_proof.rs crates/ktopo/src/semantic_planar_shell_proof.rs
+crates/ktopo/src/two_host_axial_chain_shell_proof.rs
+""".split()
+)
+
 
 class ContractError(RuntimeError):
     """A facade packaging or dependency boundary changed unexpectedly."""
@@ -197,6 +215,29 @@ def validate_facade_client(metadata: dict[str, Any]) -> None:
         )
 
 
+def validate_spine_freeze(shell_source: str, paths: Iterable[str]) -> None:
+    """Reject new shell certifiers and frozen planner/proof filename families."""
+    cascade = shell_source[
+        shell_source.index("if body_kind != BodyKind::Solid") :
+        shell_source.index("\nfn indeterminate()")
+    ]
+    certifiers = set(re.findall(r"\bcertify_[a-z0-9_]+", cascade))
+    frozen = {
+        path
+        for path in paths
+        if Path(path).name.endswith("_shell_proof.rs")
+        or Path(path).name.startswith("parallel_cylinder_")
+        or Path(path).name.endswith("_cylinder_pipeline.rs")
+    }
+    new_certifiers = sorted(certifiers - LIVE_SHELL_CERTIFIERS)
+    new_filenames = sorted(frozen - SPINE_FROZEN_FILENAMES)
+    if new_certifiers or new_filenames:
+        raise ContractError(
+            "spine freeze changed: "
+            f"new_certifiers={new_certifiers}, new_filenames={new_filenames}"
+        )
+
+
 def main() -> int:
     """Run Cargo-backed contract checks from the repository root."""
     repository = Path(__file__).resolve().parents[1]
@@ -216,7 +257,11 @@ def main() -> int:
     )
     validate_package_files(package.stdout.splitlines())
     validate_facade_client(json.loads(metadata.stdout))
-    print("kernel package inventory and facade-client dependency boundary are current")
+    validate_spine_freeze(
+        (repository / "crates/ktopo/src/shell_proof.rs").read_text(),
+        (str(path.relative_to(repository)) for path in repository.glob("crates/**/*.rs")),
+    )
+    print("package, facade-client, and spine-freeze contracts are current")
     return 0
 
 

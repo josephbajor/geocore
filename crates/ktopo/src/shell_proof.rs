@@ -177,76 +177,30 @@ fn certify_shell_impl(
     if body_kind != BodyKind::Solid || region_kind != RegionKind::Solid {
         return Ok(indeterminate());
     }
-    if let Some(certification) = certify_whole_closed_surface(store, shell_id)? {
-        return Ok(certification);
+    macro_rules! attempt {
+        ($proof:path) => {
+            if let Some(certification) = $proof(store, shell_id)? {
+                return Ok(certification);
+            }
+        };
+        (scoped $proof:path) => {
+            if let Some(certification) = $proof(store, shell_id, scope.as_deref_mut())? {
+                return Ok(certification);
+            }
+        };
     }
-    if let Some(certification) = certify_sphere_cap_shell(store, shell_id)? {
-        return Ok(certification);
-    }
-    if let Some(certification) = certify_cylinder_band_shell(store, shell_id)? {
-        return Ok(certification);
-    }
-    if let Some(certification) = cylindrical_host_proof::certify_cylindrical_host_shell(
-        store,
-        shell_id,
-        scope.as_deref_mut(),
-    )? {
-        return Ok(certification);
-    }
-    if let Some(certification) = bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell(
-        store,
-        shell_id,
-        scope.as_deref_mut(),
-    )? {
-        return Ok(certification);
-    }
-    if let Some(certification) = mixed_profile_prism_proof::certify_mixed_profile_prism(
-        store,
-        shell_id,
-        scope.as_deref_mut(),
-    )? {
-        return Ok(certification);
-    }
-    if let Some(certification) =
-        cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell(
-            store,
-            shell_id,
-            scope.as_deref_mut(),
-        )?
-    {
-        return Ok(certification);
-    }
-    if let Some(certification) =
-        two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell(
-            store,
-            shell_id,
-            scope.as_deref_mut(),
-        )?
-    {
-        return Ok(certification);
-    }
-    if let Some(certification) = portal_cylinder_shell_proof::certify_portal_cylinder_shell(
-        store,
-        shell_id,
-        scope.as_deref_mut(),
-    )? {
-        return Ok(certification);
-    }
-    if let Some(certification) =
-        chord_portal_shell_proof::certify_chord_portal_shell(store, shell_id, scope.as_deref_mut())?
-    {
-        return Ok(certification);
-    }
-    if let Some(certification) = convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(
-        store,
-        shell_id,
-        scope.as_deref_mut(),
-    )? {
-        return Ok(certification);
-    }
-    if let Some(certification) = certify_planar_profile_prism(store, shell_id)? {
-        return Ok(certification);
-    }
+    attempt!(certify_whole_closed_surface);
+    attempt!(certify_sphere_cap_shell);
+    attempt!(certify_cylinder_band_shell);
+    attempt!(scoped cylindrical_host_proof::certify_cylindrical_host_shell);
+    attempt!(scoped bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell);
+    attempt!(scoped mixed_profile_prism_proof::certify_mixed_profile_prism);
+    attempt!(scoped cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell);
+    attempt!(scoped two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell);
+    attempt!(scoped portal_cylinder_shell_proof::certify_portal_cylinder_shell);
+    attempt!(scoped chord_portal_shell_proof::certify_chord_portal_shell);
+    attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
+    attempt!(certify_planar_profile_prism);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
     if convex != indeterminate() {
         return Ok(convex);
