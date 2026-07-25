@@ -229,6 +229,7 @@ impl PeriodicSourceLoopKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PeriodicArrangementVertexKey {
     SourceLoopSeam(PeriodicSourceLoopKey),
+    WholeSectionSeam(usize),
     SectionEndpoint(usize),
 }
 
@@ -236,6 +237,7 @@ pub(crate) enum PeriodicArrangementVertexKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PeriodicArrangementCellKey {
     AnnularRemainder,
+    AxialBand(usize),
     ComponentDisk(usize),
     TraceCell(PeriodicBoundaryTraceKey),
 }
@@ -395,6 +397,185 @@ pub(crate) fn arrange_mixed_periodic_face_from_embedding(
     }
     let expected = carried_occurrences_for_embedding(graph, &face, operand, evidence)?;
     arrange_mixed_periodic_face_with_occurrences(graph, evidence, expected)
+}
+
+/// Arrange an annular source face cut only by endpoint-free transverse rings.
+///
+/// `whole_fragments` are ordered from the cylinder's lower cap to its upper
+/// cap. The Boolean boundary adapter owns that exact axial ordering proof.
+/// The flag is true when the section carrier's forward direction has the
+/// higher axial band on its left in the cylinder chart.
+pub(crate) fn arrange_mixed_periodic_whole_fragments(
+    graph: &BodySectionGraph,
+    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
+    whole_fragments: &[(usize, bool)],
+) -> Result<MixedPeriodicFaceArrangement, MixedPeriodicArrangementError> {
+    let face = evidence.face();
+    let operand = evidence.operand();
+    if operand >= graph.bodies().len() {
+        return Err(MixedPeriodicArrangementError::InvalidOperand(operand));
+    }
+    let mut seen = BTreeSet::new();
+    let mut cuts = Vec::with_capacity(whole_fragments.len());
+    for &(fragment_index, forward_to_high) in whole_fragments {
+        if !seen.insert(fragment_index) {
+            return Err(MixedPeriodicArrangementError::DuplicateFragment(
+                fragment_index,
+            ));
+        }
+        let fragment = graph.curve_fragments().get(fragment_index).ok_or(
+            MixedPeriodicArrangementError::UnknownFragment {
+                component: fragment_index,
+                fragment: fragment_index,
+            },
+        )?;
+        if !matches!(fragment.span(), crate::SectionCurveFragmentSpan::Whole) {
+            return Err(MixedPeriodicArrangementError::FaceLocalPathUnavailable(
+                fragment_index,
+            ));
+        }
+        let branch = graph.branches().get(fragment.branch()).ok_or(
+            MixedPeriodicArrangementError::UnknownBranch {
+                fragment: fragment_index,
+                branch: fragment.branch(),
+            },
+        )?;
+        if branch.faces()[operand] != face {
+            return Err(MixedPeriodicArrangementError::FaceLocalPathUnavailable(
+                fragment_index,
+            ));
+        }
+        let mut occurrence = None;
+        for (component, source) in graph.curve_components().iter().enumerate() {
+            for (ordinal, &candidate) in source.fragments().iter().enumerate() {
+                if candidate == fragment_index && occurrence.replace((component, ordinal)).is_some()
+                {
+                    return Err(MixedPeriodicArrangementError::DuplicateFragment(
+                        fragment_index,
+                    ));
+                }
+            }
+        }
+        let (component, ordinal) = occurrence.ok_or(
+            MixedPeriodicArrangementError::FaceLocalPathUnavailable(fragment_index),
+        )?;
+        cuts.push((
+            PeriodicCutFragmentKey {
+                component,
+                source_component: Some(component),
+                ordinal,
+                fragment: fragment_index,
+                cylinder_period_shift: 0,
+            },
+            forward_to_high,
+        ));
+    }
+
+    let source_directions = evidence.source_loop_windings().map(|winding| {
+        if winding.is_positive() {
+            ArrangementDirection::Forward
+        } else {
+            ArrangementDirection::Reverse
+        }
+    });
+    arrange_periodic_whole_fragment_spec(cuts, source_directions)
+}
+
+fn arrange_periodic_whole_fragment_spec(
+    cuts: Vec<(PeriodicCutFragmentKey, bool)>,
+    source_directions: [ArrangementDirection; 2],
+) -> Result<MixedPeriodicFaceArrangement, MixedPeriodicArrangementError> {
+    if source_directions[0] == source_directions[1] {
+        return Err(MixedPeriodicArrangementError::SourceLoopDirectionMismatch);
+    }
+    let mut source_spans = Vec::with_capacity(2);
+    let mut cut_fragments = Vec::with_capacity(cuts.len());
+    let mut rotations = Vec::with_capacity(cuts.len() + 2);
+    let mut assignments = Vec::with_capacity((cuts.len() + 2) * 2);
+    let high_band = cuts.len();
+    for (topology_ordinal, source_direction) in source_directions.into_iter().enumerate() {
+        let source_loop = PeriodicSourceLoopKey {
+            topology_ordinal,
+            source_direction,
+            cyclic_span_ordinal: None,
+            terminal_roots: None,
+        };
+        let seam = PeriodicArrangementVertexKey::SourceLoopSeam(source_loop);
+        source_spans.push(DirectedSourceSpan::whole_loop(source_loop, seam));
+        rotations.push(CertifiedEndpointRotation::new(
+            seam,
+            vec![
+                ArrangementDartKey::source(source_loop, ArrangementDirection::Forward),
+                ArrangementDartKey::source(source_loop, ArrangementDirection::Reverse),
+            ],
+        ));
+        let band = if source_direction == ArrangementDirection::Forward {
+            0
+        } else {
+            high_band
+        };
+        assignments.push(CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(source_loop, ArrangementDirection::Forward),
+            CertifiedCycleSide::Cell(PeriodicArrangementCellKey::AxialBand(band)),
+        ));
+        assignments.push(CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(source_loop, ArrangementDirection::Reverse),
+            CertifiedCycleSide::Exterior,
+        ));
+    }
+    for (order, (cut, forward_to_high)) in cuts.iter().copied().enumerate() {
+        let seam = PeriodicArrangementVertexKey::WholeSectionSeam(cut.fragment);
+        cut_fragments.push(DirectedCutFragment::whole_loop(cut, seam));
+        rotations.push(CertifiedEndpointRotation::new(
+            seam,
+            vec![
+                ArrangementDartKey::cut(cut, ArrangementDirection::Forward),
+                ArrangementDartKey::cut(cut, ArrangementDirection::Reverse),
+            ],
+        ));
+        let (forward, reverse) = if forward_to_high {
+            (order + 1, order)
+        } else {
+            (order, order + 1)
+        };
+        assignments.push(CertifiedCycleAssignment::new(
+            ArrangementDartKey::cut(cut, ArrangementDirection::Forward),
+            CertifiedCycleSide::Cell(PeriodicArrangementCellKey::AxialBand(forward)),
+        ));
+        assignments.push(CertifiedCycleAssignment::new(
+            ArrangementDartKey::cut(cut, ArrangementDirection::Reverse),
+            CertifiedCycleSide::Cell(PeriodicArrangementCellKey::AxialBand(reverse)),
+        ));
+    }
+    let cells = (0..=cuts.len())
+        .map(|band| CertifiedCellTopology::new(PeriodicArrangementCellKey::AxialBand(band), 0))
+        .collect();
+    let input = FaceArrangementInput::new(source_spans, cut_fragments, rotations);
+    let arrangement =
+        arrange_bounded_surface(input, CertifiedSurfaceEmbedding::new(assignments, cells, 0))
+            .map_err(MixedPeriodicArrangementError::Arrangement)?;
+    let proof = arrangement.proof();
+    let valid = arrangement.source_spans().len() == 2
+        && arrangement.cut_fragments().len() == cuts.len()
+        && arrangement.cells().len() == cuts.len() + 1
+        && arrangement.adjacency().len() == cuts.len()
+        && arrangement.cells().iter().all(|cell| {
+            matches!(cell.key(), PeriodicArrangementCellKey::AxialBand(_))
+                && cell.euler_characteristic() == 0
+                && cell.genus() == 0
+        })
+        && proof.source_spans_conserved() == 2
+        && proof.opposed_cut_pairs() == cuts.len()
+        && proof.exterior_cycles() == 2
+        && proof.dual_connected()
+        && proof.surface_euler_characteristic() == 0
+        && proof.surface_genus() == 0;
+    if !valid {
+        return Err(MixedPeriodicArrangementError::Contract(
+            MixedPeriodicArrangementContractGap::Conservation,
+        ));
+    }
+    Ok(arrangement)
 }
 
 fn arrange_mixed_periodic_face_with_occurrences(
@@ -2755,6 +2936,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     enum CellRole {
         Remainder,
+        AxialBand(usize),
         Disk(Vec<FragmentLineage>),
         Trace(usize, usize),
     }
@@ -2777,6 +2959,7 @@ mod tests {
     fn cell_role(graph: &BodySectionGraph, key: PeriodicArrangementCellKey) -> CellRole {
         match key {
             PeriodicArrangementCellKey::AnnularRemainder => CellRole::Remainder,
+            PeriodicArrangementCellKey::AxialBand(band) => CellRole::AxialBand(band),
             PeriodicArrangementCellKey::ComponentDisk(component) => {
                 CellRole::Disk(component_lineage(graph, component))
             }

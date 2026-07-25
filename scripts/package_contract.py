@@ -33,7 +33,6 @@ KERNEL_PACKAGE_FILES = {
     "src/boolean/disk_face_arrangement.rs",
     "src/boolean/extract.rs",
     "src/boolean/face_arrangement.rs",
-    "src/boolean/face_partition.rs",
     "src/boolean/mixed_boundary.rs",
     "src/boolean/mixed_cap_boundary.rs",
     "src/boolean/mixed_face_arrangement.rs",

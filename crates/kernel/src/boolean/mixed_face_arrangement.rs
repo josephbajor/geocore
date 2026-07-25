@@ -44,11 +44,25 @@ pub(crate) struct MixedCutFragmentKey {
     source_ordinal: usize,
 }
 
+impl MixedCutFragmentKey {
+    pub(crate) const fn branch(&self) -> usize {
+        self.branch
+    }
+
+    pub(crate) const fn source_ordinal(&self) -> usize {
+        self.source_ordinal
+    }
+}
+
 /// Exact endpoint vocabulary shared with source topology and Section.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MixedArrangementVertex {
     SourceVertex(usize),
     SectionEndpoint(usize),
+    WholeSectionSeam {
+        branch: usize,
+        source_ordinal: usize,
+    },
 }
 
 type ConnectedPlanarArrangement =
@@ -366,6 +380,10 @@ struct CutEndpointEvidence {
 enum EvidenceEndpoint {
     SourceVertex(RawVertexId),
     SectionEndpoint(usize),
+    WholeSectionSeam {
+        branch: usize,
+        source_ordinal: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -386,12 +404,20 @@ enum CutEmbedding {
     Circle {
         branch: usize,
     },
+    WholeCircle {
+        branch: usize,
+        center: [f64; 2],
+        radius: f64,
+        orientation: Orientation,
+    },
 }
 
 impl CutEmbedding {
     const fn branch(&self) -> usize {
         match self {
-            Self::Line { branch, .. } | Self::Circle { branch } => *branch,
+            Self::Line { branch, .. }
+            | Self::Circle { branch }
+            | Self::WholeCircle { branch, .. } => *branch,
         }
     }
 }
@@ -443,10 +469,36 @@ pub(crate) fn arrange_mixed_planar_face_with_lineage(
     face: FaceId,
     operand: usize,
 ) -> Result<MixedPlanarFaceOutput, MixedFaceArrangementError> {
+    arrange_mixed_planar_face_with_lineage_admission(store, graph, face, operand, false)
+}
+
+/// Arrange a source face for an operation-local theorem that proves the
+/// Section graph carries no cuts despite a contact-only completion gap.
+pub(crate) fn arrange_uncut_mixed_planar_face_with_lineage(
+    store: &Store,
+    graph: &BodySectionGraph,
+    face: FaceId,
+    operand: usize,
+) -> Result<MixedPlanarFaceOutput, MixedFaceArrangementError> {
+    arrange_mixed_planar_face_with_lineage_admission(store, graph, face, operand, true)
+}
+
+fn arrange_mixed_planar_face_with_lineage_admission(
+    store: &Store,
+    graph: &BodySectionGraph,
+    face: FaceId,
+    operand: usize,
+    admit_contact_only_gap: bool,
+) -> Result<MixedPlanarFaceOutput, MixedFaceArrangementError> {
     if operand > 1 {
         return Err(MixedFaceArrangementError::InvalidOperand);
     }
-    if graph.completion() != SectionCompletion::Complete || !graph.gaps().is_empty() {
+    if (graph.completion() != SectionCompletion::Complete || !graph.gaps().is_empty())
+        && !(admit_contact_only_gap
+            && graph.curve_fragments().is_empty()
+            && graph.curve_endpoints().is_empty()
+            && graph.curve_components().is_empty())
+    {
         return Err(MixedFaceArrangementError::SectionIncomplete);
     }
     let raw_face = face.raw();
@@ -528,8 +580,37 @@ fn adapt_fragment(
     let branch = graph.branches().get(fragment.branch()).ok_or(
         MixedFaceArrangementError::MissingSectionBranch(fragment.branch()),
     )?;
+    if matches!(fragment.span(), SectionCurveFragmentSpan::Whole) {
+        let SectionUvCurve::Circle(circle) = branch.pcurves()[operand] else {
+            return Err(MixedFaceArrangementError::WholeFragment(key));
+        };
+        let orientation = if circle.parameter_scale() > 0.0 {
+            Orientation::Positive
+        } else if circle.parameter_scale() < 0.0 {
+            Orientation::Negative
+        } else {
+            return Err(MixedFaceArrangementError::WholeFragment(key));
+        };
+        let seam = CutEndpointEvidence {
+            vertex: EvidenceEndpoint::WholeSectionSeam {
+                branch: key.branch,
+                source_ordinal: key.source_ordinal,
+            },
+            boundary_root: None,
+        };
+        return Ok(FaceCutEvidence {
+            key,
+            endpoints: [seam.clone(), seam],
+            embedding: CutEmbedding::WholeCircle {
+                branch: fragment.branch(),
+                center: [circle.center().x, circle.center().y],
+                radius: circle.radius(),
+                orientation,
+            },
+        });
+    }
     let carrier_parameters = match fragment.span() {
-        SectionCurveFragmentSpan::Whole => None,
+        SectionCurveFragmentSpan::Whole => unreachable!(),
         SectionCurveFragmentSpan::Arc { endpoints, .. } => {
             Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
         }
@@ -541,9 +622,7 @@ fn adapt_fragment(
         }
     };
     let occurrences = match fragment.span() {
-        SectionCurveFragmentSpan::Whole => {
-            return Err(MixedFaceArrangementError::WholeFragment(key));
-        }
+        SectionCurveFragmentSpan::Whole => unreachable!(),
         SectionCurveFragmentSpan::Arc { endpoints, .. } => endpoints.each_ref().map(|end| {
             let trim = end.trim();
             let root = (trim.operand() == operand).then(|| RootOccurrence {
@@ -615,7 +694,7 @@ fn adapt_fragment(
 fn start_endpoint(endpoint: &CutEndpointEvidence) -> usize {
     match &endpoint.vertex {
         EvidenceEndpoint::SectionEndpoint(endpoint) => *endpoint,
-        EvidenceEndpoint::SourceVertex(_) => usize::MAX,
+        EvidenceEndpoint::SourceVertex(_) | EvidenceEndpoint::WholeSectionSeam { .. } => usize::MAX,
     }
 }
 
@@ -736,11 +815,15 @@ fn arrange_planar_face_evidence_with_lineage(
     let cut_fragments = cuts
         .iter()
         .map(|cut| {
-            Ok(DirectedCutFragment::new(
-                cut.key.clone(),
-                normalize_cut_endpoint(&cut.endpoints[0].vertex, &split.source_vertices)?,
-                normalize_cut_endpoint(&cut.endpoints[1].vertex, &split.source_vertices)?,
-            ))
+            let start = normalize_cut_endpoint(&cut.endpoints[0].vertex, &split.source_vertices)?;
+            let end = normalize_cut_endpoint(&cut.endpoints[1].vertex, &split.source_vertices)?;
+            Ok(
+                if matches!(cut.embedding, CutEmbedding::WholeCircle { .. }) && start == end {
+                    DirectedCutFragment::whole_loop(cut.key.clone(), start)
+                } else {
+                    DirectedCutFragment::new(cut.key.clone(), start, end)
+                },
+            )
         })
         .collect::<Result<Vec<_>, MixedFaceArrangementError>>()?;
     let rotations = build_rotations(&split.spans, &cut_fragments)?;
@@ -838,7 +921,13 @@ fn normalize_embedded_arrangement(
 struct InteriorLineCycle {
     anchor: MixedCutFragmentKey,
     orientation: Orientation,
-    points: Vec<[f64; 2]>,
+    shape: InteriorCycleShape,
+}
+
+#[derive(Debug)]
+enum InteriorCycleShape {
+    Polygon(Vec<[f64; 2]>),
+    Circle { center: [f64; 2], radius: f64 },
 }
 
 fn arrange_interior_planar_surface(
@@ -851,7 +940,10 @@ fn arrange_interior_planar_surface(
     let keys = || cuts.iter().map(|cut| cut.key.clone()).collect::<Vec<_>>();
     if cuts.iter().flat_map(|cut| &cut.endpoints).any(|endpoint| {
         endpoint.boundary_root.is_some()
-            || !matches!(endpoint.vertex, EvidenceEndpoint::SectionEndpoint(_))
+            || !matches!(
+                endpoint.vertex,
+                EvidenceEndpoint::SectionEndpoint(_) | EvidenceEndpoint::WholeSectionSeam { .. }
+            )
     }) {
         return Err(MixedFaceArrangementError::InteriorCycleEmbeddingRequired(
             keys(),
@@ -917,6 +1009,28 @@ fn collect_interior_line_cycles(
     let keys = || cuts.iter().map(|cut| cut.key.clone()).collect::<Vec<_>>();
     let mut starts = BTreeMap::new();
     for (index, cut) in cuts.iter().enumerate() {
+        if let CutEmbedding::WholeCircle {
+            center: _,
+            radius,
+            orientation: _,
+            ..
+        } = cut.embedding
+        {
+            let EvidenceEndpoint::WholeSectionSeam { .. } = cut.endpoints[0].vertex else {
+                return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                    keys(),
+                ));
+            };
+            if cut.endpoints[0].vertex != cut.endpoints[1].vertex
+                || !radius.is_finite()
+                || radius <= 0.0
+            {
+                return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                    keys(),
+                ));
+            }
+            continue;
+        }
         let Some(start) = section_endpoint(&cut.endpoints[0].vertex) else {
             return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
                 keys(),
@@ -937,6 +1051,21 @@ fn collect_interior_line_cycles(
         .min_by_key(|index| &cuts[**index].key)
         .copied()
     {
+        if let CutEmbedding::WholeCircle {
+            center,
+            radius,
+            orientation,
+            ..
+        } = cuts[first].embedding
+        {
+            unvisited.remove(&first);
+            cycles.push(InteriorLineCycle {
+                anchor: cuts[first].key.clone(),
+                orientation,
+                shape: InteriorCycleShape::Circle { center, radius },
+            });
+            continue;
+        }
         let mut current = first;
         let mut points = Vec::new();
         loop {
@@ -971,7 +1100,7 @@ fn collect_interior_line_cycles(
         cycles.push(InteriorLineCycle {
             anchor: cuts[first].key.clone(),
             orientation,
-            points,
+            shape: InteriorCycleShape::Polygon(points),
         });
     }
     Ok(cycles)
@@ -980,7 +1109,7 @@ fn collect_interior_line_cycles(
 const fn section_endpoint(endpoint: &EvidenceEndpoint) -> Option<usize> {
     match endpoint {
         EvidenceEndpoint::SectionEndpoint(endpoint) => Some(*endpoint),
-        EvidenceEndpoint::SourceVertex(_) => None,
+        EvidenceEndpoint::SourceVertex(_) | EvidenceEndpoint::WholeSectionSeam { .. } => None,
     }
 }
 
@@ -1049,11 +1178,28 @@ fn cycle_containment(
             if outer == inner {
                 continue;
             }
-            result[outer][inner] =
-                strict_point_in_polygon(&cycles[outer].points, cycles[inner].points[0])
-                    .ok_or_else(|| {
-                        MixedFaceArrangementError::InteriorCycleEmbeddingRequired(keys())
-                    })?;
+            result[outer][inner] = match (&cycles[outer].shape, &cycles[inner].shape) {
+                (InteriorCycleShape::Polygon(outer), InteriorCycleShape::Polygon(inner)) => {
+                    strict_point_in_polygon(outer, inner[0])
+                }
+                (
+                    InteriorCycleShape::Circle {
+                        center: outer_center,
+                        radius: outer_radius,
+                    },
+                    InteriorCycleShape::Circle {
+                        center: inner_center,
+                        radius: inner_radius,
+                    },
+                ) => {
+                    let dx = inner_center[0] - outer_center[0];
+                    let dy = inner_center[1] - outer_center[1];
+                    let clearance = outer_radius - inner_radius;
+                    Some(clearance > 0.0 && dx * dx + dy * dy < clearance * clearance)
+                }
+                _ => None,
+            }
+            .ok_or_else(|| MixedFaceArrangementError::InteriorCycleEmbeddingRequired(keys()))?;
         }
     }
     if (0..cycles.len()).any(|left| {
@@ -1235,6 +1381,13 @@ fn normalize_cut_endpoint(
         EvidenceEndpoint::SectionEndpoint(endpoint) => {
             Ok(MixedArrangementVertex::SectionEndpoint(*endpoint))
         }
+        EvidenceEndpoint::WholeSectionSeam {
+            branch,
+            source_ordinal,
+        } => Ok(MixedArrangementVertex::WholeSectionSeam {
+            branch: *branch,
+            source_ordinal: *source_ordinal,
+        }),
         EvidenceEndpoint::SourceVertex(vertex) => source_vertices
             .iter()
             .position(|candidate| candidate == vertex)

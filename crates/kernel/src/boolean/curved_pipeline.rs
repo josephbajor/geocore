@@ -1,33 +1,22 @@
 //! Proof-bearing convex-planar/finite-cylinder Boolean pipeline.
 //!
-//! The first curved realization slice is not a primitive case switch. It
-//! consumes complete Plane/Cylinder section rings, partitions every affected
-//! source face into two-dimensional cells, classifies one anchor per exact
-//! dual component, and propagates occupancy across transverse cuts. Generic
-//! boundary truth selection then decides which cells survive. The current
-//! topology adapters commit selected axial cylinder bands, one-port capped
-//! features, two-port holes, contained cylindrical cavities, or proof-matched
-//! complete source boundaries. Other partial and mixed boundary classes remain
-//! explicit typed refusals.
+//! Complete Plane/Cylinder sections flow through the shared arrangement,
+//! boundary-selection, shell-plan, and analytic materialization spine. Whole
+//! endpoint-free rings are ordinary arrangement cuts; zero-cut results reuse
+//! the same truth selection and copy a source only when its entire boundary is
+//! retained. Certified support contact is admitted as a degenerate section
+//! relation and grafted into the same shell plan. Incomplete evidence remains
+//! an explicit typed refusal.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use kcore::operation::{OperationScope, ResourceKind};
-use kcore::predicates::{Orientation, affine_dot3};
-use kgeom::vec::Point3;
-use ktopo::convex_multishell::{
-    certify_mixed_convex_multishell_input, mixed_convex_multishell_dimension_work,
-};
-use ktopo::entity::FaceId as RawFaceId;
+use kcore::operation::OperationScope;
 use ktopo::transaction::{FullBodyCheck, Journal};
 
 use super::boundary_select::{
-    BoundaryFragmentClassification, BoundarySelectionError, ClassifiedBoundaryFragment,
-    OperandSide, RegularizedBooleanOperation, select_boundary_fragments,
+    BoundarySelectionError, RegularizedBooleanOperation, SelectedOrientation,
+    select_boundary_fragments,
 };
-use super::convex_containment::prepare_mixed_convex_containment_input;
 use super::curved_realize::{
-    CurvedRealizationRequest, realize_analytic_shell_inputs, realize_selected_result,
+    realize_analytic_shell_inputs, realize_analytic_shell_region, realize_source_body_copies,
 };
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
@@ -38,14 +27,8 @@ use super::curved_support_separation::{
 };
 use super::cylinder_dispatch::CylinderOperandScan;
 use super::extract::{
-    CertifiedConvexPlanarSource, ExtractedPlanarSourceBody, PlanarSourceExtractionError,
-    PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
-};
-use super::face_partition::{
-    AxialBoundary, CertifiedAxialRingCut, CertifiedPlanarCircleCut, FaceCellClassificationError,
-    FaceCellKey, FaceCellOpenClassification, FacePartitionError, FaceRegionKey,
-    PlanarCircleRepresentative, classify_face_partition_from_anchor, partition_convex_planar_face,
-    partition_periodic_cylinder_face,
+    ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
+    PlanarSourceProofFailure, extract_planar_source_body,
 };
 use super::mixed_boundary::{MixedBoundaryError, prepare_mixed_bounded_arc_boundary};
 use super::mixed_shell_plan::components::{
@@ -56,20 +39,15 @@ use super::mixed_shell_plan::materialize::{
     MixedShellMaterializationBlueprint, MixedShellMaterializationError, MixedShellScalarInputs,
     materialize_mixed_shell_component_inputs, prepare_mixed_shell_materialization,
 };
-use super::mixed_shell_plan::{MixedShellPlanError, plan_mixed_shell};
-use super::pipeline::{
-    PLANAR_BOOLEAN_BSP_FRAGMENTS, PLANAR_BOOLEAN_BSP_WORK, PLANAR_BOOLEAN_REALIZATION_WORK,
+use super::mixed_shell_plan::{
+    MixedShellPlanError, plan_mixed_shell, plan_support_contact_mixed_shell,
 };
-use super::planar_bsp::SourcePlaneRef;
+use super::pipeline::PLANAR_BOOLEAN_REALIZATION_WORK;
 use super::select::PlanarBooleanOperation;
 use crate::BodyId;
-use crate::classify::{PointBodyVerdict, classify_point_in_body_in_scope};
 use crate::error::{Error, Result};
 use crate::operation::{BodyCheckReport, adapt_live_body_check};
-use crate::section::{
-    BodySectionGraph, SectionCarrier, SectionCompletion, SectionCurveFragmentSpan, SectionUvCurve,
-    section_bodies_in_scope,
-};
+use crate::section::{BodySectionGraph, SectionCompletion, section_bodies_in_scope};
 use crate::session::PartEdit;
 
 /// One curved result that survived Full checking and committed atomically.
@@ -122,8 +100,6 @@ pub(crate) enum CurvedBooleanPipelineRefusal {
         gap: CylinderSourceGap,
     },
     SectionIncomplete,
-    Partition(FacePartitionError),
-    CellClassification(FaceCellClassificationError),
     ClassificationBoundaryContact,
     ClassificationIndeterminate {
         reason: &'static str,
@@ -183,145 +159,6 @@ pub(crate) fn execute_curved_in_scope(
             Ok(CurvedBooleanPipelineOutcome::Refused(refusal))
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct CertifiedRingCut {
-    pub(super) key: usize,
-    pub(super) planar_face: RawFaceId,
-    pub(super) center: Point3,
-    pub(super) planar_representative: PlanarCircleRepresentative,
-    pub(super) axial_parameter: f64,
-    pub(super) exact_order: usize,
-}
-
-fn certify_section_rings(
-    graph: &BodySectionGraph,
-    planar_operand: usize,
-    cylinder_operand: usize,
-    cylinder: &CertifiedCylinderSource,
-) -> StageResult<Vec<CertifiedRingCut>> {
-    if graph.completion() != SectionCompletion::Complete
-        || !graph.gaps().is_empty()
-        || !graph.edges().is_empty()
-        || !graph.loops().is_empty()
-        || !graph.curve_endpoints().is_empty()
-        || graph.rings().len() != graph.branches().len()
-        || graph.curve_fragments().len() != graph.branches().len()
-        || graph.curve_components().len() != graph.branches().len()
-    {
-        return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-    }
-    let ring_branches = graph
-        .rings()
-        .iter()
-        .map(|ring| ring.branch())
-        .collect::<BTreeSet<_>>();
-    if ring_branches.len() != graph.branches().len()
-        || graph
-            .curve_components()
-            .iter()
-            .any(|component| !component.closed() || component.fragments().len() != 1)
-    {
-        return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-    }
-
-    let axis = cylinder.cylinder().frame().z().to_array();
-    let boundaries = cylinder.boundaries();
-    let mut cuts = Vec::with_capacity(graph.branches().len());
-    for (branch_index, branch) in graph.branches().iter().enumerate() {
-        if !ring_branches.contains(&branch_index)
-            || branch.faces()[cylinder_operand].raw() != cylinder.side_face()
-        {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        }
-        let fragments = graph
-            .curve_fragments()
-            .iter()
-            .filter(|fragment| fragment.branch() == branch_index)
-            .collect::<Vec<_>>();
-        let [fragment] = fragments.as_slice() else {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        };
-        if !matches!(fragment.span(), SectionCurveFragmentSpan::Whole) {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        }
-        let SectionCarrier::Circle { center, radius, .. } = branch.carrier() else {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        };
-        if radius != cylinder.cylinder().radius()
-            || axis_order(axis, center, boundaries[0].center()) != Some(Orientation::Positive)
-            || axis_order(axis, center, boundaries[1].center()) != Some(Orientation::Negative)
-        {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        }
-        let (SectionUvCurve::Circle(plane), SectionUvCurve::Line(side)) = (
-            branch.pcurves()[planar_operand],
-            branch.pcurves()[cylinder_operand],
-        ) else {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        };
-        if side.direction().y != 0.0 || side.direction().x == 0.0 || !side.origin().y.is_finite() {
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-        }
-        cuts.push(CertifiedRingCut {
-            key: branch_index,
-            planar_face: branch.faces()[planar_operand].raw(),
-            center,
-            planar_representative: PlanarCircleRepresentative::new(
-                [plane.center().x, plane.center().y],
-                plane.radius(),
-            ),
-            axial_parameter: side.origin().y,
-            exact_order: 0,
-        });
-    }
-    exact_axis_sort(&mut cuts, axis)?;
-    for (exact_order, cut) in cuts.iter_mut().enumerate() {
-        cut.exact_order = exact_order;
-    }
-    Ok(cuts)
-}
-
-fn exact_axis_sort(cuts: &mut [CertifiedRingCut], axis: [f64; 3]) -> StageResult<()> {
-    for index in 1..cuts.len() {
-        let mut cursor = index;
-        while cursor > 0 {
-            match axis_order(axis, cuts[cursor].center, cuts[cursor - 1].center) {
-                Some(Orientation::Negative) => cuts.swap(cursor, cursor - 1),
-                Some(Orientation::Positive) => break,
-                _ => return refused(CurvedBooleanPipelineRefusal::SectionIncomplete),
-            }
-            cursor -= 1;
-        }
-    }
-    Ok(())
-}
-
-fn axis_order(axis: [f64; 3], point: Point3, origin: Point3) -> Option<Orientation> {
-    affine_dot3(axis, point.to_array(), origin.to_array(), 0.0).map(|sign| sign.sign())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum CurvedFragmentKey {
-    Planar(FaceCellKey<SourcePlaneRef, usize>),
-    CylinderSide(FaceCellKey<u8, usize>),
-    CylinderCap { boundary: usize },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum CurvedFragment {
-    Planar {
-        face: RawFaceId,
-        region: FaceRegionKey<usize>,
-    },
-    CylinderSide {
-        region: FaceRegionKey<usize>,
-    },
-    CylinderCap {
-        face: RawFaceId,
-        boundary: usize,
-    },
 }
 
 fn execute_stages(
@@ -399,134 +236,57 @@ fn execute_stages(
         }
     }
 
-    let mut contact = None;
-    let zero_cut_containment = match planar_certificate {
-        Some(planar_certificate) => certify_zero_cut_mixed_containment(
+    let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
+    if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() {
+        return execute_mixed_bounded_arc(
+            edit,
+            operation,
+            &graph,
+            &bodies,
+            &planar_source,
+            &cylinder_source,
+            planar_operand,
+            cylinder_operand,
+            linear,
+            scope,
+        );
+    }
+    if operation == PlanarBooleanOperation::Unite
+        && let Some(planar_certificate) = planar_certificate
+    {
+        let relation = certify_convex_host_cylinder_support_relation(
             &edit.state.store,
             planar_certificate,
             &cylinder_source,
             scope,
-        )?,
-        None => false,
-    };
-    let cuts = if zero_cut_containment {
-        Vec::new()
-    } else {
-        let graph =
-            section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
-        if planar_certificate.is_none() {
-            if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() {
-                return execute_mixed_bounded_arc(
-                    edit,
-                    operation,
-                    &graph,
-                    &bodies,
-                    &planar_source,
-                    &cylinder_source,
-                    planar_operand,
-                    cylinder_operand,
-                    linear,
-                    scope,
-                );
-            }
-            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
+        )?;
+        if let Some(relation @ ConvexHostCylinderSupportRelation::CertifiedAxialSingleCap { .. }) =
+            relation
+            && let Some(contact) = certify_strict_axial_cap_contact(
+                &edit.state.store,
+                planar_certificate,
+                &cylinder_source,
+                relation,
+                scope,
+            )?
+        {
+            return execute_mixed_support_contact(
+                edit,
+                operation,
+                &graph,
+                &bodies,
+                &planar_source,
+                &cylinder_source,
+                planar_operand,
+                cylinder_operand,
+                &contact,
+                linear,
+                scope,
+            );
         }
-        let planar_certificate = planar_certificate
-            .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
-        match certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source) {
-            Ok(cuts) => cuts,
-            Err(PipelineFailure::Refused(CurvedBooleanPipelineRefusal::SectionIncomplete))
-                if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() =>
-            {
-                return execute_mixed_bounded_arc(
-                    edit,
-                    operation,
-                    &graph,
-                    &bodies,
-                    &planar_source,
-                    &cylinder_source,
-                    planar_operand,
-                    cylinder_operand,
-                    linear,
-                    scope,
-                );
-            }
-            Err(
-                failure @ PipelineFailure::Refused(CurvedBooleanPipelineRefusal::SectionIncomplete),
-            ) if operation == PlanarBooleanOperation::Unite => {
-                let relation = certify_convex_host_cylinder_support_relation(
-                    &edit.state.store,
-                    planar_certificate,
-                    &cylinder_source,
-                    scope,
-                )?;
-                let Some(
-                    relation @ ConvexHostCylinderSupportRelation::CertifiedAxialSingleCap { .. },
-                ) = relation
-                else {
-                    return Err(failure);
-                };
-                let Some(certified) = certify_strict_axial_cap_contact(
-                    &edit.state.store,
-                    planar_certificate,
-                    &cylinder_source,
-                    relation,
-                    scope,
-                )?
-                else {
-                    return Err(failure);
-                };
-                contact = Some(certified);
-                Vec::new()
-            }
-            Err(failure) => return Err(failure),
-        }
-    };
-    let planar_certificate = planar_certificate
-        .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
-    let interfaces = cuts
-        .len()
-        .checked_add(usize::from(contact.is_some()))
-        .ok_or_else(work_overflow)?;
-    precharge_curved_partition(planar_certificate.faces().len(), interfaces, scope)?;
-    let classified = build_classified_fragments(
-        edit,
-        &bodies,
-        planar_operand,
-        cylinder_operand,
-        planar_certificate,
-        &cylinder_source,
-        &cuts,
-        contact.as_ref(),
-        linear,
-        scope,
-    )?;
-    let source_boundary_keys = classified.iter().fold(
-        BTreeMap::<OperandSide, BTreeSet<CurvedFragmentKey>>::new(),
-        |mut keys, fragment| {
-            keys.entry(fragment.operand())
-                .or_default()
-                .insert(fragment.key().clone());
-            keys
-        },
-    );
-    let selected =
-        select_boundary_fragments(adapt_operation(operation), classified).map_err(|error| {
-            PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error))
-        })?;
-    realize_selected_result(
-        edit,
-        CurvedRealizationRequest::new(
-            &bodies,
-            &source_boundary_keys,
-            planar_certificate,
-            &cylinder_source,
-            &cuts,
-            contact.as_ref(),
-            selected,
-        ),
-        scope,
-    )
+    }
+
+    refused(CurvedBooleanPipelineRefusal::SectionIncomplete)
 }
 
 /// Consume one complete bounded Plane/Cylinder arrangement through generic
@@ -556,7 +316,7 @@ fn execute_mixed_bounded_arc(
         cylinder,
         planar_operand,
         cylinder_operand,
-        operation,
+        None,
         linear,
         scope,
     )
@@ -566,11 +326,64 @@ fn execute_mixed_bounded_arc(
     if selected.is_empty() {
         return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
     }
+    if let Some(operands) = prepared.whole_source_operands(&selected) {
+        let sources = operands
+            .into_iter()
+            .map(|operand| bodies[operand].clone())
+            .collect::<Vec<_>>();
+        return realize_source_body_copies(edit, &sources, scope);
+    }
     let plan = plan_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
         .map_err(mixed_plan_failure)?;
 
     // Complete exact-scalar evidence is materialized and preflighted before
     // the failure-atomic realization transaction opens.
+    realize_mixed_shell(edit, &plan, linear, scope)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_mixed_support_contact(
+    edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
+    graph: &BodySectionGraph,
+    bodies: &[BodyId; 2],
+    planar: &ExtractedPlanarSourceBody,
+    cylinder: &CertifiedCylinderSource,
+    planar_operand: usize,
+    cylinder_operand: usize,
+    contact: &CertifiedAxialCapContact,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    let operation = adapt_operation(operation);
+    let prepared = prepare_mixed_bounded_arc_boundary(
+        &edit.as_part(),
+        graph,
+        bodies,
+        planar,
+        cylinder,
+        planar_operand,
+        cylinder_operand,
+        Some(contact),
+        linear,
+        scope,
+    )
+    .map_err(mixed_boundary_failure)?;
+    let selected = select_boundary_fragments(operation, prepared.classified())
+        .map_err(|error| refused_error(CurvedBooleanPipelineRefusal::Selection(error)))?;
+    let contact_ring = prepared
+        .cap_ring(contact.boundary())
+        .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
+    let plan = plan_support_contact_mixed_shell(
+        &edit.state.store,
+        graph,
+        contact,
+        prepared.bindings(),
+        selected,
+        contact_ring,
+        linear,
+    )
+    .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -624,8 +437,9 @@ fn realize_prepared_mixed_shell(
         .ledger_mut()
         .charge(PLANAR_BOOLEAN_REALIZATION_WORK, component_work)
         .map_err(Error::from)?;
-    let components = partition_prepared_mixed_shell_components(plan, blueprint)
+    let mut components = partition_prepared_mixed_shell_components(plan, blueprint)
         .map_err(mixed_component_failure)?;
+    let region_layout = prepare_region_component_order(plan, &mut components);
     let inputs = materialize_mixed_shell_component_inputs(
         plan,
         blueprint,
@@ -635,43 +449,52 @@ fn realize_prepared_mixed_shell(
         linear,
     )
     .map_err(mixed_materialization_failure)?;
-    realize_analytic_shell_inputs(edit, &inputs, linear, scope)
+    if region_layout {
+        realize_analytic_shell_region(edit, &inputs, linear, scope)
+    } else {
+        realize_analytic_shell_inputs(edit, &inputs, linear, scope)
+    }
 }
 
-/// Prove the complete planar source strictly inside the convex cylinder.
-///
-/// This certificate excludes every boundary intersection before the general
-/// section path. Failure to establish this optional relation delegates to
-/// sectioning; topology/store errors other than a negative semantic relation
-/// remain execution failures.
-fn certify_zero_cut_mixed_containment(
-    store: &ktopo::store::Store,
-    planar: &CertifiedConvexPlanarSource,
-    cylinder: &CertifiedCylinderSource,
-    scope: &mut OperationScope<'_, '_>,
-) -> StageResult<bool> {
-    let preflight_work =
-        mixed_convex_multishell_dimension_work(&[(planar.faces().len(), planar.vertices().len())])
-            .map_err(|_| {
-                PipelineFailure::Refused(CurvedBooleanPipelineRefusal::WorkCountOverflow)
-            })?;
-    scope
-        .ledger_mut()
-        .charge(PLANAR_BOOLEAN_BSP_WORK, preflight_work)
-        .map_err(Error::from)?;
-    let prepared = prepare_mixed_convex_containment_input(planar, cylinder).map_err(|reason| {
-        PipelineFailure::Refused(CurvedBooleanPipelineRefusal::AssemblyContract(reason))
-    })?;
-    if prepared.semantic_preflight_work() != preflight_work {
-        return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
-            "mixed containment semantic work changed after admission",
-        ));
+fn prepare_region_component_order(
+    plan: &super::mixed_shell_plan::MixedShellProofPlan,
+    components: &mut [super::mixed_shell_plan::components::MixedShellComponent],
+) -> bool {
+    if !plan.section_edges().is_empty() || components.len() < 2 {
+        return false;
     }
-    match certify_mixed_convex_multishell_input(prepared.input(), store) {
-        Ok(()) => Ok(true),
-        Err(kcore::error::Error::InvalidGeometry { .. }) => Ok(false),
-        Err(source) => Err(source.into()),
+    let orientations = components
+        .iter()
+        .map(|component| {
+            let mut values = component
+                .faces()
+                .iter()
+                .map(|face| plan.faces()[face.plan_index()].selected_orientation());
+            let first = values.next()?;
+            values
+                .all(|orientation| orientation == first)
+                .then_some(first)
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(orientations) = orientations else {
+        return false;
+    };
+    let mut exteriors = orientations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, orientation)| {
+            (*orientation == SelectedOrientation::Preserved).then_some(index)
+        });
+    let Some(exterior) = exteriors.next().filter(|_| exteriors.next().is_none()) else {
+        return false;
+    };
+    if orientations.iter().enumerate().any(|(index, orientation)| {
+        index != exterior && *orientation != SelectedOrientation::Reversed
+    }) {
+        return false;
     }
+    components.swap(0, exterior);
+    true
 }
 
 fn extract_planar_operand(
@@ -724,322 +547,12 @@ pub(super) fn extract_cylinder_operand(
     }
 }
 
-fn precharge_curved_partition(
-    planar_faces: usize,
-    cuts: usize,
-    scope: &mut OperationScope<'_, '_>,
-) -> StageResult<()> {
-    let faces = u64::try_from(planar_faces)
-        .map_err(|_| refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow))?;
-    let cuts = u64::try_from(cuts)
-        .map_err(|_| refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow))?;
-    let cells = faces
-        .checked_add(cuts.checked_mul(2).ok_or_else(work_overflow)?)
-        .and_then(|value| value.checked_add(3))
-        .ok_or_else(work_overflow)?;
-    let visits = faces
-        .checked_add(cuts)
-        .and_then(|value| value.checked_add(1))
-        .and_then(|value| value.checked_mul(value))
-        .and_then(|value| value.checked_mul(16))
-        .ok_or_else(work_overflow)?;
-    scope
-        .ledger_mut()
-        .charge(PLANAR_BOOLEAN_BSP_WORK, visits)
-        .map_err(Error::from)?;
-    scope
-        .ledger_mut()
-        .observe(
-            PLANAR_BOOLEAN_BSP_FRAGMENTS,
-            ResourceKind::Items,
-            cells.checked_mul(3).ok_or_else(work_overflow)?,
-        )
-        .map_err(Error::from)?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_classified_fragments(
-    edit: &PartEdit<'_>,
-    bodies: &[BodyId; 2],
-    planar_operand: usize,
-    cylinder_operand: usize,
-    planar: &CertifiedConvexPlanarSource,
-    cylinder: &CertifiedCylinderSource,
-    cuts: &[CertifiedRingCut],
-    contact: Option<&CertifiedAxialCapContact>,
-    linear: f64,
-    scope: &mut OperationScope<'_, '_>,
-) -> StageResult<Vec<ClassifiedBoundaryFragment<CurvedFragmentKey, CurvedFragment>>> {
-    let mut classified = Vec::new();
-    append_planar_fragments(
-        edit,
-        &bodies[cylinder_operand],
-        planar_operand as u8,
-        planar,
-        cuts,
-        contact,
-        linear,
-        scope,
-        &mut classified,
-    )?;
-    append_cylinder_fragments(
-        edit,
-        &bodies[planar_operand],
-        cylinder_operand as u8,
-        cylinder,
-        cuts,
-        contact,
-        linear,
-        scope,
-        &mut classified,
-    )?;
-    Ok(classified)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_planar_fragments(
-    edit: &PartEdit<'_>,
-    cylinder_body: &BodyId,
-    operand: u8,
-    source: &CertifiedConvexPlanarSource,
-    cuts: &[CertifiedRingCut],
-    contact: Option<&CertifiedAxialCapContact>,
-    linear: f64,
-    scope: &mut OperationScope<'_, '_>,
-    output: &mut Vec<ClassifiedBoundaryFragment<CurvedFragmentKey, CurvedFragment>>,
-) -> StageResult<()> {
-    for source_face in source.faces() {
-        let raw_face = source_face.face().raw();
-        let source_fragment = source
-            .fragments()
-            .iter()
-            .find(|fragment| fragment.source_face() == source_face.plane())
-            .ok_or_else(|| fragment_contract(operand))?;
-        let mut face_cuts = cuts
-            .iter()
-            .filter(|cut| cut.planar_face == raw_face)
-            .map(|cut| CertifiedPlanarCircleCut::new(cut.key, cut.planar_representative))
-            .collect::<Vec<_>>();
-        if let Some(contact) = contact.filter(|contact| contact.host_face() == raw_face) {
-            face_cuts.push(CertifiedPlanarCircleCut::new(
-                contact.key(),
-                contact.planar_representative(),
-            ));
-        }
-        let partition = partition_convex_planar_face(
-            source_face.plane(),
-            source_fragment.edge_planes().iter().copied(),
-            face_cuts,
-        )
-        .map_err(partition_failure)?;
-        let anchor = partition
-            .cells()
-            .iter()
-            .find(|cell| cell.key().region() == &FaceRegionKey::PlanarOuter)
-            .ok_or_else(partition_contract)?
-            .key()
-            .clone();
-        let anchor_vertex = *source_fragment
-            .vertices()
-            .first()
-            .ok_or_else(|| fragment_contract(operand))?;
-        let anchor_point = source
-            .vertices()
-            .iter()
-            .find(|vertex| vertex.key() == anchor_vertex)
-            .map(|vertex| vertex.position())
-            .ok_or_else(|| fragment_contract(operand))?;
-        let anchor_class = classify_anchor(edit, cylinder_body, anchor_point, linear, scope)?;
-        let classes = classify_face_partition_from_anchor(&partition, &anchor, anchor_class)
-            .map_err(cell_classification_failure)?;
-        for cell in partition.cells() {
-            let classification = if contact.is_some_and(|contact| {
-                contact.host_face() == raw_face
-                    && cell.key().region() == &FaceRegionKey::PlanarDisk(contact.key())
-            }) {
-                BoundaryFragmentClassification::TwoSided {
-                    other_on_source_interior: false,
-                    other_on_source_exterior: true,
-                }
-            } else {
-                adapt_cell_classification(
-                    *classes
-                        .get(cell.key())
-                        .ok_or_else(cell_classification_contract)?,
-                )
-            };
-            output.push(ClassifiedBoundaryFragment::new(
-                CurvedFragmentKey::Planar(cell.key().clone()),
-                operand_side(operand),
-                CurvedFragment::Planar {
-                    face: raw_face,
-                    region: cell.key().region().clone(),
-                },
-                classification,
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_cylinder_fragments(
-    edit: &PartEdit<'_>,
-    planar_body: &BodyId,
-    operand: u8,
-    source: &CertifiedCylinderSource,
-    cuts: &[CertifiedRingCut],
-    contact: Option<&CertifiedAxialCapContact>,
-    linear: f64,
-    scope: &mut OperationScope<'_, '_>,
-    output: &mut Vec<ClassifiedBoundaryFragment<CurvedFragmentKey, CurvedFragment>>,
-) -> StageResult<()> {
-    let boundaries = source.boundaries();
-    let partition = partition_periodic_cylinder_face(
-        0_u8,
-        0_u8,
-        1_u8,
-        cuts.iter()
-            .map(|cut| CertifiedAxialRingCut::new(cut.key, cut.exact_order, cut.axial_parameter)),
-    )
-    .map_err(partition_failure)?;
-    let first_upper = cuts
-        .first()
-        .map_or(boundaries[1].center(), |cut| cut.center);
-    let anchor = partition
-        .cells()
-        .iter()
-        .find(|cell| {
-            cell.key().region()
-                == &FaceRegionKey::AxialBand {
-                    lower: AxialBoundary::LowerSource,
-                    upper: cuts.first().map_or(AxialBoundary::UpperSource, |cut| {
-                        AxialBoundary::Cut(cut.key)
-                    }),
-                }
-        })
-        .ok_or_else(partition_contract)?
-        .key()
-        .clone();
-    let low_v = axial_parameter(source, boundaries[0].center()).ok_or_else(section_contract)?;
-    let upper_v = cuts
-        .first()
-        .map_or_else(
-            || axial_parameter(source, boundaries[1].center()),
-            |cut| Some(cut.axial_parameter),
-        )
-        .ok_or_else(section_contract)?;
-    let midpoint = low_v + (upper_v - low_v) * 0.5;
-    if !(midpoint.is_finite() && low_v < midpoint && midpoint < upper_v) {
-        return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-    }
-    let cylinder = source.cylinder();
-    let anchor_point = cylinder.frame().origin()
-        + cylinder.frame().z() * midpoint
-        + cylinder.frame().x() * cylinder.radius();
-    let axis = cylinder.frame().z().to_array();
-    if axis_order(axis, anchor_point, boundaries[0].center()) != Some(Orientation::Positive)
-        || axis_order(axis, anchor_point, first_upper) != Some(Orientation::Negative)
-    {
-        return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
-    }
-    let anchor_class = classify_anchor(edit, planar_body, anchor_point, linear, scope)?;
-    let classes = classify_face_partition_from_anchor(&partition, &anchor, anchor_class)
-        .map_err(cell_classification_failure)?;
-    for cell in partition.cells() {
-        let classification = *classes
-            .get(cell.key())
-            .ok_or_else(cell_classification_contract)?;
-        output.push(ClassifiedBoundaryFragment::new(
-            CurvedFragmentKey::CylinderSide(cell.key().clone()),
-            operand_side(operand),
-            CurvedFragment::CylinderSide {
-                region: cell.key().region().clone(),
-            },
-            adapt_cell_classification(classification),
-        ));
-    }
-
-    for (boundary, evidence) in boundaries.iter().enumerate() {
-        let classification = if contact.is_some_and(|contact| contact.boundary() == boundary) {
-            BoundaryFragmentClassification::TwoSided {
-                other_on_source_interior: false,
-                other_on_source_exterior: true,
-            }
-        } else {
-            adapt_cell_classification(classify_anchor(
-                edit,
-                planar_body,
-                evidence.center(),
-                linear,
-                scope,
-            )?)
-        };
-        output.push(ClassifiedBoundaryFragment::new(
-            CurvedFragmentKey::CylinderCap { boundary },
-            operand_side(operand),
-            CurvedFragment::CylinderCap {
-                face: evidence.cap_face(),
-                boundary,
-            },
-            classification,
-        ));
-    }
-    Ok(())
-}
-
-fn classify_anchor(
-    edit: &PartEdit<'_>,
-    body: &BodyId,
-    point: Point3,
-    linear: f64,
-    scope: &mut OperationScope<'_, '_>,
-) -> StageResult<FaceCellOpenClassification> {
-    let classification =
-        classify_point_in_body_in_scope(&edit.as_part(), body, point, linear, scope)?;
-    match classification.verdict() {
-        PointBodyVerdict::Interior => Ok(FaceCellOpenClassification::Interior),
-        PointBodyVerdict::Exterior => Ok(FaceCellOpenClassification::Exterior),
-        PointBodyVerdict::Boundary { .. } => {
-            refused(CurvedBooleanPipelineRefusal::ClassificationBoundaryContact)
-        }
-        PointBodyVerdict::Indeterminate { reason } => {
-            refused(CurvedBooleanPipelineRefusal::ClassificationIndeterminate { reason })
-        }
-    }
-}
-
-fn adapt_cell_classification(
-    classification: FaceCellOpenClassification,
-) -> BoundaryFragmentClassification {
-    match classification {
-        FaceCellOpenClassification::Interior => BoundaryFragmentClassification::Interior,
-        FaceCellOpenClassification::Exterior => BoundaryFragmentClassification::Exterior,
-    }
-}
-
-fn operand_side(operand: u8) -> OperandSide {
-    if operand == 0 {
-        OperandSide::Left
-    } else {
-        OperandSide::Right
-    }
-}
-
 pub(super) fn adapt_operation(operation: PlanarBooleanOperation) -> RegularizedBooleanOperation {
     match operation {
         PlanarBooleanOperation::Unite => RegularizedBooleanOperation::Unite,
         PlanarBooleanOperation::Intersect => RegularizedBooleanOperation::Intersect,
         PlanarBooleanOperation::Subtract => RegularizedBooleanOperation::Subtract,
     }
-}
-
-fn axial_parameter(source: &CertifiedCylinderSource, point: Point3) -> Option<f64> {
-    let cylinder = source.cylinder();
-    let frame = cylinder.frame();
-    let parameter = (point - frame.origin()).dot(frame.z());
-    parameter.is_finite().then_some(parameter)
 }
 
 pub(super) fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailure {
@@ -1053,9 +566,6 @@ pub(super) fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailu
         }
         MixedBoundaryError::AnchorIndeterminate(reason) => {
             refused_error(CurvedBooleanPipelineRefusal::ClassificationIndeterminate { reason })
-        }
-        MixedBoundaryError::CylinderCapSelectionRequired => {
-            refused_error(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
         }
         MixedBoundaryError::PlanarArrangement(_)
         | MixedBoundaryError::PeriodicArrangement(_)
@@ -1110,43 +620,6 @@ fn mixed_component_failure(error: MixedShellComponentError) -> PipelineFailure {
             "mixed shell component partition failed",
         )),
     }
-}
-
-fn partition_failure(error: FacePartitionError) -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::Partition(error))
-}
-
-fn cell_classification_failure(error: FaceCellClassificationError) -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::CellClassification(error))
-}
-
-fn fragment_contract(operand: u8) -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::PlanarSourceUncertified {
-        operand,
-        failure: PlanarSourceProofFailure::FragmentContract,
-    })
-}
-
-fn partition_contract() -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
-}
-
-fn cell_classification_contract() -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::CellClassification(
-        FaceCellClassificationError::DisconnectedDualGraph,
-    ))
-}
-
-fn section_contract() -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete)
-}
-
-fn result_topology_contract() -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
-}
-
-fn work_overflow() -> PipelineFailure {
-    refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow)
 }
 
 fn refused_error(refusal: CurvedBooleanPipelineRefusal) -> PipelineFailure {

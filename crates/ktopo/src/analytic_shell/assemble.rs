@@ -11,8 +11,8 @@ use super::{
     prepare_analytic_face_splits, prepare_analytic_shell, prepare_analytic_shell_component,
 };
 use crate::entity::{
-    BodyId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinPcurve, Loop, ParamMap1d, ShellId,
-    Vertex, VertexId,
+    BodyId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinPcurve, Loop, ParamMap1d, Region,
+    RegionKind, Shell, ShellId, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::transaction::Transaction;
@@ -159,11 +159,80 @@ impl Transaction<'_> {
         Ok(outputs)
     }
 
+    /// Validate independent connected shells and assemble them in one solid
+    /// region.
+    ///
+    /// The first input is the exterior shell; every later input is a cavity
+    /// shell. Callers must establish that region layout before invoking this
+    /// topology-only adapter. All inputs preflight before the shared body
+    /// scaffold is allocated.
+    pub fn assemble_analytic_shell_region(
+        &mut self,
+        inputs: &[AnalyticShellInput],
+        tolerance: f64,
+    ) -> Result<Vec<AnalyticShellOutput>, AnalyticShellAssemblyError> {
+        let prepared = inputs
+            .iter()
+            .map(|input| prepare_analytic_shell_component(input, self.store(), tolerance))
+            .collect::<Result<Vec<_>, _>>()?;
+        if prepared.is_empty() {
+            return Ok(Vec::new());
+        }
+        let face_splits = prepare_analytic_face_splits(&prepared)?;
+        let (body, first_shell) = crate::make::solid_body_scaffold(self.store_mut());
+        let region = self
+            .store()
+            .get(first_shell)
+            .map_err(AnalyticShellAssemblyError::Store)?
+            .region();
+        let mut outputs = Vec::with_capacity(prepared.len());
+        for (index, component) in prepared.iter().enumerate() {
+            let shell = if index == 0 {
+                first_shell
+            } else {
+                let shell = self.store_mut().add(Shell {
+                    region,
+                    faces: Vec::new(),
+                    edges: Vec::new(),
+                    vertex: None,
+                });
+                self.store_mut()
+                    .get_mut(region)
+                    .map_err(AnalyticShellAssemblyError::Store)?
+                    .shells
+                    .push(shell);
+                let void = self.store_mut().add(Region {
+                    body,
+                    kind: RegionKind::Void,
+                    shells: Vec::new(),
+                });
+                self.store_mut()
+                    .get_mut(body)
+                    .map_err(AnalyticShellAssemblyError::Store)?
+                    .regions
+                    .push(void);
+                shell
+            };
+            outputs.push(self.allocate_prepared_analytic_shell_into(component, body, shell)?);
+        }
+        self.record_analytic_batch_face_splits(&face_splits, &outputs)?;
+        Ok(outputs)
+    }
+
     fn allocate_prepared_analytic_shell(
         &mut self,
         prepared: &PreparedAnalyticShell,
     ) -> Result<AnalyticShellOutput, AnalyticShellAssemblyError> {
         let (body, shell) = crate::make::solid_body_scaffold(self.store_mut());
+        self.allocate_prepared_analytic_shell_into(prepared, body, shell)
+    }
+
+    fn allocate_prepared_analytic_shell_into(
+        &mut self,
+        prepared: &PreparedAnalyticShell,
+        body: BodyId,
+        shell: ShellId,
+    ) -> Result<AnalyticShellOutput, AnalyticShellAssemblyError> {
         let vertices = self.allocate_vertices(prepared)?;
         let faces = self.allocate_faces(prepared, shell)?;
         let pcurves = self.allocate_pcurves(prepared)?;

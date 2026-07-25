@@ -17,7 +17,6 @@ use ktopo::store::Store;
 use super::curved_pipeline::{CurvedBooleanPipelineRefusal, PipelineFailure, StageResult};
 use super::curved_source::CertifiedCylinderSource;
 use super::extract::CertifiedConvexPlanarSource;
-use super::face_partition::PlanarCircleRepresentative;
 use super::pipeline::PLANAR_BOOLEAN_BSP_WORK;
 use super::planar_bsp::{SourcePlane, SourcePlaneRef};
 use crate::error::Error;
@@ -39,34 +38,20 @@ pub(super) enum ConvexHostCylinderSupportRelation {
     },
 }
 
-/// Strict full-disk contact retained for partition and realization.
+/// Strict full-disk contact admitted into the mixed arrangement spine.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct CertifiedAxialCapContact {
     host_face: RawFaceId,
-    support: SourcePlane,
     boundary: usize,
-    planar_representative: PlanarCircleRepresentative,
 }
 
 impl CertifiedAxialCapContact {
-    pub(super) const fn key(self) -> usize {
-        0
-    }
-
     pub(super) const fn host_face(self) -> RawFaceId {
         self.host_face
     }
 
-    pub(super) const fn support(self) -> SourcePlane {
-        self.support
-    }
-
     pub(super) const fn boundary(self) -> usize {
         self.boundary
-    }
-
-    pub(super) const fn planar_representative(self) -> PlanarCircleRepresentative {
-        self.planar_representative
     }
 }
 
@@ -226,25 +211,15 @@ pub(super) fn certify_strict_axial_cap_contact(
             CurvedBooleanPipelineRefusal::SectionIncomplete,
         ));
     }
-    let SurfaceGeom::Plane(port_plane) = store
+    let SurfaceGeom::Plane(_) = store
         .surface(source_face.surface())
         .map_err(|source| Error::InconsistentTopology { source })?
     else {
         return Ok(None);
     };
-    let offset = center - port_plane.frame().origin();
-    let planar_representative = PlanarCircleRepresentative::new(
-        [
-            offset.dot(port_plane.frame().x()),
-            offset.dot(port_plane.frame().y()),
-        ],
-        cylinder.cylinder().radius(),
-    );
     Ok(Some(CertifiedAxialCapContact {
         host_face,
-        support,
         boundary,
-        planar_representative,
     }))
 }
 

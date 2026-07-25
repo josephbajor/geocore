@@ -9,8 +9,10 @@ use kgeom::frame::Frame;
 use kgeom::vec::Point3;
 use ktopo::analytic_shell::AnalyticFaceSplitPiece;
 use ktopo::entity::{
-    EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId, Sense,
+    EdgeId as RawEdgeId, Face as RawFace, FaceId as RawFaceId, FinId as RawFinId,
+    LoopId as RawLoopId, Sense,
 };
+use ktopo::geom::SurfaceGeom;
 use ktopo::store::Store;
 
 #[path = "mixed_shell_components.rs"]
@@ -173,6 +175,10 @@ impl MixedArrangementBinding<'_> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MixedShellVertexKey {
     SectionEndpoint(usize),
+    WholeSectionSeam {
+        branch: usize,
+        source_ordinal: usize,
+    },
     PlanarSourceVertex {
         source: MixedSourceFaceKey,
         topology_ordinal: usize,
@@ -218,6 +224,7 @@ pub(crate) enum MixedPcurveLineage {
 pub(crate) enum MixedDerivedRingLineage {
     Source(RawEdgeId),
     Derived([RawFaceId; 2]),
+    WholeSection([RawFaceId; 2]),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -463,6 +470,7 @@ pub(crate) struct MixedShellProofPlan {
     derived_rings: Vec<MixedDerivedRingPlan>,
     materialization: materialize::RetainedMaterializationEvidence,
     materialization_gaps: Vec<MixedShellMaterializationGap>,
+    face_only_lineage: bool,
 }
 
 impl MixedShellProofPlan {
@@ -488,6 +496,10 @@ impl MixedShellProofPlan {
 
     pub(crate) fn materialization_gaps(&self) -> &[MixedShellMaterializationGap] {
         &self.materialization_gaps
+    }
+
+    pub(crate) const fn face_only_lineage(&self) -> bool {
+        self.face_only_lineage
     }
 
     #[cfg(test)]
@@ -607,6 +619,7 @@ pub(crate) enum MixedShellPlanError {
     },
     CoincidentCapBoundaryChain(usize),
     ProjectedSourceCircle(ProjectedSourceCircleOnPlaneError),
+    WholeSectionRingMismatch(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -618,6 +631,7 @@ struct SectionUseLineage {
 
 enum SectionPlanningAdmission<'a> {
     Complete,
+    SupportContact(&'a super::curved_support_separation::CertifiedAxialCapContact),
     AxialContact(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact),
     CommonSupport(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport),
     InternalTangency(
@@ -633,6 +647,14 @@ impl SectionPlanningAdmission<'_> {
         match self {
             Self::Complete
                 if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() =>
+            {
+                Ok(())
+            }
+            Self::SupportContact(contact)
+                if contact.boundary() < 2
+                    && graph.curve_fragments().is_empty()
+                    && graph.curve_endpoints().is_empty()
+                    && graph.curve_components().is_empty() =>
             {
                 Ok(())
             }
@@ -720,6 +742,31 @@ pub(crate) fn plan_axial_contact_mixed_shell<'a>(
                 bounded_source_spans,
                 tolerance,
             )
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_support_contact_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    contact: &super::curved_support_separation::CertifiedAxialCapContact,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+    contact_ring: &MixedCylinderCapRing,
+    tolerance: f64,
+) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+    plan_mixed_shell_with_augmentation(
+        store,
+        graph,
+        SectionPlanningAdmission::SupportContact(contact),
+        bindings,
+        selected.into_iter().map(|fragment| {
+            let (key, operand, (), orientation) = fragment.into_parts();
+            (key, operand, orientation)
+        }),
+        |_, faces, _, cap_rings, _| {
+            append_support_contact_hole(store, faces, cap_rings, contact, contact_ring, tolerance)
         },
     )
 }
@@ -1882,6 +1929,81 @@ fn append_internal_contact_hole(
     Ok(())
 }
 
+fn append_support_contact_hole(
+    store: &Store,
+    faces: &mut [MixedShellFacePlan],
+    cap_rings: &mut Vec<MixedCylinderCapRing>,
+    contact: &super::curved_support_separation::CertifiedAxialCapContact,
+    ring: &MixedCylinderCapRing,
+    tolerance: f64,
+) -> Result<(), MixedShellPlanError> {
+    let fail = || MixedShellPlanError::AxialContactBoundaryMismatch;
+    if ring.boundary() != contact.boundary()
+        || faces
+            .iter()
+            .any(|face| face.source_face == *ring.cap_face())
+    {
+        return Err(fail());
+    }
+    let targets = faces
+        .iter()
+        .enumerate()
+        .filter(|(_, face)| {
+            face.source_face.raw() == contact.host_face()
+                && face.selected_orientation == SelectedOrientation::Preserved
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [target] = targets.as_slice() else {
+        return Err(fail());
+    };
+    let side_directions = faces
+        .iter()
+        .flat_map(|face| &face.loops)
+        .flat_map(|loop_| &loop_.uses)
+        .filter_map(|use_| {
+            (use_.edge
+                == (MixedShellEdgeKey::PeriodicSource {
+                    source: ring.side_source(),
+                    loop_key: ring.side_loop_key(),
+                }))
+            .then_some(use_.direction)
+        })
+        .collect::<Vec<_>>();
+    let [side_direction] = side_directions.as_slice() else {
+        return Err(fail());
+    };
+    let target = &mut faces[*target];
+    if target.loops.len() != 1 {
+        return Err(fail());
+    }
+    let proof = ProjectedEndpointFreeSourceCircle::certify(
+        store,
+        ring,
+        target.source,
+        &target.source_face,
+        tolerance,
+    )
+    .map_err(MixedShellPlanError::ProjectedSourceCircle)?;
+    let seam = MixedShellVertexKey::ProofSeam {
+        source: ring.side_source(),
+        loop_key: ring.side_loop_key(),
+    };
+    target.loops.push(MixedShellLoopPlan {
+        uses: vec![MixedShellEdgeUse {
+            edge: MixedShellEdgeKey::PeriodicSource {
+                source: ring.side_source(),
+                loop_key: ring.side_loop_key(),
+            },
+            direction: opposite(*side_direction),
+            pcurve: MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(proof),
+        }],
+        vertices: vec![seam.clone(), seam],
+    });
+    cap_rings.push(ring.clone());
+    Ok(())
+}
+
 fn merge_coincident_side_faces(
     store: &Store,
     faces: &mut Vec<MixedShellFacePlan>,
@@ -2154,6 +2276,13 @@ fn plan_mixed_shell_with_augmentation<'a>(
     ) -> Result<(), MixedShellPlanError>,
 ) -> Result<MixedShellProofPlan, MixedShellPlanError> {
     admission.validate(graph)?;
+    let face_only_lineage = matches!(
+        admission,
+        SectionPlanningAdmission::Complete | SectionPlanningAdmission::SupportContact(_)
+    ) && graph
+        .curve_fragments()
+        .iter()
+        .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole));
 
     let mut arrangements = BTreeMap::new();
     for binding in bindings {
@@ -2396,6 +2525,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
         &mut cap_rings,
         &mut derived_rings,
     )?;
+    replace_whole_section_rings(store, graph, &mut faces, &mut derived_rings)?;
     resolve_endpoint_free_cap_directions(&mut faces, &cap_rings)?;
     validate_section_pairing(&faces)?;
     validate_endpoint_free_ring_pairing(&faces)?;
@@ -2419,7 +2549,167 @@ fn plan_mixed_shell_with_augmentation<'a>(
         derived_rings,
         materialization,
         materialization_gaps,
+        face_only_lineage,
     })
+}
+
+fn replace_whole_section_rings(
+    store: &Store,
+    graph: &BodySectionGraph,
+    faces: &mut [MixedShellFacePlan],
+    derived: &mut Vec<MixedDerivedRingPlan>,
+) -> Result<(), MixedShellPlanError> {
+    let mut fragments = faces
+        .iter()
+        .flat_map(MixedShellFacePlan::loops)
+        .flat_map(MixedShellLoopPlan::uses)
+        .filter_map(|use_| match use_.edge() {
+            MixedShellEdgeKey::SectionFragment(fragment)
+                if graph
+                    .curve_fragments()
+                    .get(*fragment)
+                    .is_some_and(|fragment| {
+                        matches!(fragment.span(), SectionCurveFragmentSpan::Whole)
+                    }) =>
+            {
+                Some(*fragment)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    fragments.sort_unstable();
+    fragments.dedup();
+    for &fragment_index in &fragments {
+        let fragment = &graph.curve_fragments()[fragment_index];
+        let branch = graph.branches().get(fragment.branch()).ok_or(
+            MixedShellPlanError::UnknownSectionBranch {
+                fragment: fragment_index,
+                branch: fragment.branch(),
+            },
+        )?;
+        let crate::SectionCarrier::Circle { normal, radius, .. } = branch.carrier() else {
+            return Err(MixedShellPlanError::WholeSectionRingMismatch(
+                fragment_index,
+            ));
+        };
+        let mut cylinder = None;
+        for operand in 0..2 {
+            let crate::SectionUvCurve::Line(line) = branch.pcurves()[operand] else {
+                continue;
+            };
+            let face = store
+                .get(branch.faces()[operand].raw())
+                .map_err(|_| MixedShellPlanError::WholeSectionRingMismatch(fragment_index))?;
+            let SurfaceGeom::Cylinder(surface) = store
+                .surface(face.surface())
+                .map_err(|_| MixedShellPlanError::WholeSectionRingMismatch(fragment_index))?
+            else {
+                continue;
+            };
+            if line.direction().y != 0.0
+                || line.direction().x == 0.0
+                || !line.origin().y.is_finite()
+                || surface.radius() != radius
+                || cylinder.replace((*surface, line.origin().y)).is_some()
+            {
+                return Err(MixedShellPlanError::WholeSectionRingMismatch(
+                    fragment_index,
+                ));
+            }
+        }
+        let (cylinder, axial_parameter) = cylinder.ok_or(
+            MixedShellPlanError::WholeSectionRingMismatch(fragment_index),
+        )?;
+        let frame =
+            cylinder
+                .frame()
+                .with_origin(cylinder.frame().point_at(0.0, 0.0, axial_parameter));
+        let alignment = normal.dot(frame.z());
+        let section_to_derived = if alignment > 0.0 {
+            ArrangementDirection::Forward
+        } else if alignment < 0.0 {
+            ArrangementDirection::Reverse
+        } else {
+            return Err(MixedShellPlanError::WholeSectionRingMismatch(
+                fragment_index,
+            ));
+        };
+        let circle = Circle::new(frame, radius)
+            .map_err(|_| MixedShellPlanError::WholeSectionRingMismatch(fragment_index))?;
+        let ring = derived.len();
+        derived.push(MixedDerivedRingPlan::endpoint_free(
+            circle,
+            MixedDerivedRingLineage::WholeSection([
+                branch.faces()[0].raw(),
+                branch.faces()[1].raw(),
+            ]),
+        ));
+        for face in faces.iter_mut() {
+            for loop_ in &mut face.loops {
+                for vertex in &mut loop_.vertices {
+                    if matches!(
+                        vertex,
+                        MixedShellVertexKey::WholeSectionSeam {
+                            branch: candidate_branch,
+                            source_ordinal
+                        } if *candidate_branch == fragment.branch()
+                            && *source_ordinal == fragment.source_ordinal()
+                    ) {
+                        *vertex = MixedShellVertexKey::DerivedRingSeam(ring);
+                    }
+                }
+                for use_ in &mut loop_.uses {
+                    if use_.edge != MixedShellEdgeKey::SectionFragment(fragment_index) {
+                        continue;
+                    }
+                    let MixedPcurveLineage::Section {
+                        branch: use_branch,
+                        operand,
+                        ..
+                    } = use_.pcurve
+                    else {
+                        return Err(MixedShellPlanError::WholeSectionRingMismatch(
+                            fragment_index,
+                        ));
+                    };
+                    if use_branch != fragment.branch() {
+                        return Err(MixedShellPlanError::WholeSectionRingMismatch(
+                            fragment_index,
+                        ));
+                    }
+                    let cylinder_parameter_bits = match branch.pcurves()[operand] {
+                        crate::SectionUvCurve::Circle(_) => None,
+                        crate::SectionUvCurve::Line(line)
+                            if line.direction().y == 0.0
+                                && line.direction().x != 0.0
+                                && line.origin().y.is_finite() =>
+                        {
+                            Some(line.origin().y.to_bits())
+                        }
+                        _ => {
+                            return Err(MixedShellPlanError::WholeSectionRingMismatch(
+                                fragment_index,
+                            ));
+                        }
+                    };
+                    use_.edge = MixedShellEdgeKey::DerivedRing(ring);
+                    use_.direction = compose_direction(use_.direction, section_to_derived);
+                    use_.pcurve = MixedPcurveLineage::DerivedRing {
+                        cylinder_parameter_bits,
+                    };
+                }
+            }
+        }
+    }
+    if !fragments.is_empty() {
+        faces.sort_by_key(|face| {
+            store
+                .iter::<RawFace>()
+                .position(|(candidate, _)| candidate == face.source_face().raw())
+                .unwrap_or(usize::MAX)
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn source_face_key(
@@ -2863,6 +3153,51 @@ fn planar_cut_lineage(
     let mut output = BTreeMap::new();
     for cut in arrangement.cut_fragments() {
         let [start, end] = cut.endpoints();
+        if let (
+            MixedArrangementVertex::WholeSectionSeam {
+                branch,
+                source_ordinal,
+            },
+            MixedArrangementVertex::WholeSectionSeam {
+                branch: end_branch,
+                source_ordinal: end_ordinal,
+            },
+        ) = (start, end)
+        {
+            if branch != end_branch
+                || source_ordinal != end_ordinal
+                || *branch != cut.key().branch()
+                || *source_ordinal != cut.key().source_ordinal()
+            {
+                return Err(MixedShellPlanError::PlanarCutEndpointIdentityUnavailable(
+                    source,
+                ));
+            }
+            let mut fragments =
+                graph
+                    .curve_fragments()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, fragment)| {
+                        fragment.branch() == *branch
+                            && fragment.source_ordinal() == *source_ordinal
+                            && matches!(fragment.span(), SectionCurveFragmentSpan::Whole)
+                            && graph.branches()[*branch].faces()[operand] == *face
+                    });
+            let (fragment, _) = fragments
+                .next()
+                .filter(|_| fragments.next().is_none())
+                .ok_or(MixedShellPlanError::MissingPlanarCutLineage(source))?;
+            output.insert(
+                cut.key().clone(),
+                SectionUseLineage {
+                    fragment,
+                    arrangement_to_section: ArrangementDirection::Forward,
+                    cylinder_period_shift: 0,
+                },
+            );
+            continue;
+        }
         let (
             MixedArrangementVertex::SectionEndpoint(start),
             MixedArrangementVertex::SectionEndpoint(end),
@@ -3043,6 +3378,26 @@ fn periodic_cut_lineage(
             });
         }
         let [start, end] = cut.endpoints();
+        if matches!(fragment.span(), SectionCurveFragmentSpan::Whole) {
+            if !matches!(
+                (start, end),
+                (
+                    PeriodicArrangementVertexKey::WholeSectionSeam(first),
+                    PeriodicArrangementVertexKey::WholeSectionSeam(second)
+                ) if *first == key.fragment() && *second == key.fragment()
+            ) {
+                return Err(MixedShellPlanError::PeriodicFragmentEndpointMismatch(key));
+            }
+            output.insert(
+                key,
+                SectionUseLineage {
+                    fragment: key.fragment(),
+                    arrangement_to_section: ArrangementDirection::Forward,
+                    cylinder_period_shift: 0,
+                },
+            );
+            continue;
+        }
         let (
             PeriodicArrangementVertexKey::SectionEndpoint(start),
             PeriodicArrangementVertexKey::SectionEndpoint(end),
@@ -3164,6 +3519,13 @@ fn planar_loop(
             MixedArrangementVertex::SectionEndpoint(endpoint) => {
                 MixedShellVertexKey::SectionEndpoint(endpoint)
             }
+            MixedArrangementVertex::WholeSectionSeam {
+                branch,
+                source_ordinal,
+            } => MixedShellVertexKey::WholeSectionSeam {
+                branch,
+                source_ordinal,
+            },
         })
         .collect();
     let mut uses = Vec::with_capacity(native_uses.len());
@@ -3290,6 +3652,13 @@ fn periodic_loop(
         .map(|vertex| match vertex {
             PeriodicArrangementVertexKey::SourceLoopSeam(loop_key) => {
                 MixedShellVertexKey::ProofSeam { source, loop_key }
+            }
+            PeriodicArrangementVertexKey::WholeSectionSeam(fragment) => {
+                let fragment = &graph.curve_fragments()[fragment];
+                MixedShellVertexKey::WholeSectionSeam {
+                    branch: fragment.branch(),
+                    source_ordinal: fragment.source_ordinal(),
+                }
             }
             PeriodicArrangementVertexKey::SectionEndpoint(endpoint) => {
                 MixedShellVertexKey::SectionEndpoint(endpoint)

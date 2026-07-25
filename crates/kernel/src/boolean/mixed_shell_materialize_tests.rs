@@ -193,6 +193,7 @@ fn projected_pcurve_fixture_with_target_x(
             section_trims: Vec::new(),
         },
         materialization_gaps: Vec::new(),
+        face_only_lineage: false,
     };
     let physical = PhysicalEdge {
         carrier: PhysicalCarrier::Source(source_edge),
@@ -775,6 +776,7 @@ fn periodic_window_work_preserves_source_store_errors() {
             section_trims: Vec::new(),
         },
         materialization_gaps: Vec::new(),
+        face_only_lineage: false,
     };
 
     assert_eq!(

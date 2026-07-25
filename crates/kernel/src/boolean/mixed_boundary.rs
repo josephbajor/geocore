@@ -16,9 +16,10 @@
 // The shared boundary error retains exact arrangement diagnostics inline.
 #![allow(clippy::result_large_err)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kcore::operation::OperationScope;
+use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::curve::Curve;
 use kgeom::vec::Point3;
 use ktopo::geom::CurveGeom;
@@ -26,25 +27,25 @@ use ktopo::store::Store;
 
 use super::boundary_select::{
     BoundaryFragmentClassification, ClassifiedBoundaryFragment, OperandSide,
-    RegularizedBooleanOperation,
+    RegularizedBooleanOperation, SelectedBoundaryFragment, SelectedOrientation,
 };
 use super::curved_source::CertifiedCylinderSource;
+use super::curved_support_separation::CertifiedAxialCapContact;
 use super::disk_face_arrangement::{
     ArrangedDiskFace, DiskCellClassification, arrange_section_disk_face,
     classify_disk_face_from_anchor,
 };
 use super::extract::ExtractedPlanarSourceBody;
 use super::face_arrangement::{ArrangementDirection, ArrangementEdgeKey};
-use super::mixed_cap_boundary::{
-    MixedCylinderCapRing, bind_cylinder_cap_rings, classified_exterior_cap,
-};
+use super::mixed_cap_boundary::{MixedCylinderCapRing, bind_cylinder_cap_ring_from_embedding};
 use super::mixed_face_arrangement::{
     MixedFaceArrangementError, MixedPlanarFaceOutput, MixedSourceSpanLineage,
-    arrange_mixed_planar_face_with_lineage,
+    arrange_mixed_planar_face_with_lineage, arrange_uncut_mixed_planar_face_with_lineage,
 };
 use super::mixed_periodic_arrangement::{
     MixedPeriodicArrangementError, MixedPeriodicFaceArrangement, PeriodicArrangementCellKey,
-    PeriodicSourceLoopKey, arrange_mixed_periodic_face, canonical_source_span_open_interval,
+    PeriodicSourceLoopKey, arrange_mixed_periodic_face_from_embedding,
+    arrange_mixed_periodic_whole_fragments, canonical_source_span_open_interval,
 };
 use super::mixed_shell_plan::{
     MixedArrangementBinding, MixedShellCellKey, MixedSourceFaceKey, source_face_key,
@@ -52,7 +53,11 @@ use super::mixed_shell_plan::{
 use super::pipeline::PLANAR_BOOLEAN_BSP_WORK;
 use crate::classify::{PointBodyVerdict, classify_point_in_body_in_scope};
 use crate::error::Error;
-use crate::{BodyId, BodySectionGraph, FaceId, Part, SectionPeriodicFaceEmbeddingEvidence};
+use crate::section::certify_periodic_face_fragment_subset;
+use crate::{
+    BodyId, BodySectionGraph, CertifiedSectionPeriodicFaceEmbedding, FaceId, Part, SectionCarrier,
+    SectionCurveFragmentSpan, SectionPeriodicFaceEmbeddingEvidence, SectionUvCurve,
+};
 
 /// Failure before truth selection or topology allocation.
 #[derive(Debug)]
@@ -69,7 +74,6 @@ pub(crate) enum MixedBoundaryError {
     ContradictoryDual,
     DisconnectedDual,
     CylinderCapNotExterior,
-    CylinderCapSelectionRequired,
 }
 
 impl From<Error> for MixedBoundaryError {
@@ -90,6 +94,7 @@ struct PreparedPeriodicFace {
     operand: usize,
     source: MixedSourceFaceKey,
     arrangement: MixedPeriodicFaceArrangement,
+    embedding: CertifiedSectionPeriodicFaceEmbedding,
 }
 
 struct PreparedDiskFace {
@@ -100,7 +105,7 @@ struct PreparedDiskFace {
 
 struct PreparedCylinderCaps {
     disks: Vec<PreparedDiskFace>,
-    uncut_boundaries: Vec<usize>,
+    uncut_boundaries: Vec<(usize, Option<bool>)>,
     classified: Vec<ClassifiedBoundaryFragment<MixedShellCellKey, ()>>,
 }
 
@@ -130,7 +135,7 @@ impl PreparedMixedBoundary {
                         face: face.face.clone(),
                         operand: face.operand,
                         arrangement: &face.arrangement,
-                        embedding: None,
+                        embedding: Some(&face.embedding),
                     }),
             )
             .chain(self.disks.iter().map(|face| MixedArrangementBinding::Disk {
@@ -148,6 +153,47 @@ impl PreparedMixedBoundary {
 
     pub(crate) fn classified(&self) -> Vec<ClassifiedBoundaryFragment<MixedShellCellKey, ()>> {
         self.classified.clone()
+    }
+
+    /// Return source operands whose complete boundary was retained unchanged.
+    ///
+    /// Every represented operand must match its complete classified cell set;
+    /// a reversed selection is a cavity and cannot be a rigid source copy.
+    pub(crate) fn whole_source_operands(
+        &self,
+        selected: &[SelectedBoundaryFragment<MixedShellCellKey, ()>],
+    ) -> Option<Vec<usize>> {
+        let mut selected_keys = BTreeMap::<OperandSide, BTreeSet<MixedShellCellKey>>::new();
+        for fragment in selected {
+            if fragment.orientation() != SelectedOrientation::Preserved {
+                return None;
+            }
+            selected_keys
+                .entry(fragment.operand())
+                .or_default()
+                .insert(*fragment.key());
+        }
+        let mut operands = Vec::with_capacity(selected_keys.len());
+        for (operand, keys) in selected_keys {
+            let source = self
+                .classified
+                .iter()
+                .filter(|fragment| fragment.operand() == operand)
+                .map(|fragment| *fragment.key())
+                .collect::<BTreeSet<_>>();
+            if keys != source {
+                return None;
+            }
+            operands.push(match operand {
+                OperandSide::Left => 0,
+                OperandSide::Right => 1,
+            });
+        }
+        Some(operands)
+    }
+
+    pub(crate) fn cap_ring(&self, boundary: usize) -> Option<&MixedCylinderCapRing> {
+        self.caps.iter().find(|ring| ring.boundary() == boundary)
     }
 }
 
@@ -167,12 +213,17 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
     cylinder: &CertifiedCylinderSource,
     planar_operand: usize,
     cylinder_operand: usize,
-    _operation: RegularizedBooleanOperation,
+    contact: Option<&CertifiedAxialCapContact>,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PreparedMixedBoundary, MixedBoundaryError> {
-    if !graph.gaps().is_empty()
-        || graph.completion() != crate::SectionCompletion::Complete
+    let complete =
+        graph.gaps().is_empty() && graph.completion() == crate::SectionCompletion::Complete;
+    let contact_only = contact.is_some()
+        && graph.curve_fragments().is_empty()
+        && graph.curve_endpoints().is_empty()
+        && graph.curve_components().is_empty();
+    if !(complete || contact_only)
         || planar_operand > 1
         || cylinder_operand > 1
         || planar_operand == cylinder_operand
@@ -195,9 +246,12 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
     let mut classified = Vec::new();
     for source_face in planar.faces() {
         let face = source_face.clone();
-        let output =
+        let output = if contact.is_some() {
+            arrange_uncut_mixed_planar_face_with_lineage(store, graph, face.clone(), planar_operand)
+        } else {
             arrange_mixed_planar_face_with_lineage(store, graph, face.clone(), planar_operand)
-                .map_err(MixedBoundaryError::PlanarArrangement)?;
+        }
+        .map_err(MixedBoundaryError::PlanarArrangement)?;
         let source = source_face_key(store, graph, &face, planar_operand)
             .map_err(|_| MixedBoundaryError::SourceTopology)?;
         let classes = classify_planar_face(
@@ -224,34 +278,103 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
         });
     }
 
-    let periodic_face = graph
+    let periodic_face = FaceId::new(
+        bodies[cylinder_operand].part().clone(),
+        cylinder.side_face(),
+    );
+    let carried = graph
+        .curve_fragments()
+        .iter()
+        .enumerate()
+        .filter_map(|(fragment_index, fragment)| {
+            let branch = graph.branches().get(fragment.branch())?;
+            (branch.faces()[cylinder_operand] == periodic_face).then_some(fragment_index)
+        })
+        .collect::<Vec<_>>();
+    let periodic_embedding = graph
         .periodic_face_embeddings()
         .iter()
         .find_map(|evidence| match evidence {
             SectionPeriodicFaceEmbeddingEvidence::Certified(certified)
-                if certified.operand() == cylinder_operand
-                    && certified.face().raw() == cylinder.side_face() =>
+                if certified.operand() == cylinder_operand && certified.face() == periodic_face =>
             {
-                Some(certified.face())
+                Some(certified.clone())
             }
             _ => None,
         })
-        .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
-    let periodic_arrangement =
-        arrange_mixed_periodic_face(graph, periodic_face.clone(), cylinder_operand)
-            .map_err(MixedBoundaryError::PeriodicArrangement)?;
+        .map(Ok)
+        .unwrap_or_else(|| {
+            certify_periodic_face_fragment_subset(
+                store,
+                bodies[cylinder_operand].part(),
+                graph,
+                cylinder_operand,
+                periodic_face.clone(),
+                if carried.iter().all(|&fragment| {
+                    matches!(
+                        graph.curve_fragments()[fragment].span(),
+                        SectionCurveFragmentSpan::Whole
+                    )
+                }) {
+                    &[]
+                } else {
+                    &carried
+                },
+                linear,
+            )
+        })
+        .map_err(|_| MixedBoundaryError::MissingPeriodicFaceEvidence)?;
+    let periodic_arrangement = if !carried.is_empty()
+        && carried.iter().all(|&fragment| {
+            matches!(
+                graph.curve_fragments()[fragment].span(),
+                SectionCurveFragmentSpan::Whole
+            )
+        }) {
+        let ordered = ordered_whole_ring_fragments(graph, cylinder, cylinder_operand, &carried)?;
+        arrange_mixed_periodic_whole_fragments(graph, &periodic_embedding, &ordered)
+    } else {
+        arrange_mixed_periodic_face_from_embedding(graph, &periodic_embedding)
+    }
+    .map_err(MixedBoundaryError::PeriodicArrangement)?;
     let periodic_source = source_face_key(store, graph, &periodic_face, cylinder_operand)
         .map_err(|_| MixedBoundaryError::SourceTopology)?;
-    let periodic_classes = classify_periodic_face(
-        part,
-        graph,
-        &bodies[planar_operand],
-        &periodic_face,
-        cylinder_operand,
-        &periodic_arrangement,
-        linear,
-        scope,
-    )?;
+    let periodic_classes = if contact.is_some() {
+        let source = *periodic_arrangement
+            .source_spans()
+            .first()
+            .ok_or(MixedBoundaryError::AnchorUnavailable)?
+            .key();
+        let cylinder_geometry = cylinder.cylinder();
+        let frame = cylinder_geometry.frame();
+        let axial = cylinder
+            .boundaries()
+            .iter()
+            .map(|boundary| (boundary.center() - frame.origin()).dot(frame.z()))
+            .sum::<f64>()
+            * 0.5;
+        classify_periodic_face_from_source_point(
+            part,
+            &bodies[planar_operand],
+            &periodic_arrangement,
+            source,
+            frame.point_at(cylinder_geometry.radius(), 0.0, axial),
+            linear,
+            scope,
+        )?
+    } else {
+        classify_periodic_face_with_embedding(
+            part,
+            graph,
+            &bodies[planar_operand],
+            &periodic_face,
+            cylinder_operand,
+            &periodic_arrangement,
+            &periodic_embedding,
+            linear,
+            scope,
+        )?
+    };
     classified.extend(periodic_arrangement.cells().iter().map(|cell| {
         ClassifiedBoundaryFragment::new(
             MixedShellCellKey::periodic(periodic_source, *cell.key()),
@@ -272,6 +395,7 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
         cylinder,
         planar_operand,
         cylinder_operand,
+        contact.map(|contact| contact.boundary()),
         linear,
         scope,
     )?;
@@ -280,24 +404,41 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
     let cap_rings = if uncut_cap_boundaries.is_empty() {
         Vec::new()
     } else {
-        bind_cylinder_cap_rings(
-            store,
-            graph,
-            cylinder,
-            cylinder_operand,
-            &periodic_face,
-            &periodic_arrangement,
-        )
-        .map_err(|_| MixedBoundaryError::SourceTopology)?
-        .into_iter()
-        .filter(|ring| uncut_cap_boundaries.contains(&ring.boundary()))
-        .collect::<Vec<_>>()
+        [0, 1]
+            .into_iter()
+            .map(|boundary| {
+                bind_cylinder_cap_ring_from_embedding(
+                    store,
+                    graph,
+                    cylinder,
+                    cylinder_operand,
+                    boundary,
+                    &periodic_face,
+                    &periodic_arrangement,
+                    &periodic_embedding,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| MixedBoundaryError::SourceTopology)?
+            .into_iter()
+            .filter(|ring| {
+                uncut_cap_boundaries
+                    .iter()
+                    .any(|(boundary, _)| *boundary == ring.boundary())
+            })
+            .collect::<Vec<_>>()
     };
-    classified.extend(cap_rings.iter().map(|ring| {
-        classified_exterior_cap(
+    classified.extend(cap_rings.iter().filter_map(|ring| {
+        let interior = uncut_cap_boundaries
+            .iter()
+            .find_map(|(boundary, interior)| (*boundary == ring.boundary()).then_some(*interior))
+            .flatten()?;
+        Some(ClassifiedBoundaryFragment::new(
             MixedShellCellKey::cylinder_cap(ring.cap_source(), ring.boundary()),
-            cylinder_operand,
-        )
+            operand_side(cylinder_operand),
+            (),
+            as_boundary_classification(interior),
+        ))
     }));
 
     Ok(PreparedMixedBoundary {
@@ -307,6 +448,7 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
             operand: cylinder_operand,
             source: periodic_source,
             arrangement: periodic_arrangement,
+            embedding: periodic_embedding,
         }],
         disks: prepared_disks,
         caps: cap_rings,
@@ -322,6 +464,7 @@ fn prepare_cylinder_caps(
     cylinder: &CertifiedCylinderSource,
     planar_operand: usize,
     cylinder_operand: usize,
+    omitted_boundary: Option<usize>,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PreparedCylinderCaps, MixedBoundaryError> {
@@ -336,16 +479,18 @@ fn prepare_cylinder_caps(
             .iter()
             .any(|branch| branch.faces()[cylinder_operand] == cap_face);
         if !cut {
-            if classify_anchor(
+            if omitted_boundary == Some(boundary_index) {
+                uncut_boundaries.push((boundary_index, None));
+                continue;
+            }
+            let interior = classify_anchor(
                 part,
                 &bodies[planar_operand],
                 boundary.center(),
                 linear,
                 scope,
-            )? {
-                return Err(MixedBoundaryError::CylinderCapNotExterior);
-            }
-            uncut_boundaries.push(boundary_index);
+            )?;
+            uncut_boundaries.push((boundary_index, Some(interior)));
             continue;
         }
 
@@ -459,6 +604,34 @@ pub(super) fn classify_periodic_face(
             _ => None,
         })
         .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
+    classify_periodic_face_with_embedding(
+        part,
+        graph,
+        other,
+        face,
+        operand,
+        arrangement,
+        certified,
+        linear,
+        scope,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_periodic_face_with_embedding(
+    part: &Part<'_>,
+    _graph: &BodySectionGraph,
+    other: &BodyId,
+    face: &FaceId,
+    operand: usize,
+    arrangement: &MixedPeriodicFaceArrangement,
+    certified: &CertifiedSectionPeriodicFaceEmbedding,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<BTreeMap<PeriodicArrangementCellKey, bool>, MixedBoundaryError> {
+    if certified.operand() != operand || certified.face() != *face {
+        return Err(MixedBoundaryError::MissingPeriodicFaceEvidence);
+    }
     let source_span = arrangement
         .source_spans()
         .first()
@@ -478,6 +651,59 @@ pub(super) fn classify_periodic_face(
         linear,
         scope,
     )
+}
+
+fn ordered_whole_ring_fragments(
+    graph: &BodySectionGraph,
+    cylinder: &CertifiedCylinderSource,
+    cylinder_operand: usize,
+    carried: &[usize],
+) -> Result<Vec<(usize, bool)>, MixedBoundaryError> {
+    let axis = cylinder.cylinder().frame().z().to_array();
+    let boundaries = cylinder.boundaries();
+    let mut ordered = Vec::with_capacity(carried.len());
+    for &fragment_index in carried {
+        let fragment = &graph.curve_fragments()[fragment_index];
+        let branch = graph
+            .branches()
+            .get(fragment.branch())
+            .ok_or(MixedBoundaryError::SourceTopology)?;
+        let SectionCarrier::Circle { center, radius, .. } = branch.carrier() else {
+            return Err(MixedBoundaryError::SourceTopology);
+        };
+        let SectionUvCurve::Line(side) = branch.pcurves()[cylinder_operand] else {
+            return Err(MixedBoundaryError::SourceTopology);
+        };
+        if radius != cylinder.cylinder().radius()
+            || side.direction().y != 0.0
+            || side.direction().x == 0.0
+            || !side.origin().y.is_finite()
+            || axis_order(axis, center, boundaries[0].center()) != Some(Orientation::Positive)
+            || axis_order(axis, center, boundaries[1].center()) != Some(Orientation::Negative)
+        {
+            return Err(MixedBoundaryError::SourceTopology);
+        }
+        ordered.push((fragment_index, center, side.direction().x > 0.0));
+    }
+    for index in 1..ordered.len() {
+        let mut cursor = index;
+        while cursor > 0 {
+            match axis_order(axis, ordered[cursor].1, ordered[cursor - 1].1) {
+                Some(Orientation::Negative) => ordered.swap(cursor, cursor - 1),
+                Some(Orientation::Positive) => break,
+                _ => return Err(MixedBoundaryError::SourceTopology),
+            }
+            cursor -= 1;
+        }
+    }
+    Ok(ordered
+        .into_iter()
+        .map(|(fragment, _, forward_to_high)| (fragment, forward_to_high))
+        .collect())
+}
+
+fn axis_order(axis: [f64; 3], point: Point3, origin: Point3) -> Option<Orientation> {
+    affine_dot3(axis, point.to_array(), origin.to_array(), 0.0).map(|sign| sign.sign())
 }
 
 /// Classify a periodic arrangement from one certified open source-span point.
@@ -914,7 +1140,7 @@ mod tests {
                 &cylinder_source,
                 planar_operand,
                 cylinder_operand,
-                operation,
+                None,
                 context.tolerances().linear(),
                 &mut scope,
             )
@@ -1050,6 +1276,7 @@ mod tests {
                 &cylinder_source,
                 planar_operand,
                 cylinder_operand,
+                None,
                 context.tolerances().linear(),
                 &mut scope,
             )
@@ -1164,7 +1391,7 @@ mod tests {
                     &cylinder_source,
                     planar_operand,
                     cylinder_operand,
-                    operation,
+                    None,
                     context.tolerances().linear(),
                     &mut scope,
                 )

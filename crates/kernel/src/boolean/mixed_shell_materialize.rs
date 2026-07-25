@@ -789,7 +789,9 @@ fn plan_vertex(
             _ => None,
         }),
         MixedShellVertexKey::ProofSeam { .. } => None,
-        MixedShellVertexKey::DerivedRingSeam(_) | MixedShellVertexKey::Tangency(_) => None,
+        MixedShellVertexKey::WholeSectionSeam { .. }
+        | MixedShellVertexKey::DerivedRingSeam(_)
+        | MixedShellVertexKey::Tangency(_) => None,
         _ => None,
     }
 }
@@ -2194,6 +2196,11 @@ fn build_mixed_shell_input_from_blueprint(
     // fragment. Direct test calls are accounting harnesses only.
     let mut source_scalars = source_scalar_map(scalars)?;
     let mut trim_scalars = trim_scalar_map(scalars)?;
+    let face_only_lineage = plan.face_only_lineage()
+        || plan
+            .derived_rings()
+            .iter()
+            .any(|ring| matches!(ring.lineage(), MixedDerivedRingLineage::WholeSection(_)));
     let mut retained_vertices = Vec::<(PhysicalVertex, Point3)>::new();
     let skew_certificates = certify_skew_spans(plan, blueprint)?;
     for (physical, certificate) in blueprint.edges.iter().zip(&skew_certificates) {
@@ -2247,21 +2254,31 @@ fn build_mixed_shell_input_from_blueprint(
             };
             let range = circle.param_range();
             let edge = AnalyticShellClosedEdge::new(key, carrier, range);
-            analytic_closed_edges.push(match lineage {
-                MixedDerivedRingLineage::Source(raw_edge) => {
-                    let merged = plan
-                        .cap_rings
-                        .iter()
-                        .find(|ring| ring.edge() == raw_edge)
-                        .and_then(MixedCylinderCapRing::merge_edge_source);
-                    if let Some(peer) = merged {
-                        edge.with_merge_sources([EntityRef::Edge(raw_edge), EntityRef::Edge(peer)])
-                    } else {
-                        edge.with_source(EntityRef::Edge(raw_edge))
+            analytic_closed_edges.push(if face_only_lineage {
+                edge
+            } else {
+                match lineage {
+                    MixedDerivedRingLineage::Source(raw_edge) => {
+                        let merged = plan
+                            .cap_rings
+                            .iter()
+                            .find(|ring| ring.edge() == raw_edge)
+                            .and_then(MixedCylinderCapRing::merge_edge_source);
+                        if let Some(peer) = merged {
+                            edge.with_merge_sources([
+                                EntityRef::Edge(raw_edge),
+                                EntityRef::Edge(peer),
+                            ])
+                        } else {
+                            edge.with_source(EntityRef::Edge(raw_edge))
+                        }
                     }
-                }
-                MixedDerivedRingLineage::Derived(faces) => {
-                    edge.with_derived_sources(faces.map(EntityRef::Face))
+                    MixedDerivedRingLineage::Derived(faces) => {
+                        edge.with_derived_sources(faces.map(EntityRef::Face))
+                    }
+                    MixedDerivedRingLineage::WholeSection(faces) => {
+                        edge.with_derived_sources(faces.map(EntityRef::Face))
+                    }
                 }
             });
             analytic_edge_ranges.push(range);
@@ -2302,12 +2319,17 @@ fn build_mixed_shell_input_from_blueprint(
                 AnalyticShellCurve::Circle(ring.circle()),
                 range,
             );
-            analytic_edges.push(match ring.lineage() {
-                MixedDerivedRingLineage::Source(source) => {
-                    edge.with_source(EntityRef::Edge(source))
-                }
-                MixedDerivedRingLineage::Derived(faces) => {
-                    edge.with_derived_sources(faces.map(EntityRef::Face))
+            analytic_edges.push(if face_only_lineage {
+                edge
+            } else {
+                match ring.lineage() {
+                    MixedDerivedRingLineage::Source(source) => {
+                        edge.with_source(EntityRef::Edge(source))
+                    }
+                    MixedDerivedRingLineage::Derived(faces)
+                    | MixedDerivedRingLineage::WholeSection(faces) => {
+                        edge.with_derived_sources(faces.map(EntityRef::Face))
+                    }
                 }
             });
             analytic_edge_ranges.push(range);
@@ -2358,7 +2380,7 @@ fn build_mixed_shell_input_from_blueprint(
             vertices[endpoint] = intern_vertex(&mut retained_vertices, endpoints[endpoint], point)?;
         }
         let mut edge = AnalyticShellEdge::new(key, vertices, carrier, range);
-        if let Some(source) = source {
+        if let Some(source) = source.filter(|_| !face_only_lineage) {
             edge = if let Some(piece) = source_circle_split_piece(plan, store, physical, source)? {
                 edge.with_split_lineage(EntityRef::Edge(source), piece)
             } else {

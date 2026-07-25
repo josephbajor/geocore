@@ -26,16 +26,6 @@ mod component_layout;
 #[allow(dead_code)]
 mod components;
 #[allow(dead_code)]
-mod convex_containment;
-#[allow(dead_code)]
-mod curved_cavity;
-#[allow(dead_code)]
-mod curved_contact;
-#[allow(dead_code)]
-mod curved_host;
-#[allow(dead_code)]
-mod curved_host_bands;
-#[allow(dead_code)]
 mod curved_pipeline;
 #[allow(dead_code)]
 mod curved_realize;
@@ -55,8 +45,6 @@ mod dispatch;
 mod extract;
 #[allow(dead_code)]
 mod face_arrangement;
-#[allow(dead_code)]
-mod face_partition;
 #[allow(dead_code)]
 mod mixed_boundary;
 #[allow(dead_code)]
@@ -626,9 +614,7 @@ fn adapt_curved_refusal(
         CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::Unsupported { .. }) => {
             BooleanRefusal::BoundaryClassificationUnsupported
         }
-        CurvedBooleanPipelineRefusal::Partition(_)
-        | CurvedBooleanPipelineRefusal::CellClassification(_)
-        | CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::DuplicateFragmentKey) => {
+        CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::DuplicateFragmentKey) => {
             BooleanRefusal::BoundaryContractViolation
         }
         CurvedBooleanPipelineRefusal::ResultTopologyUnsupported => {
