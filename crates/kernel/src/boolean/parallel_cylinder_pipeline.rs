@@ -18,7 +18,6 @@ use super::mixed_shell_plan::{
 use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
 };
-use super::parallel_cylinder_internal_tangency::execute_parallel_cylinder_internal_tangency;
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCoincidentCapRelation,
     CertifiedParallelCylinderLensRelation, ParallelCylinderRelationOutcome,
@@ -85,11 +84,12 @@ pub(super) fn execute_parallel_cylinder_boolean(
             )
         }
         ParallelCylinderRelationOutcome::CertifiedInternalRadialTangency(relation) => {
-            execute_parallel_cylinder_internal_tangency(
+            super::axial_contact_adapter::execute_internal_tangency_boolean(
                 edit,
                 operation,
                 &bodies,
                 [&first, &second],
+                &graph,
                 &relation,
                 linear,
                 scope,

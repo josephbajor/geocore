@@ -19,6 +19,29 @@ use crate::{
     section::certify_periodic_face_fragment_subset,
 };
 
+#[test]
+fn tangent_periodic_boundaries_keep_noncrossing_endpoint_rotation() {
+    use super::super::face_arrangement::{
+        ArrangementDartKey, ArrangementDirection, TangencyVertexError, certify_tangency_vertex,
+    };
+
+    let certified = certify_tangency_vertex(7, [11, 13]).unwrap();
+    assert_eq!(certified.endpoint(), &7);
+    assert_eq!(
+        certified.outgoing(),
+        &[
+            ArrangementDartKey::source(11, ArrangementDirection::Forward),
+            ArrangementDartKey::source(11, ArrangementDirection::Reverse),
+            ArrangementDartKey::source(13, ArrangementDirection::Forward),
+            ArrangementDartKey::source(13, ArrangementDirection::Reverse),
+        ]
+    );
+    assert_eq!(
+        certify_tangency_vertex(7, [11, 11]),
+        Err(TangencyVertexError::CoincidentBoundary)
+    );
+}
+
 struct ParallelCylinderFixture {
     session: Session,
     part: PartId,

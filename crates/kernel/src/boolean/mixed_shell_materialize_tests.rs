@@ -187,6 +187,7 @@ fn projected_pcurve_fixture_with_target_x(
         section_edges: Vec::new(),
         bounded_source_spans: vec![bounded],
         cap_rings: Vec::new(),
+        derived_rings: Vec::new(),
         materialization: RetainedMaterializationEvidence {
             source_spans: vec![retained],
             section_trims: Vec::new(),
@@ -768,6 +769,7 @@ fn periodic_window_work_preserves_source_store_errors() {
         section_edges: Vec::new(),
         bounded_source_spans: Vec::new(),
         cap_rings: Vec::new(),
+        derived_rings: Vec::new(),
         materialization: RetainedMaterializationEvidence {
             source_spans: Vec::new(),
             section_trims: Vec::new(),

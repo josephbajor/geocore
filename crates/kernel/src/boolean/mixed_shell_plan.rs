@@ -1,20 +1,16 @@
 //! Proof-bearing adoption of mixed planar/periodic face arrangements.
-//!
-//! Section owns exact endpoint identity, analytic carriers, paired pcurves,
-//! deterministic carrier-evaluated trim scalars, and the integer lift of every
-//! cylinder-side use. Planar lineage retains exact source topology and
-//! isolated-root scalar evidence. [`MixedShellProofPlan`] retains that
-//! certified proposal; its materializer coalesces raw source spans by equality,
-//! preserves shared endpoint identity, and runs read-only analytic-shell
-//! preflight before any transaction is opened.
-
-// The shared plan error retains exact mixed-shell diagnostics inline.
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use kcore::predicates::{Orientation, affine_dot3};
+use kgeom::curve::{Circle, Curve};
+use kgeom::frame::Frame;
+use kgeom::vec::Point3;
 use ktopo::analytic_shell::AnalyticFaceSplitPiece;
-use ktopo::entity::{EdgeId as RawEdgeId, FinId as RawFinId, LoopId as RawLoopId, Sense};
+use ktopo::entity::{
+    EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId, Sense,
+};
 use ktopo::store::Store;
 
 #[path = "mixed_shell_components.rs"]
@@ -60,7 +56,6 @@ type OrientedCycleParts<S, C, V> = (
     Vec<V>,
 );
 
-/// Topology-order identity of one source face within its operand body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MixedSourceFaceKey {
     operand: usize,
@@ -77,7 +72,6 @@ impl MixedSourceFaceKey {
     }
 }
 
-/// Arrangement-local cell identity, qualified by its source face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MixedShellCellKind {
     Planar(usize),
@@ -86,7 +80,6 @@ pub(crate) enum MixedShellCellKind {
     CylinderCap(usize),
 }
 
-/// Canonical identity consumed from representation-independent truth selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MixedShellCellKey {
     source: MixedSourceFaceKey,
@@ -134,7 +127,6 @@ impl MixedShellCellKey {
     }
 }
 
-/// One already-certified arrangement made available to the bridge.
 pub(crate) enum MixedArrangementBinding<'a> {
     Planar {
         face: FaceId,
@@ -178,58 +170,98 @@ impl MixedArrangementBinding<'_> {
     }
 }
 
-/// Exact physical vertex identity retained by the proof plan.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MixedShellVertexKey {
-    /// A Section-owned trim endpoint shared across all incident source faces.
     SectionEndpoint(usize),
-    /// A planar arrangement vertex whose raw source vertex is not exposed yet.
     PlanarSourceVertex {
         source: MixedSourceFaceKey,
         topology_ordinal: usize,
     },
-    /// A combinatorial seam for an endpoint-free source ring; never physical.
     ProofSeam {
         source: MixedSourceFaceKey,
         loop_key: PeriodicSourceLoopKey,
     },
+    DerivedRingSeam(usize),
+    Tangency(usize),
 }
 
-/// Exact identity of one physical edge proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MixedShellEdgeKey {
-    /// Planar source span backed by retained fin/root lineage evidence.
     PlanarSource {
         source: MixedSourceFaceKey,
         span: MixedSourceSpanKey,
     },
-    /// Topology-owned complete source loop on the periodic face.
     PeriodicSource {
         source: MixedSourceFaceKey,
         loop_key: PeriodicSourceLoopKey,
     },
-    /// Canonical index into `BodySectionGraph::curve_fragments`.
     SectionFragment(usize),
+    DerivedRing(usize),
 }
 
-/// Pcurve/chart authority retained for one directed face use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MixedPcurveLineage {
-    /// Source topology remains the authority for its existing fin pcurve.
     SourceTopology,
-    /// A retained cylinder source circle projected into a coincident Plane.
     ProjectedSourceCircleOnPlane(ProjectedSourceCircleOnPlane),
-    /// An endpoint-free source ring projected onto another selected face.
     ProjectedEndpointFreeSourceCircle(ProjectedEndpointFreeSourceCircle),
-    /// Section branch pcurve plus an exact integer cylinder-period lift.
     Section {
         branch: usize,
         operand: usize,
         cylinder_period_shift: i64,
     },
+    DerivedRing {
+        cylinder_parameter_bits: Option<u64>,
+    },
 }
 
-/// One oriented use in a selected derived face loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MixedDerivedRingLineage {
+    Source(RawEdgeId),
+    Derived([RawFaceId; 2]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MixedDerivedRingPlan {
+    circle: Circle,
+    tangency: Option<(usize, Point3)>,
+    lineage: MixedDerivedRingLineage,
+}
+
+impl MixedDerivedRingPlan {
+    const fn endpoint_free(circle: Circle, lineage: MixedDerivedRingLineage) -> Self {
+        Self {
+            circle,
+            tangency: None,
+            lineage,
+        }
+    }
+
+    const fn tangent(
+        circle: Circle,
+        vertex: usize,
+        point: Point3,
+        lineage: MixedDerivedRingLineage,
+    ) -> Self {
+        Self {
+            circle,
+            tangency: Some((vertex, point)),
+            lineage,
+        }
+    }
+
+    pub(crate) const fn circle(&self) -> Circle {
+        self.circle
+    }
+
+    pub(crate) const fn tangency(&self) -> Option<(usize, Point3)> {
+        self.tangency
+    }
+
+    pub(crate) const fn lineage(&self) -> MixedDerivedRingLineage {
+        self.lineage
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedShellEdgeUse {
     edge: MixedShellEdgeKey,
@@ -251,7 +283,6 @@ impl MixedShellEdgeUse {
     }
 }
 
-/// One selected, oriented, closed face-boundary component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedShellLoopPlan {
     uses: Vec<MixedShellEdgeUse>,
@@ -263,13 +294,11 @@ impl MixedShellLoopPlan {
         &self.uses
     }
 
-    /// Traversed vertices, including the repeated closing identity.
     pub(crate) fn vertices(&self) -> &[MixedShellVertexKey] {
         &self.vertices
     }
 }
 
-/// One truth-selected derived face, still qualified by its source topology.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedShellFacePlan {
     source: MixedSourceFaceKey,
@@ -306,7 +335,6 @@ impl MixedShellFacePlan {
     }
 }
 
-/// Section payload retained once for every shared physical cut edge.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MixedSectionEdgePlan {
     fragment_index: usize,
@@ -338,18 +366,11 @@ impl MixedSectionEdgePlan {
         self.carrier_faces
     }
 
-    /// Sealed graph/Section handoff for a bounded procedural skew span.
     pub(crate) const fn skew_persistence(&self) -> Option<SectionSkewCylinderPersistenceInput> {
         self.skew_persistence
     }
 }
 
-/// Exact Section-root endpoint retained for a bounded source-edge span.
-///
-/// The canonical scalar is realization evidence, while `endpoint`, `edge`,
-/// and `root_ordinal` remain the identity authority. `period_shift` selects
-/// the occurrence bounding this directed span without inventing another
-/// root on a periodic carrier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MixedBoundedSourceRoot {
     endpoint: usize,
@@ -384,12 +405,6 @@ impl MixedBoundedSourceRoot {
     }
 }
 
-/// Raw source-topology and scalar lineage for one finite source span.
-///
-/// `source` and `span` identify its face-local arrangement use. Physical
-/// coalescing across cap and periodic faces is instead keyed by equality of
-/// `edge` plus the two Section endpoints, so independently arranged uses of
-/// the same circle arc remain one edge proposal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedBoundedSourceSpanPlan {
     source: MixedSourceFaceKey,
@@ -426,26 +441,26 @@ impl MixedBoundedSourceSpanPlan {
     }
 }
 
-/// Exact evidence still required before analytic-shell materialization.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MixedShellMaterializationGap {
-    /// Section must publish one exact intrinsic source-edge root parameter.
     ExactSourceRootParameterRequired {
         source: MixedSourceFaceKey,
         span: MixedSourceSpanKey,
         endpoint: usize,
     },
-    /// Section must publish a proven exact carrier scalar, not a representative.
-    ExactTrimParameterRequired { fragment: usize, endpoint: usize },
+    ExactTrimParameterRequired {
+        fragment: usize,
+        endpoint: usize,
+    },
 }
 
-/// Exact intermediate produced for the admitted block/cylinder arrangement.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MixedShellProofPlan {
     faces: Vec<MixedShellFacePlan>,
     section_edges: Vec<MixedSectionEdgePlan>,
     bounded_source_spans: Vec<MixedBoundedSourceSpanPlan>,
     cap_rings: Vec<MixedCylinderCapRing>,
+    derived_rings: Vec<MixedDerivedRingPlan>,
     materialization: materialize::RetainedMaterializationEvidence,
     materialization_gaps: Vec<MixedShellMaterializationGap>,
 }
@@ -465,6 +480,10 @@ impl MixedShellProofPlan {
 
     pub(crate) fn cap_rings(&self) -> &[MixedCylinderCapRing] {
         &self.cap_rings
+    }
+
+    pub(crate) fn derived_rings(&self) -> &[MixedDerivedRingPlan] {
+        &self.derived_rings
     }
 
     pub(crate) fn materialization_gaps(&self) -> &[MixedShellMaterializationGap] {
@@ -506,7 +525,6 @@ impl MixedShellProofPlan {
     }
 }
 
-/// Typed refusal while building the exact intermediate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MixedShellPlanError {
     SectionIncomplete,
@@ -581,6 +599,7 @@ pub(crate) enum MixedShellPlanError {
     DiskLineageMismatch(MixedSourceFaceKey),
     AxialContactBoundaryMismatch,
     CommonSupportBoundaryMismatch,
+    InternalTangencyBoundaryMismatch,
     CoincidentCapSelectionMismatch,
     CoincidentCapBoundaryUseCount {
         physical_end: usize,
@@ -601,6 +620,9 @@ enum SectionPlanningAdmission<'a> {
     Complete,
     AxialContact(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact),
     CommonSupport(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport),
+    InternalTangency(
+        &'a super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    ),
     CoincidentCaps(
         &'a super::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation,
     ),
@@ -629,6 +651,13 @@ impl SectionPlanningAdmission<'_> {
             {
                 Ok(())
             }
+            Self::InternalTangency(relation)
+                if graph.completion() == SectionCompletion::Indeterminate
+                    && !graph.gaps().is_empty()
+                    && relation.boundaries().len() == 4 =>
+            {
+                Ok(())
+            }
             Self::CoincidentCaps(relation)
                 if graph.completion() == SectionCompletion::Indeterminate
                     && !graph.gaps().is_empty()
@@ -642,8 +671,6 @@ impl SectionPlanningAdmission<'_> {
     }
 }
 
-/// Translate certified arrangements and truth-selected cells into one exact
-/// shared-use proof plan.  The selector, not this bridge, owns side decisions.
 pub(crate) fn plan_mixed_shell<'a>(
     store: &Store,
     graph: &BodySectionGraph,
@@ -663,17 +690,10 @@ pub(crate) fn plan_mixed_shell<'a>(
             let (key, operand, (), orientation) = fragment.into_parts();
             (key, operand, orientation)
         }),
-        |_, _, _, _| Ok(()),
+        |_, _, _, _, _| Ok(()),
     )
 }
 
-/// Translate an operation-local exact axial-contact projection through the
-/// ordinary mixed-shell plan builder.
-///
-/// The relation adapter accounts for the global Section gaps before calling
-/// this function. Every retained fragment still uses its original graph
-/// identity and the same arrangement, pairing, and materialization checks as
-/// a globally complete Section graph.
 pub(crate) fn plan_axial_contact_mixed_shell<'a>(
     store: &Store,
     graph: &BodySectionGraph,
@@ -691,7 +711,7 @@ pub(crate) fn plan_axial_contact_mixed_shell<'a>(
             let (key, operand, (), orientation) = fragment.into_parts();
             (key, operand, orientation)
         }),
-        |arrangements, faces, bounded_source_spans, _| {
+        |arrangements, faces, bounded_source_spans, _, _| {
             rebase_axial_contact_boundary_arcs(
                 store,
                 graph,
@@ -704,12 +724,6 @@ pub(crate) fn plan_axial_contact_mixed_shell<'a>(
     )
 }
 
-/// Build a strict-containment axial-contact shell from two source-only side
-/// arrangements and four topology-owned rings.
-///
-/// The larger contact cap supplies the annulus plane and outer loop. The
-/// smaller contact ring is reused as the inner loop through a certified
-/// endpoint-free projection, while its source-side use remains unchanged.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_internal_axial_contact_mixed_shell<'a>(
     store: &Store,
@@ -730,7 +744,7 @@ pub(crate) fn plan_internal_axial_contact_mixed_shell<'a>(
             let (key, operand, (), orientation) = fragment.into_parts();
             (key, operand, orientation)
         }),
-        |_, faces, _, cap_rings| {
+        |_, faces, _, cap_rings, _| {
             append_internal_contact_hole(
                 store,
                 faces,
@@ -743,8 +757,6 @@ pub(crate) fn plan_internal_axial_contact_mixed_shell<'a>(
     )
 }
 
-/// Coalesce two exactly common-support source side cells into one mixed-shell
-/// face while retaining both source faces as ordered merge lineage.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_coincident_axial_contact_mixed_shell<'a>(
     store: &Store,
@@ -764,7 +776,7 @@ pub(crate) fn plan_coincident_axial_contact_mixed_shell<'a>(
             let (key, operand, (), orientation) = fragment.into_parts();
             (key, operand, orientation)
         }),
-        |_, faces, _, _| merge_coincident_side_faces(store, faces, far_rings, tolerance),
+        |_, faces, _, _, _| merge_coincident_side_faces(store, faces, far_rings, tolerance),
     )
 }
 
@@ -786,7 +798,7 @@ pub(crate) fn plan_common_support_mixed_shell<'a>(
             let (key, operand, (), orientation) = fragment.into_parts();
             (key, operand, orientation)
         }),
-        |_, faces, _, rings| {
+        |_, faces, _, rings, _| {
             graft_common_support_spans(
                 store,
                 faces,
@@ -797,6 +809,829 @@ pub(crate) fn plan_common_support_mixed_shell<'a>(
             )
         },
     )
+}
+
+pub(crate) fn plan_internal_tangency_bands_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    interval: &super::axial_interval_sweep::AxialIntervalPlan,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+    plan_mixed_shell_with_augmentation(
+        store,
+        graph,
+        SectionPlanningAdmission::InternalTangency(relation),
+        bindings,
+        selected.into_iter().map(|fragment| {
+            let (key, operand, (), orientation) = fragment.into_parts();
+            (key, operand, orientation)
+        }),
+        |_, faces, _, rings, derived| {
+            graft_internal_tangency_bands(faces, rings, derived, cylinders, relation, interval)
+        },
+    )
+}
+
+pub(crate) fn plan_internal_tangency_union_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    tails: &[super::axial_interval_sweep::PlannedAxialSpan],
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+    plan_mixed_shell_with_augmentation(
+        store,
+        graph,
+        SectionPlanningAdmission::InternalTangency(relation),
+        bindings,
+        selected.into_iter().map(|fragment| {
+            let (key, operand, (), orientation) = fragment.into_parts();
+            (key, operand, orientation)
+        }),
+        |_, faces, _, rings, derived| {
+            graft_internal_tangency_union(faces, rings, derived, cylinders, relation, tails)
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InternalTangencyBoundary {
+    operand: usize,
+    boundary: usize,
+    axial_parameter: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InternalTangencyBand {
+    operand: usize,
+    low: InternalTangencyBoundary,
+    high: InternalTangencyBoundary,
+    split: Option<AnalyticFaceSplitPiece>,
+}
+
+fn graft_internal_tangency_bands(
+    faces: &mut Vec<MixedShellFacePlan>,
+    rings: &mut Vec<MixedCylinderCapRing>,
+    derived: &mut Vec<MixedDerivedRingPlan>,
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    interval: &super::axial_interval_sweep::AxialIntervalPlan,
+) -> Result<(), MixedShellPlanError> {
+    let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
+    bind_internal_tangency_boundaries(cylinders, relation)?;
+    if interval.spans().len() > 2 {
+        return Err(fail());
+    }
+    let source_faces = faces.clone();
+    let source_rings = rings.clone();
+    let contained = relation.contained_operand();
+    let source = cylinders.get(contained).ok_or_else(fail)?;
+    faces.clear();
+    rings.clear();
+    for (span_index, span) in interval.spans().iter().enumerate() {
+        let endpoints = [span.low(), span.high()]
+            .map(|contributors| bind_internal_boundary_class(relation, contributors))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let [low, high] = endpoints.as_slice() else {
+            return Err(fail());
+        };
+        let centers = [
+            internal_axis_endpoint(cylinders, source, contained, low)?,
+            internal_axis_endpoint(cylinders, source, contained, high)?,
+        ];
+        if centers[0].1 == centers[1].1 {
+            return Err(fail());
+        }
+        let mut ring_indices = [0_usize; 2];
+        for end in 0..2 {
+            let circle = Circle::new(
+                source.cylinder().frame().with_origin(centers[end].0),
+                source.cylinder().radius(),
+            )
+            .map_err(|_| fail())?;
+            let lineage =
+                internal_ring_lineage(cylinders, source.side_face(), contained, &endpoints[end])?;
+            ring_indices[end] = derived.len();
+            derived.push(MixedDerivedRingPlan::endpoint_free(circle, lineage));
+        }
+        let side_ring = source_rings
+            .iter()
+            .find(|ring| ring.operand() == contained)
+            .ok_or_else(fail)?;
+        let mut side = source_face(
+            &source_faces,
+            side_ring.side_source(),
+            side_ring.side_face(),
+        )?;
+        let desired = if centers[0].1 < centers[1].1 {
+            [ArrangementDirection::Forward, ArrangementDirection::Reverse]
+        } else {
+            [ArrangementDirection::Reverse, ArrangementDirection::Forward]
+        };
+        let directions: [ArrangementDirection; 2] = core::array::from_fn(|end| {
+            if derived_ring_cylinder_scale(
+                derived[ring_indices[end]].circle(),
+                *source.cylinder().frame(),
+            ) > 0.0
+            {
+                desired[end]
+            } else {
+                opposite(desired[end])
+            }
+        });
+        side.loops = (0..2)
+            .map(|end| {
+                derived_ring_loop(
+                    ring_indices[end],
+                    directions[end],
+                    Some(centers[end].1),
+                    derived,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        side.split_lineage = (interval.spans().len() == 2).then_some(if span_index == 0 {
+            AnalyticFaceSplitPiece::First
+        } else {
+            AnalyticFaceSplitPiece::Second
+        });
+        faces.push(side);
+        for end in 0..2 {
+            let boundary = endpoints[end]
+                .iter()
+                .find(|boundary| boundary.operand == contained)
+                .or_else(|| endpoints[end].first())
+                .ok_or_else(fail)?;
+            let source_ring = source_rings
+                .iter()
+                .find(|ring| {
+                    ring.operand() == boundary.operand && ring.boundary() == boundary.boundary
+                })
+                .ok_or_else(fail)?;
+            let mut cap = source_face(
+                &source_faces,
+                source_ring.cap_source(),
+                source_ring.cap_face(),
+            )?;
+            let sibling = InternalTangencyBoundary {
+                operand: boundary.operand,
+                boundary: 1 - boundary.boundary,
+                axial_parameter: relation
+                    .axial_parameter(boundary.operand, 1 - boundary.boundary)
+                    .ok_or_else(fail)?,
+            };
+            let source_low = compare_internal_boundaries(relation, *boundary, sibling)
+                == core::cmp::Ordering::Less;
+            if source_low != (end == 0) {
+                cap.selected_orientation = reverse_selected_orientation(cap.selected_orientation);
+            }
+            cap.loops = vec![derived_ring_loop(
+                ring_indices[end],
+                opposite(directions[end]),
+                None,
+                derived,
+            )?];
+            faces.push(cap);
+        }
+    }
+    Ok(())
+}
+
+fn graft_internal_tangency_union(
+    faces: &mut Vec<MixedShellFacePlan>,
+    rings: &mut Vec<MixedCylinderCapRing>,
+    derived: &mut Vec<MixedDerivedRingPlan>,
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    tails: &[super::axial_interval_sweep::PlannedAxialSpan],
+) -> Result<(), MixedShellPlanError> {
+    use core::cmp::Ordering;
+
+    use super::axial_interval_sweep::AxialIntervalOperand;
+    use super::face_arrangement::certify_tangency_vertex;
+
+    let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
+    bind_internal_tangency_boundaries(cylinders, relation)?;
+    if !(1..=2).contains(&tails.len()) {
+        return Err(fail());
+    }
+    let contained = relation.contained_operand();
+    let containing = relation.containing_operand();
+    let source_faces = faces.clone();
+    let source_rings = rings.clone();
+    let [outer_low, outer_high] = ordered_internal_boundaries(relation, containing)?;
+    let mut bands = Vec::with_capacity(tails.len() + 1);
+    for (tail_index, tail) in tails.iter().enumerate() {
+        let operand = if contained == 0 {
+            AxialIntervalOperand::Left
+        } else {
+            AxialIntervalOperand::Right
+        };
+        if !tail.side_operands().contains(operand) {
+            return Err(fail());
+        }
+        let low = single_internal_boundary(bind_internal_boundary_class(relation, tail.low())?)?;
+        let high = single_internal_boundary(bind_internal_boundary_class(relation, tail.high())?)?;
+        bands.push(InternalTangencyBand {
+            operand: contained,
+            low,
+            high,
+            split: (tails.len() == 2).then_some(if tail_index == 0 {
+                AnalyticFaceSplitPiece::First
+            } else {
+                AnalyticFaceSplitPiece::Second
+            }),
+        });
+    }
+    bands.push(InternalTangencyBand {
+        operand: containing,
+        low: outer_low,
+        high: outer_high,
+        split: None,
+    });
+    bands.sort_by(|first, second| compare_internal_boundaries(relation, first.low, second.low));
+    if bands.windows(2).any(|pair| {
+        pair[0].operand == pair[1].operand
+            || !same_internal_boundary(pair[0].high, pair[1].low)
+            || pair[0].high.operand != containing
+    }) {
+        return Err(fail());
+    }
+
+    let outer = cylinders[containing];
+    let inner = cylinders[contained];
+    let outer_source_frame = *outer.cylinder().frame();
+    let outer_low_center = internal_boundary_center(cylinders, outer_low)?;
+    let trial_frame = Frame::new(
+        outer_low_center,
+        outer_source_frame.z(),
+        outer_source_frame.x(),
+    )
+    .map_err(|_| fail())?;
+    let (_, trial_height) = exact_internal_axial_projection(
+        trial_frame,
+        internal_boundary_center(cylinders, outer_high)?,
+    )
+    .ok_or_else(fail)?;
+    let axis = match trial_height.total_cmp(&0.0) {
+        Ordering::Greater => outer_source_frame.z(),
+        Ordering::Less => -outer_source_frame.z(),
+        Ordering::Equal => return Err(fail()),
+    };
+    let outer_origin = outer_low_center;
+    let inner_origin = exact_internal_axial_projection(*inner.cylinder().frame(), outer_origin)
+        .map(|projection| projection.0)
+        .ok_or_else(fail)?;
+    let radial = inner_origin - outer_origin;
+    let outer_frame = Frame::new(outer_origin, axis, radial).map_err(|_| fail())?;
+    let inner_frame = outer_frame.with_origin(inner_origin);
+    if outer.cylinder().radius() <= inner.cylinder().radius() {
+        return Err(fail());
+    }
+
+    let prepared = bands
+        .iter()
+        .map(|band| {
+            let source = cylinders[band.operand];
+            let frame = if band.operand == containing {
+                outer_frame
+            } else {
+                inner_frame
+            };
+            let radius = source.cylinder().radius();
+            let low_center = internal_boundary_center(cylinders, band.low)?;
+            let high_center = internal_boundary_center(cylinders, band.high)?;
+            let low = exact_internal_axial_projection(frame, low_center).ok_or_else(fail)?;
+            let high = exact_internal_axial_projection(frame, high_center).ok_or_else(fail)?;
+            (low.1 < high.1)
+                .then_some((*band, frame, radius, low.0, high.0))
+                .ok_or_else(fail)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    derived.clear();
+    let far_boundaries = [prepared[0].0.low, prepared.last().ok_or_else(fail)?.0.high];
+    let far_centers = [prepared[0].3, prepared.last().ok_or_else(fail)?.4];
+    let far_frames = [prepared[0].1, prepared.last().ok_or_else(fail)?.1];
+    let far_radii = [prepared[0].2, prepared.last().ok_or_else(fail)?.2];
+    let mut far_ring_indices = [0_usize; 2];
+    for end in 0..2 {
+        far_ring_indices[end] = derived.len();
+        derived.push(MixedDerivedRingPlan::endpoint_free(
+            Circle::new(
+                far_frames[end].with_origin(far_centers[end]),
+                far_radii[end],
+            )
+            .map_err(|_| fail())?,
+            MixedDerivedRingLineage::Source(
+                cylinders[far_boundaries[end].operand].boundaries()[far_boundaries[end].boundary]
+                    .edge(),
+            ),
+        ));
+    }
+
+    struct Contact {
+        vertex: usize,
+        outer_ring: usize,
+        inner_ring: usize,
+        boundary: InternalTangencyBoundary,
+    }
+    let mut contacts = Vec::with_capacity(tails.len());
+    for contact_index in 0..tails.len() {
+        let left = prepared[contact_index];
+        let right = prepared[contact_index + 1];
+        let boundary = left.0.high;
+        if boundary.operand != containing || !same_internal_boundary(boundary, right.0.low) {
+            return Err(fail());
+        }
+        let outer_center = if left.0.operand == containing {
+            left.4
+        } else {
+            right.3
+        };
+        let inner_center = if left.0.operand == contained {
+            left.4
+        } else {
+            right.3
+        };
+        let outer_circle = Circle::new(
+            outer_frame.with_origin(outer_center),
+            outer.cylinder().radius(),
+        )
+        .map_err(|_| fail())?;
+        let inner_circle = Circle::new(
+            inner_frame.with_origin(inner_center),
+            inner.cylinder().radius(),
+        )
+        .map_err(|_| fail())?;
+        let outer_ring = derived.len();
+        let inner_ring = outer_ring + 1;
+        certify_tangency_vertex(contact_index, [outer_ring, inner_ring]).map_err(|_| fail())?;
+        let point = outer_circle.eval(0.0);
+        derived.push(MixedDerivedRingPlan::tangent(
+            outer_circle,
+            contact_index,
+            point,
+            MixedDerivedRingLineage::Source(
+                cylinders[containing].boundaries()[boundary.boundary].edge(),
+            ),
+        ));
+        derived.push(MixedDerivedRingPlan::tangent(
+            inner_circle,
+            contact_index,
+            point,
+            MixedDerivedRingLineage::Derived([
+                inner.side_face(),
+                cylinders[containing].boundaries()[boundary.boundary].cap_face(),
+            ]),
+        ));
+        contacts.push(Contact {
+            vertex: contact_index,
+            outer_ring,
+            inner_ring,
+            boundary,
+        });
+    }
+
+    faces.clear();
+    rings.clear();
+    let mut side_directions = Vec::with_capacity(prepared.len());
+    for (band_index, (band, _, _, low_center, high_center)) in prepared.iter().enumerate() {
+        let source = cylinders[band.operand];
+        let native = *source.cylinder().frame();
+        let low_parameter = exact_internal_axial_projection(native, *low_center)
+            .map(|projection| projection.1)
+            .ok_or_else(fail)?;
+        let high_parameter = exact_internal_axial_projection(native, *high_center)
+            .map(|projection| projection.1)
+            .ok_or_else(fail)?;
+        let desired = if low_parameter < high_parameter {
+            [ArrangementDirection::Forward, ArrangementDirection::Reverse]
+        } else if low_parameter > high_parameter {
+            [ArrangementDirection::Reverse, ArrangementDirection::Forward]
+        } else {
+            return Err(fail());
+        };
+        let ring_indices = [
+            if band_index == 0 {
+                far_ring_indices[0]
+            } else if band.operand == contained {
+                contacts[band_index - 1].inner_ring
+            } else {
+                contacts[band_index - 1].outer_ring
+            },
+            if band_index + 1 == prepared.len() {
+                far_ring_indices[1]
+            } else if band.operand == contained {
+                contacts[band_index].inner_ring
+            } else {
+                contacts[band_index].outer_ring
+            },
+        ];
+        let directions: [ArrangementDirection; 2] = core::array::from_fn(|end| {
+            if derived_ring_cylinder_scale(
+                derived[ring_indices[end]].circle(),
+                *source.cylinder().frame(),
+            ) > 0.0
+            {
+                desired[end]
+            } else {
+                opposite(desired[end])
+            }
+        });
+        let source_ring = source_rings
+            .iter()
+            .find(|ring| ring.operand() == band.operand)
+            .ok_or_else(fail)?;
+        let mut face = source_face(
+            &source_faces,
+            source_ring.side_source(),
+            source_ring.side_face(),
+        )?;
+        face.loops = vec![
+            derived_ring_loop(ring_indices[0], directions[0], Some(low_parameter), derived)?,
+            derived_ring_loop(
+                ring_indices[1],
+                directions[1],
+                Some(high_parameter),
+                derived,
+            )?,
+        ];
+        face.split_lineage = band.split;
+        faces.push(face);
+        side_directions.push(directions);
+    }
+
+    for (end, band_index) in [0, prepared.len() - 1].into_iter().enumerate() {
+        let boundary = far_boundaries[end];
+        let source_ring = source_rings
+            .iter()
+            .find(|ring| ring.operand() == boundary.operand && ring.boundary() == boundary.boundary)
+            .ok_or_else(fail)?;
+        let mut cap = source_face(
+            &source_faces,
+            source_ring.cap_source(),
+            source_ring.cap_face(),
+        )?;
+        cap.loops = vec![derived_ring_loop(
+            far_ring_indices[end],
+            opposite(side_directions[band_index][end]),
+            None,
+            derived,
+        )?];
+        faces.push(cap);
+    }
+    for (index, contact) in contacts.iter().enumerate() {
+        let left = prepared[index].0;
+        let outer_side = if left.operand == containing {
+            side_directions[index][1]
+        } else {
+            side_directions[index + 1][0]
+        };
+        let inner_side = if left.operand == contained {
+            side_directions[index][1]
+        } else {
+            side_directions[index + 1][0]
+        };
+        if outer_side == inner_side {
+            return Err(fail());
+        }
+        let source_ring = source_rings
+            .iter()
+            .find(|ring| {
+                ring.operand() == containing && ring.boundary() == contact.boundary.boundary
+            })
+            .ok_or_else(fail)?;
+        let mut shoulder = source_face(
+            &source_faces,
+            source_ring.cap_source(),
+            source_ring.cap_face(),
+        )?;
+        shoulder.loops = vec![MixedShellLoopPlan {
+            uses: vec![
+                derived_ring_use(contact.outer_ring, opposite(outer_side), None),
+                derived_ring_use(contact.inner_ring, opposite(inner_side), None),
+            ],
+            vertices: vec![
+                MixedShellVertexKey::Tangency(contact.vertex),
+                MixedShellVertexKey::Tangency(contact.vertex),
+                MixedShellVertexKey::Tangency(contact.vertex),
+            ],
+        }];
+        faces.push(shoulder);
+    }
+    Ok(())
+}
+
+fn source_face(
+    faces: &[MixedShellFacePlan],
+    source: MixedSourceFaceKey,
+    face: &FaceId,
+) -> Result<MixedShellFacePlan, MixedShellPlanError> {
+    let matching = faces
+        .iter()
+        .filter(|candidate| candidate.source == source && candidate.source_face == *face)
+        .cloned()
+        .collect::<Vec<_>>();
+    let [face] = matching.as_slice() else {
+        return Err(MixedShellPlanError::InternalTangencyBoundaryMismatch);
+    };
+    let mut face = face.clone();
+    face.merge_sources = None;
+    face.split_lineage = None;
+    Ok(face)
+}
+
+fn derived_ring_use(
+    ring: usize,
+    direction: ArrangementDirection,
+    cylinder_parameter: Option<f64>,
+) -> MixedShellEdgeUse {
+    MixedShellEdgeUse {
+        edge: MixedShellEdgeKey::DerivedRing(ring),
+        direction,
+        pcurve: MixedPcurveLineage::DerivedRing {
+            cylinder_parameter_bits: cylinder_parameter.map(f64::to_bits),
+        },
+    }
+}
+
+fn derived_ring_cylinder_scale(circle: Circle, cylinder: Frame) -> f64 {
+    let local_x = [
+        circle.frame().x().dot(cylinder.x()),
+        circle.frame().x().dot(cylinder.y()),
+    ];
+    let local_y = [
+        circle.frame().y().dot(cylinder.x()),
+        circle.frame().y().dot(cylinder.y()),
+    ];
+    if local_x[0] * local_y[1] - local_x[1] * local_y[0] > 0.0 {
+        1.0
+    } else {
+        -1.0
+    }
+}
+
+const fn reverse_selected_orientation(orientation: SelectedOrientation) -> SelectedOrientation {
+    match orientation {
+        SelectedOrientation::Preserved => SelectedOrientation::Reversed,
+        SelectedOrientation::Reversed => SelectedOrientation::Preserved,
+    }
+}
+
+fn derived_ring_loop(
+    ring: usize,
+    direction: ArrangementDirection,
+    cylinder_parameter: Option<f64>,
+    rings: &[MixedDerivedRingPlan],
+) -> Result<MixedShellLoopPlan, MixedShellPlanError> {
+    let planned = rings
+        .get(ring)
+        .ok_or(MixedShellPlanError::InternalTangencyBoundaryMismatch)?;
+    let vertex = if let Some((vertex, _)) = planned.tangency() {
+        MixedShellVertexKey::Tangency(vertex)
+    } else {
+        MixedShellVertexKey::DerivedRingSeam(ring)
+    };
+    Ok(MixedShellLoopPlan {
+        uses: vec![derived_ring_use(ring, direction, cylinder_parameter)],
+        vertices: vec![vertex.clone(), vertex],
+    })
+}
+
+fn bind_internal_tangency_boundaries(
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+) -> Result<(), MixedShellPlanError> {
+    let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
+    let mut seen = [[false; 2]; 2];
+    for witness in relation.boundaries() {
+        let boundary = cylinders
+            .get(witness.operand())
+            .and_then(|source| source.boundaries().get(witness.boundary()))
+            .ok_or_else(fail)?;
+        if seen[witness.operand()][witness.boundary()]
+            || boundary.cap_face() != witness.cap_face()
+            || boundary.edge() != witness.edge()
+        {
+            return Err(fail());
+        }
+        seen[witness.operand()][witness.boundary()] = true;
+    }
+    (seen == [[true; 2]; 2]).then_some(()).ok_or_else(fail)
+}
+
+fn bind_internal_boundary_class(
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    contributors: super::axial_interval_sweep::AxialEndpointContributors,
+) -> Result<Vec<InternalTangencyBoundary>, MixedShellPlanError> {
+    use super::axial_interval_sweep::{AuthoredAxialEndpoint, AxialIntervalOperand};
+
+    let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
+    let mut boundaries = Vec::with_capacity(2);
+    for contributor in contributors.iter() {
+        let operand = match contributor.operand() {
+            AxialIntervalOperand::Left => 0,
+            AxialIntervalOperand::Right => 1,
+        };
+        let boundary = match contributor.endpoint() {
+            AuthoredAxialEndpoint::Start => 0,
+            AuthoredAxialEndpoint::End => 1,
+        };
+        if boundaries
+            .iter()
+            .any(|candidate: &InternalTangencyBoundary| candidate.operand == operand)
+        {
+            return Err(fail());
+        }
+        boundaries.push(InternalTangencyBoundary {
+            operand,
+            boundary,
+            axial_parameter: relation
+                .axial_parameter(operand, boundary)
+                .ok_or_else(fail)?,
+        });
+    }
+    (!boundaries.is_empty() && boundaries.len() <= 2)
+        .then_some(boundaries)
+        .ok_or_else(fail)
+}
+
+fn internal_axis_endpoint(
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    source: &super::curved_source::CertifiedCylinderSource,
+    operand: usize,
+    boundaries: &[InternalTangencyBoundary],
+) -> Result<(Point3, f64), MixedShellPlanError> {
+    if let Some(boundary) = boundaries
+        .iter()
+        .find(|boundary| boundary.operand == operand)
+    {
+        return Ok((
+            source.boundaries()[boundary.boundary].center(),
+            boundary.axial_parameter,
+        ));
+    }
+    let boundary = boundaries
+        .first()
+        .ok_or(MixedShellPlanError::InternalTangencyBoundaryMismatch)?;
+    exact_internal_axial_projection(
+        *source.cylinder().frame(),
+        internal_boundary_center(cylinders, *boundary)?,
+    )
+    .ok_or(MixedShellPlanError::InternalTangencyBoundaryMismatch)
+}
+
+fn internal_boundary_center(
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    boundary: InternalTangencyBoundary,
+) -> Result<Point3, MixedShellPlanError> {
+    cylinders
+        .get(boundary.operand)
+        .and_then(|source| source.boundaries().get(boundary.boundary))
+        .map(|boundary| boundary.center())
+        .ok_or(MixedShellPlanError::InternalTangencyBoundaryMismatch)
+}
+
+fn internal_ring_lineage(
+    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
+    contained_side: RawFaceId,
+    contained: usize,
+    boundaries: &[InternalTangencyBoundary],
+) -> Result<MixedDerivedRingLineage, MixedShellPlanError> {
+    if let Some(boundary) = boundaries
+        .iter()
+        .find(|boundary| boundary.operand == contained)
+    {
+        return cylinders
+            .get(contained)
+            .and_then(|source| source.boundaries().get(boundary.boundary))
+            .map(|boundary| MixedDerivedRingLineage::Source(boundary.edge()))
+            .ok_or(MixedShellPlanError::InternalTangencyBoundaryMismatch);
+    }
+    let cutting = boundaries
+        .first()
+        .and_then(|boundary| {
+            cylinders
+                .get(boundary.operand)
+                .and_then(|source| source.boundaries().get(boundary.boundary))
+        })
+        .ok_or(MixedShellPlanError::InternalTangencyBoundaryMismatch)?;
+    Ok(MixedDerivedRingLineage::Derived([
+        contained_side,
+        cutting.cap_face(),
+    ]))
+}
+
+fn ordered_internal_boundaries(
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    operand: usize,
+) -> Result<[InternalTangencyBoundary; 2], MixedShellPlanError> {
+    let boundaries = [0, 1].map(|boundary| InternalTangencyBoundary {
+        operand,
+        boundary,
+        axial_parameter: relation
+            .axial_parameter(operand, boundary)
+            .unwrap_or(f64::NAN),
+    });
+    match compare_internal_boundaries(relation, boundaries[0], boundaries[1]) {
+        core::cmp::Ordering::Less => Ok(boundaries),
+        core::cmp::Ordering::Greater => Ok([boundaries[1], boundaries[0]]),
+        core::cmp::Ordering::Equal => Err(MixedShellPlanError::InternalTangencyBoundaryMismatch),
+    }
+}
+
+fn single_internal_boundary(
+    boundaries: Vec<InternalTangencyBoundary>,
+) -> Result<InternalTangencyBoundary, MixedShellPlanError> {
+    let [boundary] = boundaries.as_slice() else {
+        return Err(MixedShellPlanError::InternalTangencyBoundaryMismatch);
+    };
+    Ok(*boundary)
+}
+
+fn compare_internal_boundaries(
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    first: InternalTangencyBoundary,
+    second: InternalTangencyBoundary,
+) -> core::cmp::Ordering {
+    use super::axial_interval_sweep::{
+        AuthoredAxialEndpoint, AxialEndpointContributor, AxialIntervalOperand,
+    };
+
+    let contributor = |boundary: InternalTangencyBoundary| {
+        AxialEndpointContributor::new(
+            if boundary.operand == 0 {
+                AxialIntervalOperand::Left
+            } else {
+                AxialIntervalOperand::Right
+            },
+            if boundary.boundary == 0 {
+                AuthoredAxialEndpoint::Start
+            } else {
+                AuthoredAxialEndpoint::End
+            },
+        )
+    };
+    relation
+        .preorder()
+        .compare(contributor(first), contributor(second))
+}
+
+fn same_internal_boundary(
+    first: InternalTangencyBoundary,
+    second: InternalTangencyBoundary,
+) -> bool {
+    first.operand == second.operand && first.boundary == second.boundary
+}
+
+fn exact_internal_axial_projection(frame: Frame, point: Point3) -> Option<(Point3, f64)> {
+    let origin = frame.origin();
+    let axis = frame.z();
+    let delta = point - origin;
+    let axis_components = axis.to_array();
+    let delta_components = delta.to_array();
+    let candidates = [
+        delta.dot(axis),
+        delta_components[0] / axis_components[0],
+        delta_components[1] / axis_components[1],
+        delta_components[2] / axis_components[2],
+    ];
+    candidates.into_iter().find_map(|parameter| {
+        if !parameter.is_finite() {
+            return None;
+        }
+        let center = origin + axis * parameter;
+        (axis_parameter_identity_is_exact(center, origin, axis, parameter)
+            && affine_dot3(axis.to_array(), center.to_array(), point.to_array(), 0.0)
+                .is_some_and(|orientation| orientation.sign() == Orientation::Zero))
+        .then_some((center, parameter))
+    })
+}
+
+fn axis_parameter_identity_is_exact(
+    point: Point3,
+    origin: Point3,
+    axis: kgeom::vec::Vec3,
+    parameter: f64,
+) -> bool {
+    let point = point.to_array();
+    let origin = origin.to_array();
+    let axis = axis.to_array();
+    (0..3).all(|component| {
+        affine_dot3(
+            [1.0, axis[component], -1.0],
+            [origin[component], parameter, point[component]],
+            [0.0; 3],
+            0.0,
+        )
+        .is_some_and(|value| value.sign() == Orientation::Zero)
+    })
 }
 
 fn graft_common_support_spans(
@@ -1315,6 +2150,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
         &mut Vec<MixedShellFacePlan>,
         &mut Vec<MixedBoundedSourceSpanPlan>,
         &mut Vec<MixedCylinderCapRing>,
+        &mut Vec<MixedDerivedRingPlan>,
     ) -> Result<(), MixedShellPlanError>,
 ) -> Result<MixedShellProofPlan, MixedShellPlanError> {
     admission.validate(graph)?;
@@ -1342,6 +2178,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
 
     let mut faces = Vec::with_capacity(selected_cells.len());
     let mut cap_rings = Vec::new();
+    let mut derived_rings = Vec::new();
     let mut bounded_source_spans = Vec::new();
     for (key, orientation) in selected_cells {
         let binding = arrangements
@@ -1557,10 +2394,12 @@ fn plan_mixed_shell_with_augmentation<'a>(
         &mut faces,
         &mut bounded_source_spans,
         &mut cap_rings,
+        &mut derived_rings,
     )?;
     resolve_endpoint_free_cap_directions(&mut faces, &cap_rings)?;
     validate_section_pairing(&faces)?;
     validate_endpoint_free_ring_pairing(&faces)?;
+    validate_derived_ring_pairing(&faces, &derived_rings)?;
     bounded_source_spans.retain(|span| bounded_source_span_is_used(&faces, span));
     validate_bounded_source_pairing(store, &faces, &bounded_source_spans)?;
     let section_edges = collect_section_edges(store, graph, &faces)?;
@@ -1577,6 +2416,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
         section_edges,
         bounded_source_spans,
         cap_rings,
+        derived_rings,
         materialization,
         materialization_gaps,
     })
@@ -2660,6 +3500,35 @@ fn validate_endpoint_free_ring_pairing(
                 source,
                 loop_key,
             });
+        }
+    }
+    Ok(())
+}
+
+fn validate_derived_ring_pairing(
+    faces: &[MixedShellFacePlan],
+    rings: &[MixedDerivedRingPlan],
+) -> Result<(), MixedShellPlanError> {
+    let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
+    let mut uses = BTreeMap::<usize, Vec<ArrangementDirection>>::new();
+    for use_ in faces
+        .iter()
+        .flat_map(MixedShellFacePlan::loops)
+        .flat_map(MixedShellLoopPlan::uses)
+    {
+        if let MixedShellEdgeKey::DerivedRing(ring) = use_.edge() {
+            if *ring >= rings.len() {
+                return Err(fail());
+            }
+            uses.entry(*ring).or_default().push(use_.direction());
+        }
+    }
+    if uses.len() != rings.len() {
+        return Err(fail());
+    }
+    for directions in uses.into_values() {
+        if directions.len() != 2 || directions[0] == directions[1] {
+            return Err(fail());
         }
     }
     Ok(())

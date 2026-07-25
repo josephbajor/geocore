@@ -1,20 +1,6 @@
 //! Exact combinatorial core for bounded source-face arrangements.
-//!
-//! Geometry-specific code must first prove that every source span and cut
-//! fragment is embedded without an unreported crossing, then provide the
-//! counterclockwise rotation of outgoing darts at every exact endpoint.  A
-//! rotation is topology evidence, not a metric sort performed here.  This
-//! module turns that rotation system into canonical face cycles and refuses
-//! incomplete, branched, disconnected, non-planar, or non-separating input.
-//!
-//! Source spans are directed with the admitted source-face domain on their
-//! left.  Cut fragments have two opposed uses.  Those conventions let the
-//! core distinguish exterior cycles, prove source-span conservation, and
-//! construct the cut-induced dual adjacency without sampling geometry.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-/// Direction of one dart relative to its proof-owned bounded span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ArrangementDirection {
     Forward,
@@ -29,15 +15,11 @@ impl ArrangementDirection {
         }
     }
 }
-
-/// Exact identity of one physical arrangement edge.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ArrangementEdgeKey<S, C> {
     Source(S),
     Cut(C),
 }
-
-/// Exact identity of one directed use of a physical arrangement edge.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ArrangementDartKey<S, C> {
     edge: ArrangementEdgeKey<S, C>,
@@ -45,28 +27,21 @@ pub(crate) struct ArrangementDartKey<S, C> {
 }
 
 impl<S, C> ArrangementDartKey<S, C> {
-    /// Forward or reverse use of one source-boundary span.
     pub(crate) const fn source(key: S, direction: ArrangementDirection) -> Self {
         Self {
             edge: ArrangementEdgeKey::Source(key),
             direction,
         }
     }
-
-    /// Forward or reverse use of one section-cut fragment.
     pub(crate) const fn cut(key: C, direction: ArrangementDirection) -> Self {
         Self {
             edge: ArrangementEdgeKey::Cut(key),
             direction,
         }
     }
-
-    /// Exact physical-edge identity.
     pub(crate) const fn edge(&self) -> &ArrangementEdgeKey<S, C> {
         &self.edge
     }
-
-    /// Direction relative to the input span.
     pub(crate) const fn direction(&self) -> ArrangementDirection {
         self.direction
     }
@@ -80,8 +55,6 @@ impl<S: Clone, C: Clone> ArrangementDartKey<S, C> {
         }
     }
 }
-
-/// One directed, bounded span of the admitted source-face boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DirectedSourceSpan<S, V> {
     key: S,
@@ -99,9 +72,6 @@ impl<S, V> DirectedSourceSpan<S, V> {
             whole_loop: false,
         }
     }
-
-    /// Endpoint-free source cycle represented with one proof-only seam key.
-    /// The seam is combinatorial and must not be realized as a topology vertex.
     pub(crate) fn whole_loop(key: S, proof_seam: V) -> Self
     where
         V: Clone,
@@ -126,8 +96,6 @@ impl<S, V> DirectedSourceSpan<S, V> {
         self.whole_loop
     }
 }
-
-/// One directed, bounded fragment of a certified section cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DirectedCutFragment<C, V> {
     key: C,
@@ -145,8 +113,6 @@ impl<C, V> DirectedCutFragment<C, V> {
             whole_loop: false,
         }
     }
-
-    /// Endpoint-free cut cycle represented with one proof-only seam key.
     pub(crate) fn whole_loop(key: C, proof_seam: V) -> Self
     where
         V: Clone,
@@ -171,10 +137,6 @@ impl<C, V> DirectedCutFragment<C, V> {
         self.whole_loop
     }
 }
-
-/// Certified counterclockwise order of all outgoing darts at one endpoint.
-///
-/// Cyclic shifts are equivalent.  Reversal is not: it changes the embedding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CertifiedEndpointRotation<S, C, V> {
     endpoint: V,
@@ -195,7 +157,29 @@ impl<S, C, V> CertifiedEndpointRotation<S, C, V> {
     }
 }
 
-/// Complete exact-topology input for one source face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TangencyVertexError {
+    CoincidentBoundary,
+}
+
+pub(crate) fn certify_tangency_vertex<S: Clone + Eq, V>(
+    endpoint: V,
+    boundaries: [S; 2],
+) -> Result<CertifiedEndpointRotation<S, (), V>, TangencyVertexError> {
+    if boundaries[0] == boundaries[1] {
+        return Err(TangencyVertexError::CoincidentBoundary);
+    }
+    let [first, second] = boundaries;
+    Ok(CertifiedEndpointRotation {
+        endpoint,
+        outgoing: vec![
+            ArrangementDartKey::source(first.clone(), ArrangementDirection::Forward),
+            ArrangementDartKey::source(first, ArrangementDirection::Reverse),
+            ArrangementDartKey::source(second.clone(), ArrangementDirection::Forward),
+            ArrangementDartKey::source(second, ArrangementDirection::Reverse),
+        ],
+    })
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FaceArrangementInput<S, C, V> {
     source_spans: Vec<DirectedSourceSpan<S, V>>,
@@ -216,8 +200,6 @@ impl<S, C, V> FaceArrangementInput<S, C, V> {
         }
     }
 }
-
-/// Exact degree certificate for one endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ArrangementEndpointDegree {
     source: usize,
@@ -237,8 +219,6 @@ impl ArrangementEndpointDegree {
         self.source + self.cut
     }
 }
-
-/// One canonical, closed, counterclockwise face-boundary walk.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ArrangementCycle<S, C, V> {
     uses: Vec<ArrangementDartKey<S, C>>,
@@ -249,14 +229,10 @@ impl<S, C, V> ArrangementCycle<S, C, V> {
     pub(crate) fn uses(&self) -> &[ArrangementDartKey<S, C>] {
         &self.uses
     }
-
-    /// Traversed endpoints, including the repeated closing endpoint.
     pub(crate) fn vertices(&self) -> &[V] {
         &self.vertices
     }
 }
-
-/// One open source-face cell bounded by one canonical cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArrangementCell<S, C, V> {
     key: usize,
@@ -272,8 +248,6 @@ impl<S, C, V> ArrangementCell<S, C, V> {
         &self.boundary
     }
 }
-
-/// The two distinct cells using one cut fragment in opposed directions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArrangementCutAdjacency<C> {
     cut: C,
@@ -294,8 +268,6 @@ impl<C> ArrangementCutAdjacency<C> {
         self.reverse_cell
     }
 }
-
-/// Auditable invariants established while constructing an arrangement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FaceArrangementProof<V> {
     endpoint_degrees: Vec<(V, ArrangementEndpointDegree)>,
@@ -336,8 +308,6 @@ impl<V> FaceArrangementProof<V> {
         self.euler_characteristic
     }
 }
-
-/// Canonical exact-topology result for one source face.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FaceArrangement<S, C, V> {
     source_spans: Vec<DirectedSourceSpan<S, V>>,
@@ -346,18 +316,11 @@ pub(crate) struct FaceArrangement<S, C, V> {
     adjacency: Vec<ArrangementCutAdjacency<C>>,
     proof: FaceArrangementProof<V>,
 }
-
-/// Proof-owned side of one derived boundary cycle on a source surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CertifiedCycleSide<K> {
     Exterior,
     Cell(K),
 }
-
-/// Exact assignment of a derived cycle to a cell or to the source exterior.
-///
-/// Any dart on the cycle is a valid anchor.  The arrangement core resolves
-/// the complete cycle and rejects duplicate or missing assignments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CertifiedCycleAssignment<S, C, K> {
     anchor: ArrangementDartKey<S, C>,
@@ -377,8 +340,6 @@ impl<S, C, K> CertifiedCycleAssignment<S, C, K> {
         &self.side
     }
 }
-
-/// Proof-owned topology of one connected open cell closure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CertifiedCellTopology<K> {
     key: K,
@@ -401,12 +362,6 @@ impl<K> CertifiedCellTopology<K> {
         self.euler_characteristic
     }
 }
-
-/// Exact embedding relation required when graph components are disconnected.
-///
-/// Cell Euler characteristics and the source-surface characteristic are
-/// proof inputs.  They are checked against the derived boundary counts and
-/// Euler additivity; they are never inferred from metric nesting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CertifiedSurfaceEmbedding<S, C, K> {
     assignments: Vec<CertifiedCycleAssignment<S, C, K>>,
@@ -427,8 +382,6 @@ impl<S, C, K> CertifiedSurfaceEmbedding<S, C, K> {
         }
     }
 }
-
-/// One proof-bearing cell with all of its disconnected boundary cycles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SurfaceArrangementCell<S, C, V, K> {
     key: K,
@@ -454,8 +407,6 @@ impl<S, C, V, K> SurfaceArrangementCell<S, C, V, K> {
         self.genus
     }
 }
-
-/// Exact cells on the forward and reverse sides of one cut fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SurfaceCutAdjacency<C, K> {
     cut: C,
@@ -476,8 +427,6 @@ impl<C, K> SurfaceCutAdjacency<C, K> {
         &self.reverse_cell
     }
 }
-
-/// Auditable invariants established for a general surface arrangement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SurfaceArrangementProof<V, K> {
     endpoint_degrees: Vec<(V, ArrangementEndpointDegree)>,
@@ -543,8 +492,6 @@ impl<V, K> SurfaceArrangementProof<V, K> {
         self.surface_genus
     }
 }
-
-/// Canonical proof-bearing arrangement on a connected orientable surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SurfaceFaceArrangement<S, C, V, K> {
     source_spans: Vec<DirectedSourceSpan<S, V>>,
@@ -575,8 +522,6 @@ impl<S, C, V, K> SurfaceFaceArrangement<S, C, V, K> {
         &self.proof
     }
 }
-
-/// Typed refusals specific to proof-owned surface embeddings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SurfaceArrangementError<S, C, V, K> {
     Graph(FaceArrangementError<S, C, V>),
@@ -632,8 +577,6 @@ impl<S, C, V> FaceArrangement<S, C, V> {
         &self.proof
     }
 }
-
-/// Typed fail-closed refusals from exact combinatorial arrangement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FaceArrangementError<S, C, V> {
     SourceBoundaryRequired,
@@ -671,8 +614,6 @@ struct CanonicalInput<S, C, V> {
     endpoints: BTreeMap<ArrangementDartKey<S, C>, (V, V)>,
     degrees: BTreeMap<V, ArrangementEndpointDegree>,
 }
-
-/// Build and certify a bounded source-face arrangement.
 pub(crate) fn arrange_bounded_face<S, C, V>(
     input: FaceArrangementInput<S, C, V>,
 ) -> Result<FaceArrangement<S, C, V>, FaceArrangementError<S, C, V>>
@@ -736,9 +677,6 @@ where
         proof,
     })
 }
-
-/// Build and certify an arrangement whose cells may have multiple boundary
-/// cycles and whose embedded graph may have multiple connected components.
 pub(crate) fn arrange_bounded_surface<S, C, V, K>(
     input: FaceArrangementInput<S, C, V>,
     embedding: CertifiedSurfaceEmbedding<S, C, K>,
@@ -829,9 +767,6 @@ where
         proof,
     })
 }
-
-/// Derive the canonical cycles of a proof-owned rotation system before a
-/// surface-specific theorem assigns them to cells or the source exterior.
 pub(crate) fn preview_bounded_surface_cycles<S, C, V>(
     input: &FaceArrangementInput<S, C, V>,
 ) -> FaceResult<S, C, V, Vec<ArrangementCycle<S, C, V>>>
@@ -1620,9 +1555,6 @@ mod tests {
     fn cut(key: u8, direction: ArrangementDirection) -> TestDart {
         ArrangementDartKey::cut(key, direction)
     }
-
-    /// Independent convex-polygon rotation oracle.  Chords must be directed
-    /// from their first endpoint to their second and must not cross.
     fn polygon_with_chords(vertex_count: u8, chords: &[(u8, u8, u8)]) -> TestInput {
         let source_spans = (0..vertex_count)
             .map(|vertex| DirectedSourceSpan::new(vertex, vertex, (vertex + 1) % vertex_count))

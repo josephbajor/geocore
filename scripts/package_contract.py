@@ -125,7 +125,6 @@ KERNEL_PACKAGE_FILES = {
     "src/boolean/mixed_shell_plan/parallel_cylinder_lens.rs",
     "src/boolean/mixed_shell_plan/projected_source_circle.rs",
     "src/boolean/parallel_cylinder_boundary/coincident_caps.rs",
-    "src/boolean/parallel_cylinder_internal_tangency.rs",
     "src/boolean/parallel_cylinder_relation/coincident_caps.rs",
     "src/boolean/parallel_cylinder_relation/common_support.rs",
     "src/boolean/parallel_cylinder_relation/internal_tangency.rs",

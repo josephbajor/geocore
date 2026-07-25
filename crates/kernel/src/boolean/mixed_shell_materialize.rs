@@ -34,10 +34,11 @@ use super::super::mixed_periodic_arrangement::PeriodicSourceLoopKey;
 use super::super::periodic_chart::{self, PeriodicChartError};
 use super::components::MixedShellComponent;
 use super::{
-    ArrangementDirection, MixedArrangementBinding, MixedBoundedSourceSpanPlan, MixedPcurveLineage,
-    MixedSectionEdgePlan, MixedShellEdgeKey, MixedShellFacePlan, MixedShellMaterializationGap,
-    MixedShellProofPlan, MixedShellVertexKey, MixedSourceFaceKey, MixedSourceParameterEvidence,
-    MixedSourceSpanKey, ProjectedEndpointFreeSourceCircle, ProjectedSourceCircleOnPlane,
+    ArrangementDirection, MixedArrangementBinding, MixedBoundedSourceSpanPlan,
+    MixedDerivedRingLineage, MixedPcurveLineage, MixedSectionEdgePlan, MixedShellEdgeKey,
+    MixedShellFacePlan, MixedShellMaterializationGap, MixedShellProofPlan, MixedShellVertexKey,
+    MixedSourceFaceKey, MixedSourceParameterEvidence, MixedSourceSpanKey,
+    ProjectedEndpointFreeSourceCircle, ProjectedSourceCircleOnPlane,
     ProjectedSourceCircleOnPlaneError, SelectedOrientation,
 };
 use crate::{
@@ -56,17 +57,10 @@ pub(super) enum RetainedSpanParameter {
         endpoint: usize,
         enclosure_bits: [u64; 2],
         parameter_bits: u64,
-        /// Certified integer lift in the source carrier's canonical period.
-        ///
-        /// Root identity and its scalar remain canonical.  The lift only
-        /// selects which occurrence bounds this directed source span, so the
-        /// complementary arc of a split whole circle can retain an increasing
-        /// finite carrier range without inventing a second root.
         period_shift: i32,
     },
 }
 
-/// Non-ordering raw topology payload retained for one selected planar span.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RetainedPlanarSpan {
     pub(super) source: MixedSourceFaceKey,
@@ -84,14 +78,10 @@ pub(super) struct RetainedSectionTrim {
     authority: RetainedSectionTrimAuthority,
 }
 
-/// Mutually exclusive authority for one Section edge's bounded ends.
 #[derive(Debug, Clone, PartialEq)]
 enum RetainedSectionTrimAuthority {
-    /// Exact intrinsic carrier scalars and their certified metric points.
     Exact([(f64, Point3); 2]),
-    /// A sealed composite consumes physical roots without exposing scalars.
     PersistentComposite,
-    /// Exact scalar authority is still absent.
     Missing,
 }
 
@@ -101,7 +91,6 @@ pub(crate) struct RetainedMaterializationEvidence {
     section_trims: Vec<RetainedSectionTrim>,
 }
 
-/// Comparable identity for one exact source-root scalar supplied later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SourceRootScalarKey {
     operand: usize,
@@ -114,7 +103,6 @@ impl SourceRootScalarKey {
     }
 }
 
-/// Comparable identity for one exact Section-carrier trim scalar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SectionTrimScalarKey {
     fragment: usize,
@@ -127,7 +115,6 @@ impl SectionTrimScalarKey {
     }
 }
 
-/// Candidate exact scalars. Certification remains read-only and exact.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MixedShellScalarInputs {
     source_roots: Vec<(SourceRootScalarKey, f64)>,
@@ -154,12 +141,14 @@ impl MixedShellScalarInputs {
 pub(crate) enum PhysicalVertex {
     Source(RawVertexId),
     Section(usize),
+    Tangency(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PhysicalCarrier {
     Source(RawEdgeId),
     Section(usize),
+    DerivedRing(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +198,6 @@ impl PhysicalEdge {
     }
 }
 
-/// Allocation-free, coalesced physical incidence ready for scalar completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedShellMaterializationBlueprint {
     edges: Vec<PhysicalEdge>,
@@ -219,7 +207,6 @@ pub(crate) struct MixedShellMaterializationBlueprint {
 }
 
 impl MixedShellMaterializationBlueprint {
-    /// Canonical physical incidence after source-edge coalescing.
     pub(crate) fn edges(&self) -> &[PhysicalEdge] {
         &self.edges
     }
@@ -239,7 +226,6 @@ impl MixedShellMaterializationBlueprint {
         self.planar_use_count
     }
 
-    /// Exact precharge for persistent skew composites represented by this plan.
     pub(crate) const fn persistent_skew_work(&self) -> u64 {
         self.persistent_skew_work
     }
@@ -250,13 +236,11 @@ impl MixedShellMaterializationBlueprint {
             .all(|edge| edge.uses.len() == 2 && edge.uses[0].forward != edge.uses[1].forward)
     }
 
-    /// Exact bounded work for orchestration-stage charging.
     pub(crate) const fn work(&self) -> u64 {
         self.work
     }
 }
 
-/// Read-only refusal before any topology transaction exists.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum MixedShellMaterializationError {
     UnresolvedMaterializationGap(MixedShellMaterializationGap),
@@ -535,9 +519,6 @@ fn intern_vertex(
         .map(AnalyticVertexKey::new)
         .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)
 }
-
-/// Intern a topology-owned composite endpoint without permitting a metric
-/// representative from another incident carrier to replace it.
 fn intern_exact_vertex(
     vertices: &mut Vec<(PhysicalVertex, Point3)>,
     key: PhysicalVertex,
@@ -808,6 +789,7 @@ fn plan_vertex(
             _ => None,
         }),
         MixedShellVertexKey::ProofSeam { .. } => None,
+        MixedShellVertexKey::DerivedRingSeam(_) | MixedShellVertexKey::Tangency(_) => None,
         _ => None,
     }
 }
@@ -815,6 +797,22 @@ fn plan_vertex(
 fn section_plan_vertex(value: &MixedShellVertexKey) -> Option<PhysicalVertex> {
     match value {
         MixedShellVertexKey::SectionEndpoint(endpoint) => Some(PhysicalVertex::Section(*endpoint)),
+        _ => None,
+    }
+}
+
+fn derived_ring_plan_vertex(
+    value: &MixedShellVertexKey,
+    ring: usize,
+    endpoint_free: bool,
+) -> Option<PhysicalVertex> {
+    match value {
+        MixedShellVertexKey::DerivedRingSeam(candidate) if endpoint_free && *candidate == ring => {
+            None
+        }
+        MixedShellVertexKey::Tangency(vertex) if !endpoint_free => {
+            Some(PhysicalVertex::Tangency(*vertex))
+        }
         _ => None,
     }
 }
@@ -919,6 +917,17 @@ fn periodic_window_work(
                 MixedShellEdgeKey::PeriodicSource { .. } => {
                     endpoint_free_uses = work_count(endpoint_free_uses.checked_add(1))?;
                     endpoint_free = work_count(endpoint_free.checked_add(1))?;
+                }
+                MixedShellEdgeKey::DerivedRing(ring) => {
+                    let ring = plan
+                        .derived_rings()
+                        .get(*ring)
+                        .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+                    if ring.tangency().is_some() {
+                        bounded = work_count(bounded.checked_add(1))?;
+                    } else {
+                        endpoint_free = work_count(endpoint_free.checked_add(1))?;
+                    }
                 }
             }
         }
@@ -1090,10 +1099,6 @@ fn validate_periodic_source_use(
     }
     Ok((ring.edge(), raw_fin))
 }
-
-/// Coalesce face-qualified planar span uses by validated raw edge and exact
-/// endpoint/root identity. Raw handles are compared only for equality and
-/// never become ordering keys.
 pub(crate) fn prepare_mixed_shell_materialization(
     plan: &MixedShellProofPlan,
     store: &Store,
@@ -1186,6 +1191,44 @@ pub(crate) fn prepare_mixed_shell_materialization(
                             &mut edges,
                             PhysicalCarrier::Source(raw_edge),
                             None,
+                            PhysicalUse {
+                                face: face_index,
+                                loop_index,
+                                use_index,
+                                forward: use_.direction() == ArrangementDirection::Forward,
+                            },
+                        );
+                    }
+                    MixedShellEdgeKey::DerivedRing(ring_index) => {
+                        let ring = plan
+                            .derived_rings()
+                            .get(*ring_index)
+                            .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+                        let endpoints = ring.tangency().map(|(vertex, _)| {
+                            let vertex = PhysicalVertex::Tangency(vertex);
+                            [vertex, vertex]
+                        });
+                        match endpoints {
+                            Some([vertex, _])
+                                if derived_ring_plan_vertex(tail, *ring_index, false)
+                                    == Some(vertex)
+                                    && derived_ring_plan_vertex(head, *ring_index, false)
+                                        == Some(vertex) => {}
+                            None if matches!(
+                                (tail, head),
+                                (
+                                    MixedShellVertexKey::DerivedRingSeam(first),
+                                    MixedShellVertexKey::DerivedRingSeam(second)
+                                ) if first == ring_index && second == ring_index
+                            ) => {}
+                            _ => {
+                                return Err(MixedShellMaterializationError::PlanVertexMismatch);
+                            }
+                        }
+                        add_physical_use(
+                            &mut edges,
+                            PhysicalCarrier::DerivedRing(*ring_index),
+                            endpoints,
                             PhysicalUse {
                                 face: face_index,
                                 loop_index,
@@ -1435,7 +1478,7 @@ fn checked_vertex_point(
         PhysicalVertex::Source(vertex) => store
             .vertex_position(vertex)
             .map_err(|_| MixedShellMaterializationError::StoreRead)?,
-        PhysicalVertex::Section(_) => evaluated,
+        PhysicalVertex::Section(_) | PhysicalVertex::Tangency(_) => evaluated,
     };
     if same_point_bits(authoritative, evaluated)
         || certify_point_distance(authoritative, evaluated, tolerance)
@@ -1795,6 +1838,89 @@ fn projected_endpoint_free_source_circle_pcurve(
     proof.pcurve().map_err(projected_source_circle_error)
 }
 
+fn derived_ring_pcurve(
+    plan: &MixedShellProofPlan,
+    store: &Store,
+    face_index: usize,
+    ring_index: usize,
+    lineage: &MixedPcurveLineage,
+) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
+    let ring = plan
+        .derived_rings()
+        .get(ring_index)
+        .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+    let face = plan
+        .faces()
+        .get(face_index)
+        .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+    let (surface, _, _) = source_face_geometry(face, store)?;
+    let MixedPcurveLineage::DerivedRing {
+        cylinder_parameter_bits,
+    } = lineage
+    else {
+        return Err(MixedShellMaterializationError::UnsupportedPcurve);
+    };
+    let endpoint_free = ring.tangency().is_none();
+    match (surface, cylinder_parameter_bits) {
+        (AnalyticShellSurface::Cylinder(cylinder), Some(bits)) => {
+            let height = f64::from_bits(*bits);
+            let circle = ring.circle();
+            let local_x = Vec2::new(
+                circle.frame().x().dot(cylinder.frame().x()),
+                circle.frame().x().dot(cylinder.frame().y()),
+            );
+            let local_y = Vec2::new(
+                circle.frame().y().dot(cylinder.frame().x()),
+                circle.frame().y().dot(cylinder.frame().y()),
+            );
+            let scale = if local_x.perp().dot(local_y) > 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let offset = kcore::math::atan2(local_x.y, local_x.x);
+            let line = Line2d::new(Point2::new(offset, height), Vec2::new(scale, 0.0))
+                .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+            let map = AffineParamMap1d::new(1.0, 0.0)
+                .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+            let use_ = AnalyticPcurveUse::new(AnalyticShellPcurve::Line(line), map);
+            Ok(if endpoint_free {
+                use_.with_closure_winding([if scale > 0.0 { 1 } else { -1 }, 0])
+            } else {
+                use_
+            })
+        }
+        (AnalyticShellSurface::Plane(plane), None) => {
+            let circle = ring.circle();
+            let center = plane.frame().to_local(circle.frame().origin());
+            let local_x = Vec2::new(
+                circle.frame().x().dot(plane.frame().x()),
+                circle.frame().x().dot(plane.frame().y()),
+            );
+            let local_y = Vec2::new(
+                circle.frame().y().dot(plane.frame().x()),
+                circle.frame().y().dot(plane.frame().y()),
+            );
+            let scale = if local_x.perp().dot(local_y) > 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let pcurve = Circle2d::new(Point2::new(center.x, center.y), circle.radius(), local_x)
+                .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+            let map = AffineParamMap1d::new(scale, 0.0)
+                .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
+            let use_ = AnalyticPcurveUse::new(AnalyticShellPcurve::Circle(pcurve), map);
+            Ok(if endpoint_free {
+                use_.with_closure_winding([0, 0])
+            } else {
+                use_
+            })
+        }
+        _ => Err(MixedShellMaterializationError::UnsupportedPcurve),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn materialized_pcurve_for_use(
     plan: &MixedShellProofPlan,
@@ -1820,7 +1946,8 @@ fn materialized_pcurve_for_use(
                     )
                 }
                 MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(_)
-                | MixedPcurveLineage::Section { .. } => {
+                | MixedPcurveLineage::Section { .. }
+                | MixedPcurveLineage::DerivedRing { .. } => {
                     Err(MixedShellMaterializationError::UnsupportedPcurve)
                 }
             }
@@ -1867,10 +1994,17 @@ fn materialized_pcurve_for_use(
                     )
                 }
                 MixedPcurveLineage::ProjectedSourceCircleOnPlane(_)
-                | MixedPcurveLineage::Section { .. } => {
+                | MixedPcurveLineage::Section { .. }
+                | MixedPcurveLineage::DerivedRing { .. } => {
                     Err(MixedShellMaterializationError::UnsupportedPcurve)
                 }
             }
+        }
+        MixedShellEdgeKey::DerivedRing(ring) => {
+            if physical.carrier != PhysicalCarrier::DerivedRing(*ring) {
+                return Err(MixedShellMaterializationError::PlanVertexMismatch);
+            }
+            derived_ring_pcurve(plan, store, face_index, *ring, use_.pcurve())
         }
     }
 }
@@ -1973,9 +2107,6 @@ fn prepare_periodic_face_windows(
     }
     Ok(face_windows)
 }
-
-/// Complete exact scalar evidence into a fully preflighted analytic-shell
-/// proposal. This function is read-only; typed refusal cannot mutate topology.
 fn build_mixed_shell_input(
     plan: &MixedShellProofPlan,
     store: &Store,
@@ -2094,24 +2225,44 @@ fn build_mixed_shell_input_from_blueprint(
             .map(AnalyticEdgeKey::new)
             .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)?;
         let Some(endpoints) = physical.endpoints else {
-            let PhysicalCarrier::Source(raw_edge) = physical.carrier else {
-                return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+            let (carrier, lineage) = match physical.carrier {
+                PhysicalCarrier::Source(raw_edge) => (
+                    source_carrier(store, raw_edge)?,
+                    MixedDerivedRingLineage::Source(raw_edge),
+                ),
+                PhysicalCarrier::DerivedRing(ring) => {
+                    let ring = plan
+                        .derived_rings()
+                        .get(ring)
+                        .filter(|ring| ring.tangency().is_none())
+                        .ok_or(MixedShellMaterializationError::EndpointFreeSourceRingMismatch)?;
+                    (AnalyticShellCurve::Circle(ring.circle()), ring.lineage())
+                }
+                PhysicalCarrier::Section(_) => {
+                    return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+                }
             };
-            let carrier = source_carrier(store, raw_edge)?;
             let AnalyticShellCurve::Circle(circle) = carrier else {
                 return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
             };
             let range = circle.param_range();
             let edge = AnalyticShellClosedEdge::new(key, carrier, range);
-            let merged = plan
-                .cap_rings
-                .iter()
-                .find(|ring| ring.edge() == raw_edge)
-                .and_then(MixedCylinderCapRing::merge_edge_source);
-            analytic_closed_edges.push(if let Some(peer) = merged {
-                edge.with_merge_sources([EntityRef::Edge(raw_edge), EntityRef::Edge(peer)])
-            } else {
-                edge.with_source(EntityRef::Edge(raw_edge))
+            analytic_closed_edges.push(match lineage {
+                MixedDerivedRingLineage::Source(raw_edge) => {
+                    let merged = plan
+                        .cap_rings
+                        .iter()
+                        .find(|ring| ring.edge() == raw_edge)
+                        .and_then(MixedCylinderCapRing::merge_edge_source);
+                    if let Some(peer) = merged {
+                        edge.with_merge_sources([EntityRef::Edge(raw_edge), EntityRef::Edge(peer)])
+                    } else {
+                        edge.with_source(EntityRef::Edge(raw_edge))
+                    }
+                }
+                MixedDerivedRingLineage::Derived(faces) => {
+                    edge.with_derived_sources(faces.map(EntityRef::Face))
+                }
             });
             analytic_edge_ranges.push(range);
             continue;
@@ -2128,6 +2279,38 @@ fn build_mixed_shell_input_from_blueprint(
             analytic_edges.push(edge);
             analytic_edge_ranges.push(range);
             skew_pcurves[edge_index] = Some(pcurves);
+            continue;
+        }
+        if let PhysicalCarrier::DerivedRing(ring_index) = physical.carrier {
+            let ring = plan
+                .derived_rings()
+                .get(ring_index)
+                .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+            let (vertex, point) = ring
+                .tangency()
+                .ok_or(MixedShellMaterializationError::PlanVertexMismatch)?;
+            let expected = PhysicalVertex::Tangency(vertex);
+            if endpoints != [expected, expected] || !same_point_bits(ring.circle().eval(0.0), point)
+            {
+                return Err(MixedShellMaterializationError::PlanVertexMismatch);
+            }
+            let vertex = intern_exact_vertex(&mut retained_vertices, expected, point)?;
+            let range = ring.circle().param_range();
+            let edge = AnalyticShellEdge::new(
+                key,
+                [vertex, vertex],
+                AnalyticShellCurve::Circle(ring.circle()),
+                range,
+            );
+            analytic_edges.push(match ring.lineage() {
+                MixedDerivedRingLineage::Source(source) => {
+                    edge.with_source(EntityRef::Edge(source))
+                }
+                MixedDerivedRingLineage::Derived(faces) => {
+                    edge.with_derived_sources(faces.map(EntityRef::Face))
+                }
+            });
+            analytic_edge_ranges.push(range);
             continue;
         }
         let (carrier, parameters, source) = match physical.carrier {
@@ -2161,6 +2344,9 @@ fn build_mixed_shell_input_from_blueprint(
                 } else {
                     (section_carrier(section)?, parameters, None)
                 }
+            }
+            PhysicalCarrier::DerivedRing(_) => {
+                return Err(MixedShellMaterializationError::PlanVertexMismatch);
             }
         };
         let range = validate_range(edge_index, parameters)?;
@@ -2297,11 +2483,6 @@ fn build_mixed_shell_input_from_blueprint(
             .with_closed_edges(analytic_closed_edges),
     )
 }
-
-/// Materialize and preflight one connected mixed-shell proof plan.
-///
-/// This convenience entry point is retained for tests. An operation caller
-/// must first prepare and charge an equivalent blueprint before invoking it.
 pub(crate) fn materialize_mixed_shell_input(
     plan: &MixedShellProofPlan,
     store: &Store,
@@ -2314,15 +2495,6 @@ pub(crate) fn materialize_mixed_shell_input(
         .map_err(MixedShellMaterializationError::AnalyticPreflight)?;
     Ok(input)
 }
-
-/// Materialize one disconnected proposal into independently connected inputs.
-///
-/// Component membership comes from exact physical edge incidence. This pass
-/// retains the globally stable analytic keys but takes a complete face/edge/
-/// vertex closure for each component, so keys remain comparable while the
-/// topology batch assembler can treat them as component-local. The operation
-/// caller must have charged `blueprint.work()` before invocation; direct test
-/// calls are accounting harnesses only.
 pub(crate) fn materialize_mixed_shell_component_inputs(
     plan: &MixedShellProofPlan,
     blueprint: &MixedShellMaterializationBlueprint,
