@@ -19,7 +19,6 @@ use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
 };
 use super::parallel_cylinder_internal_tangency::execute_parallel_cylinder_internal_tangency;
-use super::parallel_cylinder_interval::execute_parallel_cylinder_common_support;
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCoincidentCapRelation,
     CertifiedParallelCylinderLensRelation, ParallelCylinderRelationOutcome,
@@ -74,10 +73,12 @@ pub(super) fn execute_parallel_cylinder_boolean(
             )
         }
         ParallelCylinderRelationOutcome::CertifiedCommonSupport(relation) => {
-            execute_parallel_cylinder_common_support(
+            super::axial_contact_adapter::execute_common_support_boolean(
                 edit,
                 operation,
+                &bodies,
                 [&first, &second],
+                &graph,
                 &relation,
                 linear,
                 scope,

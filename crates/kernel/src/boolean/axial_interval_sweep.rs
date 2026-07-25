@@ -1,17 +1,10 @@
-//! Pure exact-order sweep planning for two closed axial source intervals.
-//!
-//! Geometry and tolerance policy live upstream. This module accepts only the
-//! six pair classifications of four topology-owned authored endpoints,
-//! validates that they form one total preorder, and derives regularized CSG
-//! spans from open-cell membership. Selected adjacent cells are closed and
-//! coalesced; every returned boundary retains all source endpoint identities
-//! in its exact equality class.
+//! Exact-order selection helper for two closed axial source intervals.
+//! Geometry stays upstream; selected spans retain topology endpoint identity.
 
 use core::cmp::Ordering;
 
 use super::boundary_select::RegularizedBooleanOperation;
 
-/// Ordered Boolean operand owning one axial interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AxialIntervalOperand {
     Left,
@@ -30,17 +23,13 @@ impl AxialIntervalOperand {
 const OPERANDS: [AxialIntervalOperand; 2] =
     [AxialIntervalOperand::Left, AxialIntervalOperand::Right];
 
-/// One endpoint in its source cylinder's authored-axis order.
-///
-/// `Start` and `End` are identities, not claims about physical low/high order.
-/// An antiparallel authored axis therefore needs no special planner path.
+/// Authored identity; `Start` and `End` do not imply physical order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuthoredAxialEndpoint {
     Start,
     End,
 }
 
-/// Stable identity of one topology-owned axial endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AxialEndpointContributor {
     operand: AxialIntervalOperand,
@@ -83,11 +72,7 @@ const RIGHT_END: AxialEndpointContributor =
     AxialEndpointContributor::new(AxialIntervalOperand::Right, AuthoredAxialEndpoint::End);
 const ENDPOINTS: [AxialEndpointContributor; 4] = [LEFT_START, LEFT_END, RIGHT_START, RIGHT_END];
 
-/// One exact proof-fed pair classification.
-///
-/// The caller remains responsible for deriving `ordering` from certified
-/// predicates rather than coordinates or tolerances. The preorder constructor
-/// below validates completeness and consistency before planning can begin.
+/// One exact proof-fed endpoint comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AxialEndpointComparison {
     first: AxialEndpointContributor,
@@ -109,7 +94,6 @@ impl AxialEndpointComparison {
     }
 }
 
-/// Structural failure in the claimed four-endpoint total preorder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AxialEndpointPreorderError {
     SelfComparison,
@@ -118,11 +102,7 @@ pub(crate) enum AxialEndpointPreorderError {
     NonTransitive,
 }
 
-/// Structurally certified total preorder of all four authored endpoints.
-///
-/// Construction is the only route into this type. Equal endpoints share one
-/// rank and every rank retains a contributor set in deterministic identity
-/// order, independently of comparison presentation order.
+/// Certified total preorder of all four authored endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CertifiedAxialEndpointPreorder {
     ranks: [u8; 4],
@@ -131,7 +111,6 @@ pub(crate) struct CertifiedAxialEndpointPreorder {
 }
 
 impl CertifiedAxialEndpointPreorder {
-    /// Validate the complete six-pair classification as one total preorder.
     pub(crate) fn from_comparisons(
         comparisons: [AxialEndpointComparison; 6],
     ) -> Result<Self, AxialEndpointPreorderError> {
@@ -206,7 +185,6 @@ impl CertifiedAxialEndpointPreorder {
         })
     }
 
-    /// Compare two retained endpoint identities in the certified preorder.
     pub(crate) const fn compare(
         &self,
         first: AxialEndpointContributor,
@@ -224,7 +202,6 @@ impl CertifiedAxialEndpointPreorder {
     }
 }
 
-/// Exact-equality class of topology endpoint contributors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AxialEndpointContributors(u8);
 
@@ -237,12 +214,10 @@ impl AxialEndpointContributors {
         self.0 |= 1 << endpoint.index();
     }
 
-    /// Whether this exact boundary class contains `endpoint`.
     pub(crate) const fn contains(self, endpoint: AxialEndpointContributor) -> bool {
         self.0 & (1 << endpoint.index()) != 0
     }
 
-    /// Contributors in stable Left-Start, Left-End, Right-Start, Right-End order.
     pub(crate) fn iter(self) -> impl Iterator<Item = AxialEndpointContributor> {
         ENDPOINTS
             .into_iter()
@@ -250,11 +225,7 @@ impl AxialEndpointContributors {
     }
 }
 
-/// Source intervals contributing side material to one selected span.
-///
-/// This is the union of exact source memberships over the span's selected
-/// open cells. It is therefore direct lineage input: realization need not
-/// reconstruct source-side provenance from the operation or interval shape.
+/// Source intervals contributing side material to a selected span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AxialOperandContributors(u8);
 
@@ -271,12 +242,10 @@ impl AxialOperandContributors {
         self.0 |= other.0;
     }
 
-    /// Whether this span has selected open cells covered by `operand`.
     pub(crate) const fn contains(self, operand: AxialIntervalOperand) -> bool {
         self.0 & (1 << operand.index()) != 0
     }
 
-    /// Contributors in stable Left, Right order.
     pub(crate) fn iter(self) -> impl Iterator<Item = AxialIntervalOperand> {
         OPERANDS
             .into_iter()
@@ -284,7 +253,6 @@ impl AxialOperandContributors {
     }
 }
 
-/// One closed maximal selected axial span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlannedAxialSpan {
     low: AxialEndpointContributors,
@@ -301,13 +269,11 @@ impl PlannedAxialSpan {
         self.high
     }
 
-    /// Source operands covering at least one selected open cell in this span.
     pub(crate) const fn side_operands(&self) -> AxialOperandContributors {
         self.side_operands
     }
 }
 
-/// Complete regularized interval plan; two source intervals yield at most two spans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AxialIntervalPlan {
     spans: Vec<PlannedAxialSpan>,
@@ -319,11 +285,7 @@ impl AxialIntervalPlan {
     }
 }
 
-/// Apply regularized CSG truth to the certified four-endpoint sweep.
-///
-/// Only open cells carry material truth. Each maximal selected cell run is
-/// closed at its bounding endpoint classes, and adjacent selected cells are
-/// therefore coalesced across exact contacts and shared endpoints.
+/// Select maximal regularized open-cell runs and close them at exact classes.
 pub(crate) fn plan_axial_interval_sweep(
     operation: RegularizedBooleanOperation,
     preorder: &CertifiedAxialEndpointPreorder,

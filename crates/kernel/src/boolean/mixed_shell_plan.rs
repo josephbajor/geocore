@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ktopo::analytic_shell::AnalyticFaceSplitPiece;
 use ktopo::entity::{EdgeId as RawEdgeId, FinId as RawFinId, LoopId as RawLoopId, Sense};
 use ktopo::store::Store;
 
@@ -276,6 +277,7 @@ pub(crate) struct MixedShellFacePlan {
     selected_orientation: SelectedOrientation,
     loops: Vec<MixedShellLoopPlan>,
     merge_sources: Option<[FaceId; 2]>,
+    split_lineage: Option<AnalyticFaceSplitPiece>,
 }
 
 impl MixedShellFacePlan {
@@ -297,6 +299,10 @@ impl MixedShellFacePlan {
 
     pub(crate) const fn merge_sources(&self) -> Option<&[FaceId; 2]> {
         self.merge_sources.as_ref()
+    }
+
+    pub(crate) const fn split_lineage(&self) -> Option<AnalyticFaceSplitPiece> {
+        self.split_lineage
     }
 }
 
@@ -574,6 +580,7 @@ pub(crate) enum MixedShellPlanError {
     PlanarLineageMismatch(MixedSourceFaceKey),
     DiskLineageMismatch(MixedSourceFaceKey),
     AxialContactBoundaryMismatch,
+    CommonSupportBoundaryMismatch,
     CoincidentCapSelectionMismatch,
     CoincidentCapBoundaryUseCount {
         physical_end: usize,
@@ -593,6 +600,7 @@ struct SectionUseLineage {
 enum SectionPlanningAdmission<'a> {
     Complete,
     AxialContact(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact),
+    CommonSupport(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport),
     CoincidentCaps(
         &'a super::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation,
     ),
@@ -611,6 +619,13 @@ impl SectionPlanningAdmission<'_> {
                     && !graph.gaps().is_empty()
                     && relation.contact_boundaries()[0].operand()
                         != relation.contact_boundaries()[1].operand() =>
+            {
+                Ok(())
+            }
+            Self::CommonSupport(relation)
+                if graph.completion() == SectionCompletion::Indeterminate
+                    && !graph.gaps().is_empty()
+                    && relation.boundaries().len() == 4 =>
             {
                 Ok(())
             }
@@ -751,6 +766,226 @@ pub(crate) fn plan_coincident_axial_contact_mixed_shell<'a>(
         }),
         |_, faces, _, _| merge_coincident_side_faces(store, faces, far_rings, tolerance),
     )
+}
+
+pub(crate) fn plan_common_support_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport,
+    interval: &super::axial_interval_sweep::AxialIntervalPlan,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+    tolerance: f64,
+) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+    plan_mixed_shell_with_augmentation(
+        store,
+        graph,
+        SectionPlanningAdmission::CommonSupport(relation),
+        bindings,
+        selected.into_iter().map(|fragment| {
+            let (key, operand, (), orientation) = fragment.into_parts();
+            (key, operand, orientation)
+        }),
+        |_, faces, _, rings| {
+            graft_common_support_spans(
+                store,
+                faces,
+                rings,
+                interval,
+                relation.preorder(),
+                tolerance,
+            )
+        },
+    )
+}
+
+fn graft_common_support_spans(
+    store: &Store,
+    faces: &mut Vec<MixedShellFacePlan>,
+    rings: &mut Vec<MixedCylinderCapRing>,
+    interval: &super::axial_interval_sweep::AxialIntervalPlan,
+    preorder: &super::axial_interval_sweep::CertifiedAxialEndpointPreorder,
+    tolerance: f64,
+) -> Result<(), MixedShellPlanError> {
+    use core::cmp::Ordering;
+
+    use super::axial_interval_sweep::{
+        AuthoredAxialEndpoint, AxialEndpointContributor, AxialIntervalOperand,
+    };
+
+    let fail = || MixedShellPlanError::CommonSupportBoundaryMismatch;
+    let source_faces = faces.clone();
+    let source_rings = rings.clone();
+    let split_operand = match interval.spans() {
+        [first, second] => {
+            let first = sole_interval_operand(first.side_operands());
+            (first.is_some() && first == sole_interval_operand(second.side_operands()))
+                .then_some(first)
+                .flatten()
+        }
+        _ => None,
+    };
+    faces.clear();
+    rings.clear();
+    for (span_index, span) in interval.spans().iter().enumerate() {
+        let target_operand = if span.side_operands().contains(AxialIntervalOperand::Left) {
+            0
+        } else if span.side_operands().contains(AxialIntervalOperand::Right) {
+            1
+        } else {
+            return Err(fail());
+        };
+        let target_ring = source_rings
+            .iter()
+            .find(|ring| ring.operand() == target_operand)
+            .ok_or_else(fail)?;
+        let target = source_faces
+            .iter()
+            .find(|face| {
+                face.source == target_ring.side_source()
+                    && face.source_face == *target_ring.side_face()
+            })
+            .ok_or_else(fail)?;
+        let mut boundary_faces = Vec::with_capacity(2);
+        let mut boundary_loops = Vec::with_capacity(2);
+        for (output_end, contributors) in [span.low(), span.high()].into_iter().enumerate() {
+            let primary_contributor = contributors.iter().next().ok_or_else(fail)?;
+            let mut endpoint_rings = contributors
+                .iter()
+                .map(|contributor| {
+                    let operand = match contributor.operand() {
+                        AxialIntervalOperand::Left => 0,
+                        AxialIntervalOperand::Right => 1,
+                    };
+                    let boundary = match contributor.endpoint() {
+                        AuthoredAxialEndpoint::Start => 0,
+                        AuthoredAxialEndpoint::End => 1,
+                    };
+                    source_rings
+                        .iter()
+                        .find(|ring| ring.operand() == operand && ring.boundary() == boundary)
+                        .cloned()
+                        .ok_or_else(fail)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let [primary, rest @ ..] = endpoint_rings.as_mut_slice() else {
+                return Err(fail());
+            };
+            if rest.len() > 1
+                || rest
+                    .first()
+                    .is_some_and(|peer| peer.edge() == primary.edge())
+            {
+                return Err(fail());
+            }
+            let owner = source_faces
+                .iter()
+                .find(|face| {
+                    face.source == primary.side_source() && face.source_face == *primary.side_face()
+                })
+                .ok_or_else(fail)?;
+            let matching = owner
+                .loops
+                .iter()
+                .filter(|loop_| {
+                    loop_.uses.len() == 1
+                        && loop_.uses[0].edge
+                            == (MixedShellEdgeKey::PeriodicSource {
+                                source: primary.side_source(),
+                                loop_key: primary.side_loop_key(),
+                            })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let [mut loop_] = matching.try_into().map_err(|_| fail())?;
+            if primary.side_source() != target.source {
+                let proof = ProjectedEndpointFreeSourceCircle::certify(
+                    store,
+                    primary,
+                    target.source,
+                    &target.source_face,
+                    tolerance,
+                )
+                .map_err(MixedShellPlanError::ProjectedSourceCircle)?;
+                loop_.uses[0].pcurve = MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(proof);
+            }
+            let mut cap = source_faces
+                .iter()
+                .find(|face| {
+                    face.source == primary.cap_source() && face.source_face == *primary.cap_face()
+                })
+                .cloned()
+                .ok_or_else(fail)?;
+            let other = AxialEndpointContributor::new(
+                primary_contributor.operand(),
+                match primary_contributor.endpoint() {
+                    AuthoredAxialEndpoint::Start => AuthoredAxialEndpoint::End,
+                    AuthoredAxialEndpoint::End => AuthoredAxialEndpoint::Start,
+                },
+            );
+            let source_low = match preorder.compare(primary_contributor, other) {
+                Ordering::Less => true,
+                Ordering::Greater => false,
+                Ordering::Equal => return Err(fail()),
+            };
+            if source_low != (output_end == 0) {
+                cap.selected_orientation = match cap.selected_orientation {
+                    SelectedOrientation::Preserved => SelectedOrientation::Reversed,
+                    SelectedOrientation::Reversed => SelectedOrientation::Preserved,
+                };
+                loop_.uses[0].direction = opposite(loop_.uses[0].direction);
+            }
+            if let [peer] = rest {
+                *primary = primary.clone().with_merge_edge_source(peer.edge());
+                cap.merge_sources = Some([primary.cap_face().clone(), peer.cap_face().clone()]);
+            }
+            boundary_loops.push(loop_);
+            boundary_faces.push(cap);
+            rings.push(primary.clone());
+        }
+        let both = span.side_operands().contains(AxialIntervalOperand::Left)
+            && span.side_operands().contains(AxialIntervalOperand::Right);
+        let source_side_faces = [0, 1]
+            .map(|operand| {
+                source_rings
+                    .iter()
+                    .find(|ring| ring.operand() == operand)
+                    .map(|ring| ring.side_face().clone())
+                    .ok_or_else(fail)
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let [first_side_face, second_side_face] =
+            source_side_faces.try_into().map_err(|_| fail())?;
+        faces.push(MixedShellFacePlan {
+            source: target.source,
+            source_face: target.source_face.clone(),
+            selected_orientation: target.selected_orientation,
+            loops: boundary_loops,
+            merge_sources: both.then_some([first_side_face, second_side_face]),
+            split_lineage: (split_operand
+                == Some(if target_operand == 0 {
+                    AxialIntervalOperand::Left
+                } else {
+                    AxialIntervalOperand::Right
+                }))
+            .then_some(if span_index == 0 {
+                AnalyticFaceSplitPiece::First
+            } else {
+                AnalyticFaceSplitPiece::Second
+            }),
+        });
+        faces.extend(boundary_faces);
+    }
+    Ok(())
+}
+
+fn sole_interval_operand(
+    operands: super::axial_interval_sweep::AxialOperandContributors,
+) -> Option<super::axial_interval_sweep::AxialIntervalOperand> {
+    let mut operands = operands.iter();
+    let first = operands.next()?;
+    operands.next().is_none().then_some(first)
 }
 
 fn append_internal_contact_hole(
@@ -898,6 +1133,7 @@ fn merge_coincident_side_faces(
             selected_orientation: first.selected_orientation,
             loops: far_loops,
             merge_sources: Some([first.source_face, second.source_face]),
+            split_lineage: None,
         },
     );
     Ok(())
@@ -1157,6 +1393,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
                     selected_orientation: orientation,
                     loops,
                     merge_sources: None,
+                    split_lineage: None,
                 }
             }
             (
@@ -1203,6 +1440,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
                     selected_orientation: orientation,
                     loops: vec![loop_plan],
                     merge_sources: None,
+                    split_lineage: None,
                 }
             }
             (
@@ -1268,6 +1506,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
                     selected_orientation: orientation,
                     loops,
                     merge_sources: None,
+                    split_lineage: None,
                 }
             }
             (
@@ -1305,6 +1544,7 @@ fn plan_mixed_shell_with_augmentation<'a>(
                     selected_orientation: orientation,
                     loops: vec![loop_],
                     merge_sources: None,
+                    split_lineage: None,
                 }
             }
             _ => return Err(MixedShellPlanError::ArrangementKindMismatch(key)),

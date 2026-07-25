@@ -173,6 +173,7 @@ fn projected_pcurve_fixture_with_target_x(
                 selected_orientation: SelectedOrientation::Preserved,
                 loops: vec![source_loop_plan],
                 merge_sources: None,
+                split_lineage: None,
             },
             MixedShellFacePlan {
                 source: target,
@@ -180,6 +181,7 @@ fn projected_pcurve_fixture_with_target_x(
                 selected_orientation: SelectedOrientation::Preserved,
                 loops: vec![target_loop_plan],
                 merge_sources: None,
+                split_lineage: None,
             },
         ],
         section_edges: Vec::new(),
@@ -761,6 +763,7 @@ fn periodic_window_work_preserves_source_store_errors() {
             selected_orientation: SelectedOrientation::Preserved,
             loops: Vec::new(),
             merge_sources: None,
+            split_lineage: None,
         }],
         section_edges: Vec::new(),
         bounded_source_spans: Vec::new(),

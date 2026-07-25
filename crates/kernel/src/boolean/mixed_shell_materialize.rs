@@ -17,7 +17,7 @@ use ktopo::analytic_shell::{
     AnalyticShellClosedEdge, AnalyticShellCurve, AnalyticShellEdge, AnalyticShellFace,
     AnalyticShellFin, AnalyticShellInput, AnalyticShellLoop, AnalyticShellPcurve,
     AnalyticShellPlanError, AnalyticShellSurface, AnalyticShellVertex, AnalyticVertexKey,
-    prepare_analytic_shell,
+    prepare_analytic_shell, validate_analytic_shell_batch,
 };
 use ktopo::entity::{
     EdgeId as RawEdgeId, EntityRef, FinId as RawFinId, LoopId as RawLoopId, PcurveChart, Sense,
@@ -1963,6 +1963,10 @@ fn prepare_periodic_face_windows(
         let mut shifted = AnalyticShellClosedEdge::new(key, declaration.carrier(), window);
         if let Some(source) = declaration.source() {
             shifted = shifted.with_source(source);
+        } else if let Some(sources) = declaration.derived_sources() {
+            shifted = shifted.with_derived_sources(sources);
+        } else if let Some(sources) = declaration.merge_sources() {
+            shifted = shifted.with_merge_sources(sources);
         }
         *declaration = shifted;
         edge_ranges[edge_index] = window;
@@ -2098,10 +2102,17 @@ fn build_mixed_shell_input_from_blueprint(
                 return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
             };
             let range = circle.param_range();
-            analytic_closed_edges.push(
-                AnalyticShellClosedEdge::new(key, carrier, range)
-                    .with_source(EntityRef::Edge(raw_edge)),
-            );
+            let edge = AnalyticShellClosedEdge::new(key, carrier, range);
+            let merged = plan
+                .cap_rings
+                .iter()
+                .find(|ring| ring.edge() == raw_edge)
+                .and_then(MixedCylinderCapRing::merge_edge_source);
+            analytic_closed_edges.push(if let Some(peer) = merged {
+                edge.with_merge_sources([EntityRef::Edge(raw_edge), EntityRef::Edge(peer)])
+            } else {
+                edge.with_source(EntityRef::Edge(raw_edge))
+            });
             analytic_edge_ranges.push(range);
             continue;
         };
@@ -2275,6 +2286,8 @@ fn build_mixed_shell_input_from_blueprint(
                     .each_ref()
                     .map(|source| EntityRef::Face(source.raw())),
             )
+        } else if let Some(piece) = face.split_lineage() {
+            analytic.with_split_lineage(EntityRef::Face(face.source_face().raw()), piece)
         } else {
             analytic.with_source(EntityRef::Face(face.source_face().raw()))
         });
@@ -2321,10 +2334,13 @@ pub(crate) fn materialize_mixed_shell_component_inputs(
     refuse_unresolved_materialization_gap(plan)?;
     let global =
         build_mixed_shell_input_from_blueprint(plan, blueprint, store, scalars, tolerance)?;
-    components
+    let inputs = components
         .iter()
-        .map(|component| component_input(&global, component, store, tolerance))
-        .collect()
+        .map(|component| component_input(&global, component))
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_analytic_shell_batch(&inputs, store, tolerance)
+        .map_err(MixedShellMaterializationError::AnalyticPreflight)?;
+    Ok(inputs)
 }
 
 fn refuse_unresolved_materialization_gap(
@@ -2339,8 +2355,6 @@ fn refuse_unresolved_materialization_gap(
 fn component_input(
     global: &AnalyticShellInput,
     component: &MixedShellComponent,
-    store: &Store,
-    tolerance: f64,
 ) -> Result<AnalyticShellInput, MixedShellMaterializationError> {
     let faces = component
         .faces()
@@ -2416,10 +2430,7 @@ fn component_input(
             },
         );
     }
-    let input = AnalyticShellInput::new(vertices, edges, faces).with_closed_edges(closed_edges);
-    prepare_analytic_shell(&input, store, tolerance)
-        .map_err(MixedShellMaterializationError::AnalyticPreflight)?;
-    Ok(input)
+    Ok(AnalyticShellInput::new(vertices, edges, faces).with_closed_edges(closed_edges))
 }
 
 pub(super) fn remaining_gaps(

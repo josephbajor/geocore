@@ -72,8 +72,6 @@ mod parallel_cylinder_boundary;
 #[allow(dead_code)]
 mod parallel_cylinder_internal_tangency;
 #[allow(dead_code)]
-mod parallel_cylinder_interval;
-#[allow(dead_code)]
 mod parallel_cylinder_pipeline;
 #[allow(dead_code)]
 mod parallel_cylinder_relation;

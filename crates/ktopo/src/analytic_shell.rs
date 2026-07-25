@@ -1202,6 +1202,23 @@ pub fn prepare_analytic_shell(
     Ok(prepared)
 }
 
+/// Validate independent analytic-shell components as one lineage batch.
+///
+/// Geometry and incidence remain component-local. Face-split lineage is the
+/// only cross-component contract and must contain one `First` and one
+/// `Second` result before any allocation begins.
+pub fn validate_analytic_shell_batch(
+    inputs: &[AnalyticShellInput],
+    store: &Store,
+    tolerance: f64,
+) -> Result<(), AnalyticShellPlanError> {
+    let prepared = inputs
+        .iter()
+        .map(|input| prepare_analytic_shell_component(input, store, tolerance))
+        .collect::<Result<Vec<_>, _>>()?;
+    prepare_analytic_face_splits(&prepared).map(|_| ())
+}
+
 pub(super) fn prepare_analytic_shell_component(
     input: &AnalyticShellInput,
     store: &Store,

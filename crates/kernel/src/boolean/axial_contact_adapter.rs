@@ -23,7 +23,7 @@ use super::boundary_select::{
 };
 use super::curved_pipeline::{
     CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, PipelineFailure, StageResult,
-    mixed_plan_failure, realize_mixed_shell,
+    adapt_operation, mixed_plan_failure, realize_mixed_shell,
 };
 use super::curved_realize::realize_certified_cylinder_source_copies;
 use super::curved_source::CertifiedCylinderSource;
@@ -41,13 +41,15 @@ use super::mixed_periodic_arrangement::{
 };
 use super::mixed_shell_plan::{
     MixedArrangementBinding, MixedShellCellKey, plan_axial_contact_mixed_shell,
-    plan_coincident_axial_contact_mixed_shell, plan_internal_axial_contact_mixed_shell,
-    source_face_key,
+    plan_coincident_axial_contact_mixed_shell, plan_common_support_mixed_shell,
+    plan_internal_axial_contact_mixed_shell, source_face_key,
 };
 use super::parallel_cylinder_relation::{
-    CertifiedParallelCylinderAxialContact, interval_axis_distance_squared,
+    CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCommonSupport,
+    interval_axis_distance_squared,
 };
 use super::pipeline::PLANAR_BOOLEAN_BSP_WORK;
+use super::select::PlanarBooleanOperation;
 use crate::error::Error;
 use crate::section::{
     GAP_CLOSED_CONIC_COINCIDENT_BOUNDARY, GAP_CLOSED_CONIC_NONSECTANT_BOUNDARY,
@@ -186,6 +188,52 @@ pub(super) fn execute_axial_contact_unite(
             CurvedBooleanPipelineRefusal::ClassificationBoundaryContact,
         )),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn execute_common_support_boolean(
+    edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
+    bodies: &[BodyId; 2],
+    cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
+    relation: &CertifiedParallelCylinderCommonSupport,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    let interval = super::axial_interval_sweep::plan_axial_interval_sweep(
+        adapt_operation(operation),
+        relation.preorder(),
+    );
+    if interval.spans().is_empty() {
+        return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+    }
+    validate_common_support_graph(graph, cylinders, relation).map_err(contact_boundary_failure)?;
+    let mut prepared =
+        prepare_uncut_cylinder_boundary(&edit.as_part(), bodies, cylinders, graph, linear, scope)
+            .map_err(contact_boundary_failure)?;
+    for ring in prepared.rings.iter().flatten() {
+        prepared.classified.push(classified_exterior_cap(
+            MixedShellCellKey::cylinder_cap(ring.cap_source(), ring.boundary()),
+            ring.operand(),
+        ));
+    }
+    let selected = select_boundary_fragments(
+        super::boundary_select::RegularizedBooleanOperation::Unite,
+        prepared.classified.clone(),
+    )
+    .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
+    let plan = plan_common_support_mixed_shell(
+        &edit.state.store,
+        graph,
+        relation,
+        &interval,
+        prepared.bindings(),
+        selected,
+        linear,
+    )
+    .map_err(mixed_plan_failure)?;
+    realize_mixed_shell(edit, &plan, linear, scope)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -527,6 +575,17 @@ fn prepare_source_only_boundary(
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PreparedSourceOnlyBoundary, MixedBoundaryError> {
     validate_source_only_contact_graph(graph, sources, side_cap_reason)?;
+    prepare_uncut_cylinder_boundary(part, bodies, cylinders, graph, linear, scope)
+}
+
+fn prepare_uncut_cylinder_boundary(
+    part: &Part<'_>,
+    bodies: &[BodyId; 2],
+    cylinders: [&CertifiedCylinderSource; 2],
+    graph: &BodySectionGraph,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<PreparedSourceOnlyBoundary, MixedBoundaryError> {
     let projection_work =
         periodic_face_fragment_subset_work(0).ok_or(MixedBoundaryError::SourceTopology)?;
     let work = projection_work
@@ -648,6 +707,101 @@ fn validate_source_only_contact_graph(
     validate_source_only_branches(graph, sources)?;
     validate_contact_gaps(graph, sources, side_cap_reason)?;
     Ok(())
+}
+
+fn validate_common_support_graph(
+    graph: &BodySectionGraph,
+    cylinders: [&CertifiedCylinderSource; 2],
+    relation: &CertifiedParallelCylinderCommonSupport,
+) -> Result<(), MixedBoundaryError> {
+    if graph.completion() != SectionCompletion::Indeterminate
+        || !graph.vertices().is_empty()
+        || !graph.edges().is_empty()
+        || !graph.loops().is_empty()
+        || !graph.rings().is_empty()
+        || !(2..=4).contains(&graph.branches().len())
+        || !graph.curve_endpoints().is_empty()
+        || !graph.curve_fragments().is_empty()
+        || !graph.curve_components().is_empty()
+        || !graph.periodic_face_embeddings().is_empty()
+        || graph.gaps().is_empty()
+    {
+        return Err(MixedBoundaryError::SourceTopology);
+    }
+    let mut boundaries = [[false; 2]; 2];
+    for witness in relation.boundaries() {
+        let source = cylinders
+            .get(witness.operand())
+            .and_then(|source| source.boundaries().get(witness.boundary()))
+            .ok_or(MixedBoundaryError::SourceTopology)?;
+        if boundaries[witness.operand()][witness.boundary()]
+            || source.cap_face() != witness.cap_face()
+            || source.edge() != witness.edge()
+        {
+            return Err(MixedBoundaryError::SourceTopology);
+        }
+        boundaries[witness.operand()][witness.boundary()] = true;
+    }
+    if boundaries != [[true; 2]; 2] {
+        return Err(MixedBoundaryError::SourceTopology);
+    }
+    let side_cap = |faces: &[FaceId]| {
+        faces.len() == 2
+            && (0..2).any(|operand| {
+                let peer = 1 - operand;
+                faces
+                    .iter()
+                    .any(|face| face.raw() == cylinders[operand].side_face())
+                    && faces.iter().any(|face| {
+                        cylinders[peer]
+                            .boundaries()
+                            .iter()
+                            .any(|boundary| face.raw() == boundary.cap_face())
+                    })
+            })
+    };
+    let cap_pair = |faces: &[FaceId]| {
+        faces.len() == 2
+            && (0..2).all(|operand| {
+                faces.iter().any(|face| {
+                    cylinders[operand]
+                        .boundaries()
+                        .iter()
+                        .any(|boundary| face.raw() == boundary.cap_face())
+                })
+            })
+    };
+    if graph
+        .branches()
+        .iter()
+        .any(|branch| !side_cap(branch.faces()))
+    {
+        return Err(MixedBoundaryError::SourceTopology);
+    }
+    let side_pair = |faces: &[FaceId]| {
+        faces.len() == 2
+            && (0..2).all(|operand| {
+                faces
+                    .iter()
+                    .any(|face| face.raw() == cylinders[operand].side_face())
+            })
+    };
+    let mut counts = [0_usize; 3];
+    for gap in graph.gaps() {
+        let class = if gap.reason() == GAP_PAIR_UNRESOLVED && side_pair(gap.faces()) {
+            0
+        } else if gap.reason() == GAP_CLOSED_CONIC_COINCIDENT_BOUNDARY && side_cap(gap.faces()) {
+            1
+        } else if gap.reason() == GAP_COINCIDENT_FACE_PAIR && cap_pair(gap.faces()) {
+            2
+        } else {
+            return Err(MixedBoundaryError::SourceTopology);
+        };
+        counts[class] += 1;
+    }
+    (counts[0] == 1 && counts[1] == graph.branches().len() && counts[2] <= 2)
+        .then_some(())
+        .ok_or(MixedBoundaryError::SourceTopology)
 }
 
 fn validate_source_only_branches(

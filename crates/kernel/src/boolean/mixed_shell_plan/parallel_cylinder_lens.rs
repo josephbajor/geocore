@@ -214,6 +214,7 @@ fn append_cap_faces(
             selected_orientation: plan.orientation(),
             loops: vec![loop_],
             merge_sources: None,
+            split_lineage: None,
         });
     }
     Ok(())

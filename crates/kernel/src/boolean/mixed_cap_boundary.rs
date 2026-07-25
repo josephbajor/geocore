@@ -32,6 +32,7 @@ pub(crate) struct MixedCylinderCapRing {
     cap_fin: RawFinId,
     side_loop: RawLoopId,
     side_fin: RawFinId,
+    merge_edge_source: Option<RawEdgeId>,
 }
 
 impl MixedCylinderCapRing {
@@ -81,6 +82,15 @@ impl MixedCylinderCapRing {
 
     pub(crate) const fn side_fin(&self) -> RawFinId {
         self.side_fin
+    }
+
+    pub(crate) const fn merge_edge_source(&self) -> Option<RawEdgeId> {
+        self.merge_edge_source
+    }
+
+    pub(crate) fn with_merge_edge_source(mut self, source: RawEdgeId) -> Self {
+        self.merge_edge_source = Some(source);
+        self
     }
 }
 
@@ -301,6 +311,7 @@ pub(crate) fn bind_cylinder_cap_ring_from_embedding(
         cap_fin: *cap_fin,
         side_loop,
         side_fin,
+        merge_edge_source: None,
     })
 }
 
