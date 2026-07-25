@@ -13,10 +13,11 @@ use kgeom::surface::Surface;
 use kgeom::vec::{Point2, Point3, Vec2};
 use kgraph::AffineParamMap1d;
 use ktopo::analytic_shell::{
-    AnalyticEdgeKey, AnalyticFaceKey, AnalyticPcurveUse, AnalyticShellClosedEdge,
-    AnalyticShellCurve, AnalyticShellEdge, AnalyticShellFace, AnalyticShellFin, AnalyticShellInput,
-    AnalyticShellLoop, AnalyticShellPcurve, AnalyticShellPlanError, AnalyticShellSurface,
-    AnalyticShellVertex, AnalyticVertexKey, prepare_analytic_shell,
+    AnalyticEdgeKey, AnalyticEdgeSplitPiece, AnalyticFaceKey, AnalyticPcurveUse,
+    AnalyticShellClosedEdge, AnalyticShellCurve, AnalyticShellEdge, AnalyticShellFace,
+    AnalyticShellFin, AnalyticShellInput, AnalyticShellLoop, AnalyticShellPcurve,
+    AnalyticShellPlanError, AnalyticShellSurface, AnalyticShellVertex, AnalyticVertexKey,
+    prepare_analytic_shell,
 };
 use ktopo::entity::{
     EdgeId as RawEdgeId, EntityRef, FinId as RawFinId, LoopId as RawLoopId, PcurveChart, Sense,
@@ -36,8 +37,8 @@ use super::{
     ArrangementDirection, MixedArrangementBinding, MixedBoundedSourceSpanPlan, MixedPcurveLineage,
     MixedSectionEdgePlan, MixedShellEdgeKey, MixedShellFacePlan, MixedShellMaterializationGap,
     MixedShellProofPlan, MixedShellVertexKey, MixedSourceFaceKey, MixedSourceParameterEvidence,
-    MixedSourceSpanKey, ProjectedSourceCircleOnPlane, ProjectedSourceCircleOnPlaneError,
-    SelectedOrientation,
+    MixedSourceSpanKey, ProjectedEndpointFreeSourceCircle, ProjectedSourceCircleOnPlane,
+    ProjectedSourceCircleOnPlaneError, SelectedOrientation,
 };
 use crate::{
     BodySectionGraph, SectionCarrier, SectionCurveEndpointTopology, SectionCurveFragmentSpan,
@@ -987,7 +988,7 @@ fn validate_periodic_source_use(
     use_index: usize,
     source: MixedSourceFaceKey,
     loop_key: PeriodicSourceLoopKey,
-) -> Result<(RawEdgeId, RawFinId), MixedShellMaterializationError> {
+) -> Result<(RawEdgeId, Option<RawFinId>), MixedShellMaterializationError> {
     let ring = endpoint_free_ring(plan, source, loop_key)?;
     let face = plan
         .faces()
@@ -1007,39 +1008,56 @@ fn validate_periodic_source_use(
         .and_then(|vertices| <&[_; 2]>::try_from(vertices).ok())
         .ok_or(MixedShellMaterializationError::EndpointFreeSourceRingMismatch)?;
     let expected_seam = MixedShellVertexKey::ProofSeam { source, loop_key };
-    if tail != &expected_seam
-        || head != &expected_seam
-        || !matches!(use_.pcurve(), MixedPcurveLineage::SourceTopology)
-    {
+    if tail != &expected_seam || head != &expected_seam {
         return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
     }
 
-    let (raw_loop, raw_fin) = if face.source() == ring.side_source()
-        && face.source_face().raw()
-            == store
-                .get(ring.side_loop())
-                .map_err(|_| MixedShellMaterializationError::StoreRead)?
-                .face()
-    {
-        (ring.side_loop(), ring.side_fin())
-    } else if face.source() == ring.cap_source() && face.source_face() == ring.cap_face() {
-        (ring.cap_loop(), ring.cap_fin())
-    } else {
-        return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+    let raw_fin = match use_.pcurve() {
+        MixedPcurveLineage::SourceTopology
+            if face.source() == ring.side_source() && face.source_face() == ring.side_face() =>
+        {
+            Some(ring.side_fin())
+        }
+        MixedPcurveLineage::SourceTopology
+            if face.source() == ring.cap_source() && face.source_face() == ring.cap_face() =>
+        {
+            Some(ring.cap_fin())
+        }
+        MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(proof)
+            if proof.source() == source
+                && proof.source_face() == ring.side_face()
+                && proof.target() == face.source()
+                && proof.target_face() == face.source_face()
+                && proof.loop_key() == loop_key
+                && proof.edge() == ring.edge() =>
+        {
+            None
+        }
+        _ => return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch),
     };
-    let raw_loop_value = store
-        .get(raw_loop)
+    let side_loop = store
+        .get(ring.side_loop())
         .map_err(|_| MixedShellMaterializationError::StoreRead)?;
-    let raw_fin_value = store
-        .get(raw_fin)
+    let side_fin = store
+        .get(ring.side_fin())
+        .map_err(|_| MixedShellMaterializationError::StoreRead)?;
+    let cap_loop = store
+        .get(ring.cap_loop())
+        .map_err(|_| MixedShellMaterializationError::StoreRead)?;
+    let cap_fin = store
+        .get(ring.cap_fin())
         .map_err(|_| MixedShellMaterializationError::StoreRead)?;
     let raw_edge_value = store
         .get(ring.edge())
         .map_err(|_| MixedShellMaterializationError::StoreRead)?;
-    if raw_loop_value.face() != face.source_face().raw()
-        || raw_loop_value.fins() != [raw_fin]
-        || raw_fin_value.parent() != raw_loop
-        || raw_fin_value.edge() != ring.edge()
+    if side_loop.face() != ring.side_face().raw()
+        || side_loop.fins() != [ring.side_fin()]
+        || side_fin.parent() != ring.side_loop()
+        || side_fin.edge() != ring.edge()
+        || cap_loop.face() != ring.cap_face().raw()
+        || cap_loop.fins() != [ring.cap_fin()]
+        || cap_fin.parent() != ring.cap_loop()
+        || cap_fin.edge() != ring.edge()
         || raw_edge_value.vertices() != [None, None]
         || raw_edge_value.bounds().is_some()
         || raw_edge_value.tolerance().is_some()
@@ -1053,18 +1071,22 @@ fn validate_periodic_source_use(
     let AnalyticShellCurve::Circle(circle) = carrier else {
         return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
     };
-    let pcurve = raw_fin_value
-        .pcurve()
-        .ok_or(MixedShellMaterializationError::EndpointFreeSourceRingMismatch)?;
-    let full = circle.param_range();
-    let mapped = [
-        pcurve.edge_to_pcurve().map(full.lo),
-        pcurve.edge_to_pcurve().map(full.hi),
-    ];
-    if pcurve.range() != ParamRange::new(mapped[0].min(mapped[1]), mapped[0].max(mapped[1]))
-        || pcurve.closure_winding().is_none()
-    {
-        return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+    if let Some(raw_fin) = raw_fin {
+        let pcurve = store
+            .get(raw_fin)
+            .map_err(|_| MixedShellMaterializationError::StoreRead)?
+            .pcurve()
+            .ok_or(MixedShellMaterializationError::EndpointFreeSourceRingMismatch)?;
+        let full = circle.param_range();
+        let mapped = [
+            pcurve.edge_to_pcurve().map(full.lo),
+            pcurve.edge_to_pcurve().map(full.hi),
+        ];
+        if pcurve.range() != ParamRange::new(mapped[0].min(mapped[1]), mapped[0].max(mapped[1]))
+            || pcurve.closure_winding().is_none()
+        {
+            return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+        }
     }
     Ok((ring.edge(), raw_fin))
 }
@@ -1268,6 +1290,116 @@ fn intrinsic_source_range(
         source_parameter(retained.source, evidence[1], source_scalars, carrier_period)?,
     ];
     Ok(parameters)
+}
+
+fn certified_retained_source_range(
+    store: &Store,
+    retained: &RetainedPlanarSpan,
+) -> Result<([f64; 2], [PhysicalVertex; 2]), MixedShellMaterializationError> {
+    let fin = store
+        .get(retained.fin)
+        .map_err(|_| MixedShellMaterializationError::StoreRead)?;
+    let mut evidence = retained.range.each_ref();
+    if fin.sense() == Sense::Reversed {
+        evidence.reverse();
+    }
+    let AnalyticShellCurve::Circle(circle) = source_carrier(store, retained.edge)? else {
+        return Err(MixedShellMaterializationError::UnsupportedSourceCurve);
+    };
+    let period = circle.param_range().width();
+    let mut parameters = [0.0; 2];
+    for (index, value) in evidence.iter().enumerate() {
+        parameters[index] = match value {
+            RetainedSpanParameter::SourceVertex {
+                edge_parameter_bits,
+                ..
+            } => f64::from_bits(*edge_parameter_bits),
+            RetainedSpanParameter::SectionRoot {
+                enclosure_bits,
+                parameter_bits,
+                period_shift,
+                ..
+            } => {
+                let canonical = f64::from_bits(*parameter_bits);
+                let enclosure = enclosure_bits.map(f64::from_bits);
+                if !canonical.is_finite()
+                    || enclosure[0] > canonical
+                    || canonical > enclosure[1]
+                    || !period.is_finite()
+                    || period <= 0.0
+                {
+                    return Err(MixedShellMaterializationError::ScalarOutsideCertifiedRange);
+                }
+                canonical + f64::from(*period_shift) * period
+            }
+        };
+    }
+    if !parameters.into_iter().all(f64::is_finite) || parameters[0] >= parameters[1] {
+        return Err(MixedShellMaterializationError::ScalarOutsideCertifiedRange);
+    }
+    Ok((parameters, evidence.map(evidence_vertex)))
+}
+
+fn source_circle_split_piece(
+    plan: &MixedShellProofPlan,
+    store: &Store,
+    physical: &PhysicalEdge,
+    raw_edge: RawEdgeId,
+) -> Result<Option<AnalyticEdgeSplitPiece>, MixedShellMaterializationError> {
+    let AnalyticShellCurve::Circle(circle) = source_carrier(store, raw_edge)? else {
+        return Ok(None);
+    };
+    let current = source_span_for_edge(plan, physical)?;
+    let current_range = certified_retained_source_range(store, current)?.0;
+    let mut candidates = Vec::<([f64; 2], [PhysicalVertex; 2])>::new();
+    for retained in plan
+        .materialization
+        .source_spans
+        .iter()
+        .filter(|retained| retained.edge == raw_edge)
+    {
+        let candidate = certified_retained_source_range(store, retained)?;
+        if !candidates.iter().any(|existing| {
+            existing.0.map(f64::to_bits) == candidate.0.map(f64::to_bits)
+                && existing.1 == candidate.1
+        }) {
+            candidates.push(candidate);
+        }
+    }
+    if candidates.len() != 2 {
+        return Ok(None);
+    }
+    candidates.sort_by(|first, second| {
+        first.0[0]
+            .total_cmp(&second.0[0])
+            .then(first.0[1].total_cmp(&second.0[1]))
+    });
+    let raw = store
+        .get(raw_edge)
+        .map_err(|_| MixedShellMaterializationError::StoreRead)?;
+    let period = circle.param_range().width();
+    let covered = candidates[1].0[1] - candidates[0].0[0];
+    let epsilon = 256.0
+        * f64::EPSILON
+        * candidates[1].0[1]
+            .abs()
+            .max(candidates[0].0[0].abs())
+            .max(1.0);
+    if raw.vertices() != [None, None]
+        || raw.bounds().is_some()
+        || candidates[0].0[1].to_bits() != candidates[1].0[0].to_bits()
+        || candidates[0].1 != [candidates[1].1[1], candidates[1].1[0]]
+        || (covered - period).abs() > epsilon
+    {
+        return Ok(None);
+    }
+    if current_range.map(f64::to_bits) == candidates[0].0.map(f64::to_bits) {
+        Ok(Some(AnalyticEdgeSplitPiece::First))
+    } else if current_range.map(f64::to_bits) == candidates[1].0.map(f64::to_bits) {
+        Ok(Some(AnalyticEdgeSplitPiece::Second))
+    } else {
+        Err(MixedShellMaterializationError::MissingPlanarLineage)
+    }
 }
 
 fn section_edge(
@@ -1625,6 +1757,45 @@ fn projected_source_circle_pcurve(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn projected_endpoint_free_source_circle_pcurve(
+    plan: &MixedShellProofPlan,
+    store: &Store,
+    face_index: usize,
+    source: MixedSourceFaceKey,
+    loop_key: PeriodicSourceLoopKey,
+    proof: &ProjectedEndpointFreeSourceCircle,
+) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
+    let ring = endpoint_free_ring(plan, source, loop_key)?;
+    let target = plan
+        .faces()
+        .get(face_index)
+        .ok_or(MixedShellMaterializationError::EndpointFreeSourceRingMismatch)?;
+    if proof.source() != source
+        || proof.source_face() != ring.side_face()
+        || proof.target() != target.source()
+        || proof.target_face() != target.source_face()
+        || proof.loop_key() != loop_key
+        || proof.edge() != ring.edge()
+    {
+        return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+    }
+    let expected = ProjectedEndpointFreeSourceCircle::certify(
+        store,
+        ring,
+        target.source(),
+        target.source_face(),
+        proof.tolerance(),
+    )
+    .map_err(projected_source_circle_error)?;
+    if &expected != proof {
+        return Err(projected_source_circle_error(
+            ProjectedSourceCircleOnPlaneError::InvalidProjection,
+        ));
+    }
+    proof.pcurve().map_err(projected_source_circle_error)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn materialized_pcurve_for_use(
     plan: &MixedShellProofPlan,
     store: &Store,
@@ -1648,7 +1819,8 @@ fn materialized_pcurve_for_use(
                         physical, proof,
                     )
                 }
-                MixedPcurveLineage::Section { .. } => {
+                MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(_)
+                | MixedPcurveLineage::Section { .. } => {
                     Err(MixedShellMaterializationError::UnsupportedPcurve)
                 }
             }
@@ -1677,10 +1849,28 @@ fn materialized_pcurve_for_use(
             {
                 return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
             }
-            let fin = store
-                .get(raw_fin)
-                .map_err(|_| MixedShellMaterializationError::StoreRead)?;
-            source_pcurve_for_fin(store, fin, true)
+            match use_.pcurve() {
+                MixedPcurveLineage::SourceTopology => {
+                    let fin = store
+                        .get(raw_fin.ok_or(
+                            MixedShellMaterializationError::EndpointFreeSourceRingMismatch,
+                        )?)
+                        .map_err(|_| MixedShellMaterializationError::StoreRead)?;
+                    source_pcurve_for_fin(store, fin, true)
+                }
+                MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(proof) => {
+                    if raw_fin.is_some() {
+                        return Err(MixedShellMaterializationError::EndpointFreeSourceRingMismatch);
+                    }
+                    projected_endpoint_free_source_circle_pcurve(
+                        plan, store, face_index, *source, *loop_key, proof,
+                    )
+                }
+                MixedPcurveLineage::ProjectedSourceCircleOnPlane(_)
+                | MixedPcurveLineage::Section { .. } => {
+                    Err(MixedShellMaterializationError::UnsupportedPcurve)
+                }
+            }
         }
     }
 }
@@ -1933,11 +2123,7 @@ fn build_mixed_shell_input_from_blueprint(
             PhysicalCarrier::Source(raw_edge) => {
                 let parameters =
                     intrinsic_source_range(plan, store, physical, &mut source_scalars)?;
-                (
-                    source_carrier(store, raw_edge)?,
-                    parameters,
-                    Some(EntityRef::Edge(raw_edge)),
-                )
+                (source_carrier(store, raw_edge)?, parameters, Some(raw_edge))
             }
             PhysicalCarrier::Section(fragment) => {
                 let section = section_edge(plan, fragment)?;
@@ -1976,7 +2162,11 @@ fn build_mixed_shell_input_from_blueprint(
         }
         let mut edge = AnalyticShellEdge::new(key, vertices, carrier, range);
         if let Some(source) = source {
-            edge = edge.with_source(source);
+            edge = if let Some(piece) = source_circle_split_piece(plan, store, physical, source)? {
+                edge.with_split_lineage(EntityRef::Edge(source), piece)
+            } else {
+                edge.with_source(EntityRef::Edge(source))
+            };
         }
         analytic_edges.push(edge);
         analytic_edge_ranges.push(range);
@@ -2078,10 +2268,16 @@ fn build_mixed_shell_input_from_blueprint(
         let key = u64::try_from(face_index)
             .map(AnalyticFaceKey::new)
             .map_err(|_| MixedShellMaterializationError::WorkCountOverflow)?;
-        analytic_faces.push(
-            AnalyticShellFace::new(key, surface, sense, domain, loops)
-                .with_source(EntityRef::Face(face.source_face().raw())),
-        );
+        let analytic = AnalyticShellFace::new(key, surface, sense, domain, loops);
+        analytic_faces.push(if let Some(sources) = face.merge_sources() {
+            analytic.with_merge_sources(
+                sources
+                    .each_ref()
+                    .map(|source| EntityRef::Face(source.raw())),
+            )
+        } else {
+            analytic.with_source(EntityRef::Face(face.source_face().raw()))
+        });
     }
     Ok(
         AnalyticShellInput::new(analytic_vertices, analytic_edges, analytic_faces)

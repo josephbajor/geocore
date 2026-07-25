@@ -16,6 +16,8 @@ use crate::operation::{
 use crate::{BodyId, PartEdit};
 
 #[allow(dead_code)]
+mod axial_contact_adapter;
+#[allow(dead_code)]
 mod axial_interval_sweep;
 #[allow(dead_code)]
 mod boundary_select;
@@ -67,8 +69,6 @@ mod mixed_periodic_arrangement;
 mod mixed_shell_plan;
 #[allow(dead_code)]
 mod parallel_cylinder_boundary;
-#[allow(dead_code)]
-mod parallel_cylinder_contact;
 #[allow(dead_code)]
 mod parallel_cylinder_internal_tangency;
 #[allow(dead_code)]

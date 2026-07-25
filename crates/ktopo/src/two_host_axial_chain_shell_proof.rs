@@ -23,10 +23,36 @@ use super::mixed_profile_prism_proof::{
     translated_vertices,
 };
 use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
+use crate::semantic_planar_math::{
+    IntervalVec3, cross as interval_cross, dot as interval_dot, point as interval_point,
+    sub as interval_sub,
+};
+
+#[path = "two_host_axial_chain_shell_proof/internal_tangent.rs"]
+mod internal_tangent;
 
 #[cfg(test)]
 #[path = "two_host_axial_chain_shell_proof/tests.rs"]
 mod tests;
+
+/// Compatibility stage retained for axial-contact shell proof accounting.
+pub(crate) const PARALLEL_CYLINDER_CONTACT_SHELL_WORK: StageId =
+    match StageId::new("ktopo.check.parallel-cylinder-contact-shell-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid parallel-cylinder contact shell work stage"),
+    };
+
+const DEFAULT_PARALLEL_CYLINDER_CONTACT_SHELL_WORK: u64 = 4096;
+
+pub(super) fn axial_contact_proof_budget() -> BudgetPlan {
+    BudgetPlan::new([LimitSpec::new(
+        PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        DEFAULT_PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
+    )])
+    .expect("built-in parallel-cylinder contact shell proof budget is valid")
+}
 
 /// Cumulative deterministic work for two-host axial-chain shell proofs.
 pub(crate) const TWO_HOST_AXIAL_CHAIN_SHELL_WORK: StageId =
@@ -47,11 +73,16 @@ pub(super) fn two_host_axial_chain_proof_budget() -> BudgetPlan {
     .expect("built-in two-host axial-chain shell proof budget is valid")
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct WholeEnd {
     face: FaceId,
     center: Point3,
     plane: kgeom::surface::Plane,
+    edge: EdgeId,
+    circle: kgeom::curve::Circle,
+    axial_parameter: f64,
+    cap_axis_alignment: PredicateOrientation,
+    side_traverses_positive_u: bool,
     local_orientation_valid: bool,
     host_loop_orientation: PredicateOrientation,
 }
@@ -78,6 +109,13 @@ struct HostBand {
 }
 
 #[derive(Debug)]
+struct WholeBand {
+    face: FaceId,
+    cylinder: Cylinder,
+    ends: [WholeEnd; 2],
+}
+
+#[derive(Debug)]
 struct Transition {
     cap: Cap,
     first: CapUse,
@@ -96,7 +134,7 @@ struct Chain {
 pub(super) fn certify_two_host_axial_chain_shell(
     store: &Store,
     shell_id: ShellId,
-    scope: Option<&mut OperationScope<'_, '_>>,
+    mut scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
     let shell = store.get(shell_id)?;
     if !shell.edges.is_empty() || shell.vertex.is_some() {
@@ -124,7 +162,7 @@ pub(super) fn certify_two_host_axial_chain_shell(
     if cylinder_count < 2 {
         return Ok(None);
     }
-    if let Some(scope) = scope {
+    if let Some(scope) = scope.as_deref_mut() {
         scope.ledger().require_limit(
             TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
             ResourceKind::Work,
@@ -149,14 +187,79 @@ pub(super) fn certify_two_host_axial_chain_shell(
             if first_face == second_face {
                 continue;
             }
-            if let Some(certification) =
+            if let Some((certification, contact)) =
                 certify_host_pair(store, shell_id, first_face, first, second_face, second)?
             {
+                if contact && !charge_contact_proof(store, shell_id, scope.as_deref_mut())? {
+                    return Ok(Some(indeterminate()));
+                }
                 return Ok(Some(certification));
             }
         }
     }
-    Ok(None)
+    if let Some(certification) = certify_nested_axial_contact(store, shell_id, &cylinders)? {
+        if !charge_contact_proof(store, shell_id, scope.as_deref_mut())? {
+            return Ok(Some(indeterminate()));
+        }
+        return Ok(Some(certification));
+    }
+    let certification =
+        internal_tangent::certify_internal_tangent_contact(store, shell_id, &cylinders)?;
+    if certification.is_some() && !charge_contact_proof(store, shell_id, scope)? {
+        return Ok(Some(indeterminate()));
+    }
+    Ok(certification)
+}
+
+fn charge_contact_proof(
+    store: &Store,
+    shell_id: ShellId,
+    scope: Option<&mut OperationScope<'_, '_>>,
+) -> Result<bool> {
+    let Some(scope) = scope else {
+        return Ok(true);
+    };
+    scope.ledger().require_limit(
+        PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+    )?;
+    let Some(work) = contact_proof_work(store, shell_id)? else {
+        return Ok(false);
+    };
+    scope
+        .ledger_mut()
+        .charge(PARALLEL_CYLINDER_CONTACT_SHELL_WORK, work)?;
+    Ok(true)
+}
+
+fn contact_proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
+    let shell = store.get(shell_id)?;
+    let mut loops = 0_u64;
+    let mut fins = 0_u64;
+    for &face in &shell.faces {
+        for &loop_id in &store.get(face)?.loops {
+            loops = match loops.checked_add(1) {
+                Some(value) => value,
+                None => return Ok(None),
+            };
+            fins = match fins.checked_add(store.get(loop_id)?.fins.len() as u64) {
+                Some(value) => value,
+                None => return Ok(None),
+            };
+        }
+    }
+    let Some(faces) = u64::try_from(shell.faces.len()).ok() else {
+        return Ok(None);
+    };
+    faces
+        .checked_mul(32)
+        .and_then(|work| work.checked_add(loops.checked_mul(16)?))
+        .and_then(|work| work.checked_add(fins.checked_mul(16)?))
+        .map(Some)
+        .ok_or(kcore::error::Error::InvalidGeometry {
+            reason: "axial contact shell proof work overflow",
+        })
 }
 
 /// No-scratch bound for every ordered host-pair scan. With `U` fin uses,
@@ -236,7 +339,7 @@ fn certify_host_pair(
     first: Cylinder,
     second_face: FaceId,
     second: Cylinder,
-) -> Result<Option<ShellCertification>> {
+) -> Result<Option<(ShellCertification, bool)>> {
     if !certified_parallel(first.frame().z(), second.frame().z()) {
         return Ok(None);
     }
@@ -254,27 +357,105 @@ fn certify_host_pair(
     let Some(transitions) = prepare_transitions(store, &first, &second)? else {
         return Ok(None);
     };
-    let Some(chain) = prepare_chain(store, &first, &second, transitions)? else {
-        return Ok(None);
-    };
-    let lower = &chain.transitions[chain.lower];
-    let upper = &chain.transitions[chain.upper];
-    if !certify_chain_geometry(store, &first, &second, lower, upper, &chain.translation)? {
+    if let Some(chain) = prepare_chain(store, &first, &second, transitions)? {
+        let lower = &chain.transitions[chain.lower];
+        let upper = &chain.transitions[chain.upper];
+        if !certify_chain_geometry(store, &first, &second, lower, upper, &chain.translation)? {
+            return Ok(None);
+        }
+        let mut role_faces = vec![first.face, second.face, first.whole.face, second.whole.face];
+        role_faces.extend(chain.transitions.iter().map(|end| end.cap.face));
+        if !all_shell_faces_consumed(store, shell_id, &role_faces)? {
+            return Ok(None);
+        }
+        return Ok(Some((
+            certification_from_orientation(
+                store,
+                &first,
+                &second,
+                lower,
+                upper,
+                chain.translation.vector,
+            )?,
+            false,
+        )));
+    }
+    Ok(
+        certify_zero_transition_chain(store, shell_id, &first, &second)?
+            .map(|certification| (certification, true)),
+    )
+}
+
+fn certify_zero_transition_chain(
+    store: &Store,
+    shell_id: ShellId,
+    first: &HostBand,
+    second: &HostBand,
+) -> Result<Option<ShellCertification>> {
+    if !first.boundary.rulings.is_empty() || !second.boundary.rulings.is_empty() {
         return Ok(None);
     }
-    let mut role_faces = vec![first.face, second.face, first.whole.face, second.whole.face];
-    role_faces.extend(chain.transitions.iter().map(|end| end.cap.face));
-    if !all_shell_faces_consumed(store, shell_id, &role_faces)? {
+    let Some(transitions) = prepare_transitions(store, first, second)? else {
+        return Ok(None);
+    };
+    let axis = circle_center(transitions[0].first)? - first.whole.center;
+    if transitions.len() != 2
+        || !certified_nonzero(axis)
+        || !certified_parallel(axis, first.cylinder.frame().z())
+        || !certified_parallel(axis, second.cylinder.frame().z())
+    {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for lower in 0..2 {
+        let upper = 1 - lower;
+        let low = &transitions[lower];
+        let high = &transitions[upper];
+        let Some(translation) = zero_translation(&low.cap, &high.cap) else {
+            continue;
+        };
+        let contact = circle_center(low.first)?;
+        if strictly_precedes(first.whole.center, contact, axis)
+            && strictly_precedes(contact, second.whole.center, axis)
+            && complementary_arcs(low.first, high.first, &translation)
+            && complementary_arcs(low.second, high.second, &translation)
+            && certify_radial_roles(first.cylinder, second.cylinder, low, high)
+        {
+            candidates.push((lower, upper));
+        }
+    }
+    let [(lower, upper)] = candidates.as_slice() else {
+        return Ok(None);
+    };
+    let lower = &transitions[*lower];
+    let upper = &transitions[*upper];
+    let mut roles = vec![first.face, second.face, first.whole.face, second.whole.face];
+    roles.extend(transitions.iter().map(|transition| transition.cap.face));
+    if !all_shell_faces_consumed(store, shell_id, &roles)? {
         return Ok(None);
     }
     Ok(Some(certification_from_orientation(
-        store,
-        &first,
-        &second,
-        lower,
-        upper,
-        chain.translation.vector,
+        store, first, second, lower, upper, axis,
     )?))
+}
+
+fn zero_translation(first: &Cap, second: &Cap) -> Option<Translation> {
+    if first.vertices.len() != second.vertices.len()
+        || first
+            .vertices
+            .iter()
+            .any(|vertex| !second.vertices.contains(vertex))
+    {
+        return None;
+    }
+    Some(Translation {
+        vector: Vec3::new(0.0, 0.0, 0.0),
+        vertices: first
+            .vertices
+            .iter()
+            .map(|vertex| (*vertex, *vertex))
+            .collect(),
+    })
 }
 
 fn prepare_host_band(
@@ -316,6 +497,152 @@ fn prepare_host_band(
     }))
 }
 
+fn certify_nested_axial_contact(
+    store: &Store,
+    shell_id: ShellId,
+    cylinders: &[(FaceId, Cylinder)],
+) -> Result<Option<ShellCertification>> {
+    let [(first_face, first), (second_face, second)] = cylinders else {
+        return Ok(None);
+    };
+    let (Some(first), Some(second)) = (
+        prepare_whole_band(store, shell_id, *first_face, *first)?,
+        prepare_whole_band(store, shell_id, *second_face, *second)?,
+    ) else {
+        return Ok(None);
+    };
+    let shared = first
+        .ends
+        .iter()
+        .enumerate()
+        .flat_map(|(a, end)| {
+            second
+                .ends
+                .iter()
+                .enumerate()
+                .filter_map(move |(b, peer)| (end.face == peer.face).then_some((a, b)))
+        })
+        .collect::<Vec<_>>();
+    let [(first_contact, second_contact)] = shared.as_slice() else {
+        return Ok(None);
+    };
+    let (outer, outer_contact, inner, inner_contact) =
+        if strictly_contains_cylinder_support(first.cylinder, second.cylinder) {
+            (&first, *first_contact, &second, *second_contact)
+        } else if strictly_contains_cylinder_support(second.cylinder, first.cylinder) {
+            (&second, *second_contact, &first, *first_contact)
+        } else {
+            return Ok(None);
+        };
+    let annulus = outer.ends[outer_contact];
+    if store.get(annulus.face)?.loops.len() != 2
+        || certify_face_loop_layout(store, annulus.face)? != LoopContainment::Certified
+    {
+        return Ok(None);
+    }
+    let outer_far = outer.ends[1 - outer_contact];
+    let inner_far = inner.ends[1 - inner_contact];
+    let roles = [
+        outer.face,
+        inner.face,
+        annulus.face,
+        outer_far.face,
+        inner_far.face,
+    ];
+    if outer_far.face == inner_far.face
+        || !all_shell_faces_consumed(store, shell_id, &roles)?
+        || !matches!(
+            (
+                exact_affine_sign(annulus.plane.frame().z(), outer_far.center, annulus.center,),
+                exact_affine_sign(annulus.plane.frame().z(), inner_far.center, annulus.center,),
+            ),
+            (
+                Some(PredicateOrientation::Negative),
+                Some(PredicateOrientation::Positive)
+            ) | (
+                Some(PredicateOrientation::Positive),
+                Some(PredicateOrientation::Negative)
+            )
+        )
+    {
+        return Ok(None);
+    }
+    let annulus_face = store.get(annulus.face)?;
+    let annulus_outward = annulus.plane.frame().z() * sense_factor(annulus_face.sense);
+    let outer_side = exact_affine_sign(annulus_outward, outer_far.center, annulus.center);
+    let inner_side = exact_affine_sign(annulus_outward, inner_far.center, annulus.center);
+    let outer_orientation = nested_band_orientation_valid(store, outer, outer_contact, true)?;
+    let inner_orientation = nested_band_orientation_valid(store, inner, inner_contact, false)?;
+    let coherent = outer_side == Some(PredicateOrientation::Negative)
+        && inner_side == Some(PredicateOrientation::Positive)
+        && outer_orientation
+        && inner_orientation;
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: if coherent {
+            ShellOrientation::Positive
+        } else {
+            ShellOrientation::Invalid
+        },
+    }))
+}
+
+fn prepare_whole_band(
+    store: &Store,
+    shell_id: ShellId,
+    face: FaceId,
+    cylinder: Cylinder,
+) -> Result<Option<WholeBand>> {
+    let entity = store.get(face)?;
+    let mut ends = Vec::with_capacity(2);
+    for &loop_id in &entity.loops {
+        let Some(end) = prepare_whole_end(store, shell_id, face, cylinder, loop_id)? else {
+            return Ok(None);
+        };
+        ends.push(end);
+    }
+    let [first, second] = ends.as_slice() else {
+        return Ok(None);
+    };
+    Ok((first.face != second.face).then_some(WholeBand {
+        face,
+        cylinder,
+        ends: [*first, *second],
+    }))
+}
+
+fn nested_band_orientation_valid(
+    store: &Store,
+    band: &WholeBand,
+    contact: usize,
+    outer: bool,
+) -> Result<bool> {
+    if store.get(band.face)?.sense != Sense::Forward {
+        return Ok(false);
+    }
+    let far = band.ends[1 - contact];
+    let contact = band.ends[contact];
+    let (low, high) = if far.axial_parameter < contact.axial_parameter {
+        (far, contact)
+    } else if contact.axial_parameter < far.axial_parameter {
+        (contact, far)
+    } else {
+        return Ok(false);
+    };
+    if !low.side_traverses_positive_u || high.side_traverses_positive_u {
+        return Ok(false);
+    }
+    let far_is_low = far.axial_parameter < contact.axial_parameter;
+    let expected_far = if far_is_low { -1 } else { 1 };
+    let expected_contact = if outer { -expected_far } else { expected_far };
+    Ok(
+        oriented_axis_alignment(far.cap_axis_alignment, store.get(far.face)?.sense)
+            == Some(expected_far)
+            && oriented_axis_alignment(contact.cap_axis_alignment, store.get(contact.face)?.sense)
+                == Some(expected_contact),
+    )
+}
+
 fn prepare_whole_end(
     store: &Store,
     shell_id: ShellId,
@@ -353,7 +680,8 @@ fn prepare_whole_end(
     };
     if *cap_fin_id != peer
         || cap.shell != shell_id
-        || cap.loops.as_slice() != [cap_loop_id]
+        || !matches!(cap.loops.len(), 1 | 2)
+        || !cap.loops.contains(&cap_loop_id)
         || certify_whole_fin_incidence(store, cap_face, cap_loop_id, peer, LINEAR_RESOLUTION)
             != WholeFinIncidence::Certified
     {
@@ -370,6 +698,39 @@ fn prepare_whole_end(
     {
         return Ok(None);
     }
+    let (Some(host_use), Some(cap_use)) = (host_fin.pcurve, store.get(peer)?.pcurve) else {
+        return Ok(None);
+    };
+    let (Curve2dGeom::Line(host_line), Curve2dGeom::Circle(cap_circle)) =
+        (store.get(host_use.curve())?, store.get(cap_use.curve())?)
+    else {
+        return Ok(None);
+    };
+    if host_line.dir().y != 0.0
+        || host_line.dir().x == 0.0
+        || host_use.closure_winding().is_none()
+        || cap_use.closure_winding().is_none()
+        || cap_circle.radius().to_bits() != circle.radius().to_bits()
+    {
+        return Ok(None);
+    }
+    let Some(edge_positive_host) = traversal_is_positive(
+        [host_line.dir().x, host_use.edge_to_pcurve().scale()],
+        Sense::Forward,
+    ) else {
+        return Ok(None);
+    };
+    let Some(side_traverses_positive_u) = traversal_is_positive(
+        [host_line.dir().x, host_use.edge_to_pcurve().scale()],
+        host_fin.sense,
+    ) else {
+        return Ok(None);
+    };
+    let Some(edge_positive_cap) =
+        traversal_is_positive([cap_use.edge_to_pcurve().scale()], Sense::Forward)
+    else {
+        return Ok(None);
+    };
     let (Some(host_orientation), Some(cap_orientation)) = (
         certify_loop_orientation(store, host_face, loop_id)?,
         certify_loop_orientation(store, cap_face, cap_loop_id)?,
@@ -380,6 +741,15 @@ fn prepare_whole_end(
         face: cap_face,
         center: circle.frame().origin(),
         plane: *plane,
+        edge: host_fin.edge,
+        circle: *circle,
+        axial_parameter: host_line.origin().y,
+        cap_axis_alignment: if edge_positive_host == edge_positive_cap {
+            PredicateOrientation::Positive
+        } else {
+            PredicateOrientation::Negative
+        },
+        side_traverses_positive_u,
         local_orientation_valid: (cap_orientation == PredicateOrientation::Positive)
             == cap.sense.is_forward(),
         host_loop_orientation: host_orientation,
@@ -453,13 +823,11 @@ fn prepare_boundary(
             _ => return Ok(None),
         }
     }
-    Ok(
-        (!arcs.is_empty() && !rulings.is_empty()).then_some(Boundary {
-            loop_orientation,
-            arcs,
-            rulings,
-        }),
-    )
+    Ok((!arcs.is_empty()).then_some(Boundary {
+        loop_orientation,
+        arcs,
+        rulings,
+    }))
 }
 
 fn prepare_transitions(
@@ -767,6 +1135,21 @@ fn strictly_precedes(first: Point3, second: Point3, direction: Vec3) -> bool {
     certified_nonzero(offset) && oriented_dot_sign(offset, direction) == Some(1)
 }
 
+fn axis_parameter_identity_is_exact(point: Point3, frame: Frame, parameter: f64) -> bool {
+    let point = point.to_array();
+    let origin = frame.origin().to_array();
+    let axis = frame.z().to_array();
+    (0..3).all(|component| {
+        affine_dot3(
+            [1.0, axis[component], -1.0],
+            [origin[component], parameter, point[component]],
+            [0.0; 3],
+            0.0,
+        )
+        .is_some_and(|value| value.sign() == PredicateOrientation::Zero)
+    })
+}
+
 fn circle_on_cylinder(circle: kgeom::curve::Circle, cylinder: Cylinder) -> bool {
     circle.radius().to_bits() == cylinder.radius().to_bits()
         && certified_parallel(circle.frame().z(), cylinder.frame().z())
@@ -774,15 +1157,40 @@ fn circle_on_cylinder(circle: kgeom::curve::Circle, cylinder: Cylinder) -> bool 
 }
 
 fn point_on_axis(frame: &Frame, point: Point3) -> bool {
-    let offset = point - frame.origin();
-    let radial = [frame.x(), frame.y()]
-        .into_iter()
-        .map(|axis| {
-            (Interval::point(axis.x) * Interval::point(offset.x)
-                + Interval::point(axis.y) * Interval::point(offset.y)
-                + Interval::point(axis.z) * Interval::point(offset.z))
-            .square()
-        })
-        .fold(Interval::point(0.0), |sum, value| sum + value);
+    let Some(radial) = axis_distance_squared(point, frame.origin(), frame.z()) else {
+        return false;
+    };
     radial.hi().is_finite() && radial.hi() <= Interval::point(LINEAR_RESOLUTION).square().lo()
+}
+
+fn strictly_contains_cylinder_support(outer: Cylinder, inner: Cylinder) -> bool {
+    if outer.radius() <= inner.radius() || !certified_parallel(outer.frame().z(), inner.frame().z())
+    {
+        return false;
+    }
+    let Some(radial) = axis_distance_squared(
+        inner.frame().origin(),
+        outer.frame().origin(),
+        outer.frame().z(),
+    ) else {
+        return false;
+    };
+    let clearance = Interval::point(outer.radius())
+        - Interval::point(inner.radius())
+        - Interval::point(2.0 * LINEAR_RESOLUTION);
+    radial.lo().is_finite()
+        && radial.hi().is_finite()
+        && clearance.lo().is_finite()
+        && clearance.lo() > 0.0
+        && radial.hi() < clearance.square().lo()
+}
+
+fn axis_distance_squared(point: Point3, origin: Point3, axis: Vec3) -> Option<Interval> {
+    let displacement = interval_sub(
+        interval_point(point.to_array()),
+        interval_point(origin.to_array()),
+    );
+    let axis: IntervalVec3 = interval_point(axis.to_array());
+    let cross = interval_cross(displacement, axis);
+    interval_dot(cross, cross).checked_div(interval_dot(axis, axis))
 }

@@ -510,10 +510,43 @@ pub(crate) fn arrange_section_disk_face(
     cap: &FaceId,
     operand: usize,
 ) -> Result<ArrangedDiskFace, SectionDiskArrangementError> {
+    arrange_section_disk_face_impl(store, graph, cap, operand, None)
+}
+
+/// Adapt an operation-owned subset of an indeterminate Section graph.
+///
+/// The caller's relation theorem must account for every global gap. This
+/// adapter admits only the explicitly named fragments carried by `cap`, keeps
+/// their original graph identities, and otherwise runs the ordinary disk
+/// arrangement proof unchanged.
+pub(crate) fn arrange_section_disk_face_from_fragment_subset(
+    store: &Store,
+    graph: &BodySectionGraph,
+    cap: &FaceId,
+    operand: usize,
+    selected_fragments: &[usize],
+) -> Result<ArrangedDiskFace, SectionDiskArrangementError> {
+    let mut selected = selected_fragments.to_vec();
+    selected.sort_unstable();
+    if selected.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(SectionDiskArrangementError::IncompleteSectionGraph);
+    }
+    arrange_section_disk_face_impl(store, graph, cap, operand, Some(&selected))
+}
+
+fn arrange_section_disk_face_impl(
+    store: &Store,
+    graph: &BodySectionGraph,
+    cap: &FaceId,
+    operand: usize,
+    selected_fragments: Option<&[usize]>,
+) -> Result<ArrangedDiskFace, SectionDiskArrangementError> {
     if operand >= graph.bodies().len() {
         return Err(SectionDiskArrangementError::InvalidOperand(operand));
     }
-    if graph.completion() != SectionCompletion::Complete || !graph.gaps().is_empty() {
+    if selected_fragments.is_none()
+        && (graph.completion() != SectionCompletion::Complete || !graph.gaps().is_empty())
+    {
         return Err(SectionDiskArrangementError::IncompleteSectionGraph);
     }
     if graph.bodies()[operand].part() != cap.part() {
@@ -528,7 +561,8 @@ pub(crate) fn arrange_section_disk_face(
     }
 
     let topology = disk_cap_topology(store, cap.raw())?;
-    let (mut roots, cuts, tolerance) = collect_section_cap_cuts(graph, cap, operand, topology)?;
+    let (mut roots, cuts, tolerance) =
+        collect_section_cap_cuts(graph, cap, operand, topology, selected_fragments)?;
     if certify_whole_fin_incidence(store, cap.raw(), topology.loop_id, topology.fin, tolerance)
         != WholeFinIncidence::Certified
     {
@@ -637,11 +671,17 @@ fn collect_section_cap_cuts(
     cap: &FaceId,
     operand: usize,
     topology: DiskCapTopology,
+    selected_fragments: Option<&[usize]>,
 ) -> Result<(Vec<UnorderedSectionRoot>, Vec<CertifiedDiskCut>, f64), SectionDiskArrangementError> {
     let mut roots = Vec::new();
     let mut cuts = Vec::new();
     let mut tolerance_bits = None;
     for (fragment_index, fragment) in graph.curve_fragments().iter().enumerate() {
+        if selected_fragments
+            .is_some_and(|selected| selected.binary_search(&fragment_index).is_err())
+        {
+            continue;
+        }
         let branch = graph.branches().get(fragment.branch()).ok_or(
             SectionDiskArrangementError::UnknownBranch {
                 fragment: fragment_index,
@@ -713,6 +753,7 @@ fn collect_section_cap_cuts(
                             &branch.faces()[1 - operand],
                             operand,
                             topology,
+                            selected_fragments.is_some(),
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -745,6 +786,9 @@ fn collect_section_cap_cuts(
         let [start, end] = bound;
         roots.extend([start, end]);
         cuts.push(cut);
+    }
+    if selected_fragments.is_some_and(|selected| selected.len() != cuts.len()) {
+        return Err(SectionDiskArrangementError::IncompleteSectionGraph);
     }
     let tolerance = tolerance_bits
         .map(f64::from_bits)
@@ -913,6 +957,7 @@ fn bind_section_cap_root(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bind_section_cap_arc_root(
     graph: &BodySectionGraph,
     end: &SectionCurveFragmentEnd,
@@ -921,6 +966,7 @@ fn bind_section_cap_arc_root(
     opposing_face: &FaceId,
     operand: usize,
     topology: DiskCapTopology,
+    admit_dual_boundary_root: bool,
 ) -> Result<UnorderedSectionRoot, SectionDiskArrangementError> {
     let endpoint_index = end.endpoint();
     let endpoint = graph.curve_endpoints().get(endpoint_index).ok_or(
@@ -961,20 +1007,57 @@ fn bind_section_cap_arc_root(
                 .root_parameter_enclosure()
                 .hi()
                 .to_bits();
+    let ordinary_opposing_site = matches!(
+        &sites[other],
+        SectionSite::FaceInterior(face) if face == opposing_face
+    ) && source_parameters[other].is_none()
+        && endpoint.edge_parameters()[other].is_none();
+    let dual_opposing_boundary = admit_dual_boundary_root
+        && matches!(
+            (&sites[other], source_parameters[other].as_ref(), endpoint.edge_parameters()[other]),
+            (SectionSite::EdgeInterior(edge), Some(peer), Some(peer_common))
+                if edge.raw() == peer.edge().raw()
+                    && peer_common.contains(peer.root_parameter())
+        );
+    let direct_cap_trim = (ordinary_opposing_site || dual_opposing_boundary)
+        && trim.operand() == operand
+        && trim.face() == cap.clone()
+        && trim.loop_id().raw() == topology.loop_id
+        && trim.fin().raw() == topology.fin
+        && trim.source_parameter().edge().raw() == topology.edge
+        && same_materialization
+        && observed.lo() <= common.lo()
+        && common.hi() <= observed.hi();
+    let dual_boundary_root = admit_dual_boundary_root
+        && matches!(&sites[other], SectionSite::EdgeInterior(edge) if edge.raw() == trim.source_parameter().edge().raw())
+        && source_parameters[other].as_ref().is_some_and(|peer| {
+            peer == trim.source_parameter()
+                && peer.root_parameter().to_bits()
+                    == trim.source_parameter().root_parameter().to_bits()
+                && peer.root_parameter_enclosure().lo().to_bits()
+                    == trim
+                        .source_parameter()
+                        .root_parameter_enclosure()
+                        .lo()
+                        .to_bits()
+                && peer.root_parameter_enclosure().hi().to_bits()
+                    == trim
+                        .source_parameter()
+                        .root_parameter_enclosure()
+                        .hi()
+                        .to_bits()
+        })
+        && endpoint.edge_parameters()[other].is_some_and(|peer_common| {
+            trim.edge_parameter().lo() <= peer_common.lo()
+                && peer_common.hi() <= trim.edge_parameter().hi()
+                && peer_common.contains(trim.source_parameter().root_parameter())
+        })
+        && trim.operand() == other
+        && trim.face() == opposing_face.clone();
     if !matches!(&sites[operand], SectionSite::EdgeInterior(edge) if edge.raw() == topology.edge)
-        || !matches!(&sites[other], SectionSite::FaceInterior(face) if face == opposing_face)
-        || source_parameters[other].is_some()
-        || endpoint.edge_parameters()[other].is_some()
         || source.edge().raw() != topology.edge
-        || trim.operand() != operand
-        || trim.face() != cap.clone()
-        || trim.loop_id().raw() != topology.loop_id
-        || trim.fin().raw() != topology.fin
-        || trim.source_parameter().edge().raw() != topology.edge
-        || !same_materialization
         || !common.contains(source.root_parameter())
-        || observed.lo() > common.lo()
-        || common.hi() > observed.hi()
+        || (!direct_cap_trim && !dual_boundary_root)
         || !half_angle.lo().is_finite()
         || !half_angle.hi().is_finite()
         || half_angle.lo() > half_angle.hi()

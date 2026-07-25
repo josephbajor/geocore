@@ -900,6 +900,7 @@ fn certify_face_paths(
         for (trace, ordinals) in runs.into_iter().enumerate() {
             pending_traces.push(certify_boundary_trace(
                 branches,
+                endpoints,
                 fragments,
                 component_index,
                 trace,
@@ -932,6 +933,7 @@ fn certify_face_paths(
                 .collect::<Vec<_>>();
             pending_traces.push(certify_boundary_trace_fragments(
                 branches,
+                endpoints,
                 fragments,
                 trace_group,
                 None,
@@ -1131,6 +1133,7 @@ fn maximal_linear_runs(carried: &[bool]) -> Vec<Vec<usize>> {
 #[allow(clippy::too_many_arguments)]
 fn certify_boundary_trace(
     branches: &[SectionBranch],
+    endpoints: &[SectionCurveEndpoint],
     fragments: &[SectionCurveFragment],
     component_index: usize,
     trace: usize,
@@ -1145,6 +1148,7 @@ fn certify_boundary_trace(
         .collect::<Vec<_>>();
     certify_boundary_trace_fragments(
         branches,
+        endpoints,
         fragments,
         component_index,
         Some(component_index),
@@ -1159,6 +1163,7 @@ fn certify_boundary_trace(
 #[allow(clippy::too_many_arguments)]
 fn certify_boundary_trace_fragments(
     branches: &[SectionBranch],
+    endpoints: &[SectionCurveEndpoint],
     fragments: &[SectionCurveFragment],
     trace_group: usize,
     source_component: Option<usize>,
@@ -1188,12 +1193,51 @@ fn certify_boundary_trace_fragments(
     let mut terminals = Vec::with_capacity(2);
     for (terminal_ordinal, (fragment_index, end)) in terminal_specs.into_iter().enumerate() {
         let fragment = &fragments[fragment_index];
-        let (endpoint, loop_id, source_parameter) = fragment_terminal(fragment, end, operand)
+        let direct_terminal = fragment_terminal(fragment, end, operand);
+        let endpoint = direct_terminal
+            .as_ref()
+            .map(|terminal| terminal.0)
+            .or_else(|| fragment_endpoint_ids(fragment).map(|indices| indices[end]))
             .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
                 component: trace_group,
                 fragment: fragment_index,
                 end: terminal_ordinal,
             })?;
+        let (ring_ordinal, source_parameter) = if let Some((_, loop_id, source_parameter)) =
+            direct_terminal
+        {
+            let ring_ordinal = rings
+                .iter()
+                .position(|ring| {
+                    ring.loop_id() == loop_id.raw() && ring.edge() == source_parameter.edge().raw()
+                })
+                .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
+                    component: trace_group,
+                    fragment: fragment_index,
+                    end: terminal_ordinal,
+                })?;
+            (ring_ordinal, source_parameter)
+        } else {
+            let endpoint_evidence = endpoints.get(endpoint).ok_or(
+                SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
+                    component: trace_group,
+                    fragment: fragment_index,
+                    end: terminal_ordinal,
+                },
+            )?;
+            rings
+                .iter()
+                .enumerate()
+                .find_map(|(ring_ordinal, ring)| {
+                    endpoint_source_root(endpoint_evidence, operand, ring)
+                        .map(|source_parameter| (ring_ordinal, source_parameter))
+                })
+                .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
+                    component: trace_group,
+                    fragment: fragment_index,
+                    end: terminal_ordinal,
+                })?
+        };
         let embedded = if end == 0 {
             &public_fragments[0]
         } else {
@@ -1207,16 +1251,6 @@ fn certify_boundary_trace_fragments(
                 end: terminal_ordinal,
             });
         }
-        let ring_ordinal = rings
-            .iter()
-            .position(|ring| {
-                ring.loop_id() == loop_id.raw() && ring.edge() == source_parameter.edge().raw()
-            })
-            .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
-                component: trace_group,
-                fragment: fragment_index,
-                end: terminal_ordinal,
-            })?;
         terminals.push(map_boundary_root(
             endpoint,
             ring_ordinal,

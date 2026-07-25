@@ -23,6 +23,7 @@ pub(crate) struct MixedCylinderCapRing {
     boundary: usize,
     operand: usize,
     cap_face: FaceId,
+    side_face: FaceId,
     cap_source: MixedSourceFaceKey,
     side_source: MixedSourceFaceKey,
     side_loop_key: PeriodicSourceLoopKey,
@@ -44,6 +45,10 @@ impl MixedCylinderCapRing {
 
     pub(crate) const fn cap_face(&self) -> &FaceId {
         &self.cap_face
+    }
+
+    pub(crate) const fn side_face(&self) -> &FaceId {
+        &self.side_face
     }
 
     pub(crate) const fn cap_source(&self) -> MixedSourceFaceKey {
@@ -287,6 +292,7 @@ pub(crate) fn bind_cylinder_cap_ring_from_embedding(
         boundary,
         operand: cylinder_operand,
         cap_face,
+        side_face: periodic_face.clone(),
         cap_source,
         side_source,
         side_loop_key: *span.key(),

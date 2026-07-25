@@ -584,6 +584,40 @@ pub(super) fn classify_disk_face(
     )
 }
 
+/// Classify a disk dual from a topology-owned source arc after applying an
+/// operation-certified model-space offset to its numeric witness.
+///
+/// The source arc still owns the anchor cell. The offset only moves the
+/// sample away from a coincident boundary before point/body classification.
+pub(super) fn classify_disk_face_from_source_offset(
+    part: &Part<'_>,
+    other: &BodyId,
+    disk: &ArrangedDiskFace,
+    offset: kgeom::vec::Vec3,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<BTreeMap<usize, DiskCellClassification>, MixedBoundaryError> {
+    let anchor_arc = disk
+        .source_arcs()
+        .first()
+        .ok_or(MixedBoundaryError::AnchorUnavailable)?;
+    let point = disk_source_arc_point(&part.state.store, anchor_arc)? + offset;
+    if ![point.x, point.y, point.z].into_iter().all(f64::is_finite) {
+        return Err(MixedBoundaryError::AnchorUnavailable);
+    }
+    let anchor = if classify_anchor(part, other, point, linear, scope)? {
+        DiskCellClassification::Interior
+    } else {
+        DiskCellClassification::Exterior
+    };
+    Ok(
+        classify_disk_face_from_anchor(disk, anchor_arc.key(), anchor)
+            .map_err(|_| MixedBoundaryError::SourceTopology)?
+            .classes()
+            .clone(),
+    )
+}
+
 fn disk_source_arc_point(
     store: &Store,
     source: &super::disk_face_arrangement::DiskSourceArcLineage,

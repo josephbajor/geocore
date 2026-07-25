@@ -1,4 +1,4 @@
-//! Internally tangent radius-transition shell theorem.
+//! Internally tangent radius-transition case of the axial-chain shell theorem.
 //!
 //! Every cylinder band has exactly two complete ring boundaries. Bounded
 //! contact rings form a connected path of one or two exact tangent shoulders;
@@ -13,6 +13,29 @@ use crate::analytic_tangency::{
     circles_are_exactly_internal_tangent, point_is_within_circle_endpoint_envelope,
 };
 use crate::loop_proof::is_one_vertex_full_period_circle_edge;
+
+#[derive(Debug, Clone, Copy)]
+struct RingBoundary {
+    face: FaceId,
+    edge: EdgeId,
+    circle: kgeom::curve::Circle,
+    axial_parameter: f64,
+    cap_axis_alignment: PredicateOrientation,
+    side_traverses_positive_u: bool,
+}
+
+impl From<WholeEnd> for RingBoundary {
+    fn from(end: WholeEnd) -> Self {
+        Self {
+            face: end.face,
+            edge: end.edge,
+            circle: end.circle,
+            axial_parameter: end.axial_parameter,
+            cap_axis_alignment: end.cap_axis_alignment,
+            side_traverses_positive_u: end.side_traverses_positive_u,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct TangentBoundary {
@@ -106,7 +129,7 @@ pub(super) fn certify_internal_tangent_contact(
     let reference_axis = cylinders[0].1.frame().z();
     if !cylinders
         .iter()
-        .all(|(_, cylinder)| vectors_are_exactly_parallel(reference_axis, cylinder.frame().z()))
+        .all(|(_, cylinder)| certified_parallel(reference_axis, cylinder.frame().z()))
     {
         return Ok(None);
     }
@@ -153,8 +176,8 @@ fn prepare_tangent_shoulders(
     let mut shoulder_faces = Vec::with_capacity(2);
     for band in bands {
         for contact in band.contacts() {
-            if !shoulder_faces.contains(&contact.ring.cap_face) {
-                shoulder_faces.push(contact.ring.cap_face);
+            if !shoulder_faces.contains(&contact.ring.face) {
+                shoulder_faces.push(contact.ring.face);
             }
         }
     }
@@ -167,7 +190,7 @@ fn prepare_tangent_shoulders(
         let mut sides = Vec::with_capacity(2);
         for (band_index, band) in bands.iter().enumerate() {
             for contact in band.contacts() {
-                if contact.ring.cap_face == face {
+                if contact.ring.face == face {
                     sides.push(ShoulderSide {
                         band: band_index,
                         contact,
@@ -202,8 +225,8 @@ fn prepare_tangent_shoulder(
     if first.band == second.band
         || first.contact.ring.edge == second.contact.ring.edge
         || first.contact.vertex != second.contact.vertex
-        || first.contact.ring.cap_face != face_id
-        || second.contact.ring.cap_face != face_id
+        || first.contact.ring.face != face_id
+        || second.contact.ring.face != face_id
     {
         return Ok(None);
     }
@@ -321,12 +344,12 @@ fn all_tangent_faces_consumed(
     for band in bands {
         for boundary in band.boundaries {
             if let TangentBandBoundary::Far(far) = boundary {
-                roles.push(far.cap_face);
+                roles.push(far.face);
             }
         }
     }
     roles.extend(shoulders.iter().map(|shoulder| shoulder.face));
-    all_faces_consumed(store, shell_id, &roles)
+    all_shell_faces_consumed(store, shell_id, &roles)
 }
 
 fn shoulders_straddle_adjacent_band_interiors(
@@ -422,7 +445,7 @@ fn tangent_band_orientation_valid(
             None => base_expected,
         };
         let ring = boundary.ring();
-        let cap = store.get(ring.cap_face)?;
+        let cap = store.get(ring.face)?;
         if oriented_axis_alignment(ring.cap_axis_alignment, cap.sense) != Some(expected) {
             return Ok(false);
         }
@@ -484,14 +507,14 @@ fn prepare_tangent_band(
         };
         let edge = store.get(store.get(*fin_id)?.edge)?;
         let boundary = if edge.bounds.is_none() {
-            let Some(candidate) = prepare_boundary(store, shell_id, face_id, cylinder, loop_id)?
+            let Some(candidate) = prepare_whole_end(store, shell_id, face_id, cylinder, loop_id)?
             else {
                 return Ok(None);
             };
-            if store.get(candidate.cap_face)?.loops.len() != 1 {
+            if store.get(candidate.face)?.loops.len() != 1 {
                 return Ok(None);
             }
-            TangentBandBoundary::Far(candidate)
+            TangentBandBoundary::Far(candidate.into())
         } else {
             let Some(candidate) =
                 prepare_tangent_boundary(store, shell_id, face_id, cylinder, loop_id)?
@@ -506,7 +529,7 @@ fn prepare_tangent_band(
         return Ok(None);
     };
     if first.ring().edge == second.ring().edge
-        || first.ring().cap_face == second.ring().cap_face
+        || first.ring().face == second.ring().face
         || first.contact().is_none() && second.contact().is_none()
     {
         return Ok(None);
@@ -590,7 +613,7 @@ fn prepare_tangent_boundary(
         return Ok(None);
     };
     if !circle_on_cylinder(*circle, cylinder)
-        || !vectors_are_exactly_parallel(cap_plane.frame().z(), cylinder.frame().z())
+        || !certified_parallel(cap_plane.frame().z(), cylinder.frame().z())
         || !point_is_within_plane_envelope(
             circle.frame().origin(),
             cap_plane.frame().origin(),
@@ -646,8 +669,7 @@ fn prepare_tangent_boundary(
     };
     Ok(Some(TangentBoundary {
         ring: RingBoundary {
-            side_loop: side_loop_id,
-            cap_face: cap_face_id,
+            face: cap_face_id,
             edge: side_fin.edge,
             circle: *circle,
             axial_parameter: side_line.origin().y,
@@ -658,19 +680,22 @@ fn prepare_tangent_boundary(
     }))
 }
 
-/// Prove the pcurve height against the authored cylinder axis without making
-/// a rounded frame evaluation into topology authority.
-fn axis_parameter_identity_is_exact(point: Point3, frame: Frame, parameter: f64) -> bool {
-    let point = point.to_array();
-    let origin = frame.origin().to_array();
-    let axis = frame.z().to_array();
-    (0..3).all(|component| {
-        affine_dot3(
-            [1.0, axis[component], -1.0],
-            [origin[component], parameter, point[component]],
-            [0.0; 3],
-            0.0,
-        )
-        .is_some_and(|value| value.sign() == PredicateOrientation::Zero)
-    })
+fn point_is_within_plane_envelope(
+    point: Point3,
+    origin: Point3,
+    normal: Vec3,
+    envelope: f64,
+) -> bool {
+    let projection = normal
+        .to_array()
+        .into_iter()
+        .zip(point.to_array())
+        .zip(origin.to_array())
+        .fold(Interval::point(0.0), |sum, ((normal, point), origin)| {
+            let normal = Interval::point(normal);
+            sum + normal * Interval::point(point) - normal * Interval::point(origin)
+        });
+    projection.lo().is_finite()
+        && projection.hi().is_finite()
+        && projection.square().hi() <= Interval::point(envelope).square().lo()
 }

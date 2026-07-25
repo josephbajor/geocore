@@ -18,7 +18,6 @@ use super::mixed_shell_plan::{
 use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
 };
-use super::parallel_cylinder_contact::execute_parallel_cylinder_contact_unite;
 use super::parallel_cylinder_internal_tangency::execute_parallel_cylinder_internal_tangency;
 use super::parallel_cylinder_interval::execute_parallel_cylinder_common_support;
 use super::parallel_cylinder_relation::{
@@ -166,7 +165,7 @@ fn execute_axial_contact_boolean(
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match operation {
         PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
-        PlanarBooleanOperation::Unite => execute_parallel_cylinder_contact_unite(
+        PlanarBooleanOperation::Unite => super::axial_contact_adapter::execute_axial_contact_unite(
             edit, bodies, cylinders, graph, contact, linear, scope,
         ),
         PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(

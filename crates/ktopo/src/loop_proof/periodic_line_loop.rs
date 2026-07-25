@@ -373,13 +373,13 @@ fn periodic_graph_is_simple(
         })
 }
 
-/// A same-height monotone subdivision whose proof-local charted joins are
+/// A same-height monotone subdivision whose authored pcurve joins are
 /// bit-identical modulo one explicit period addition and whose total winding
 /// is +/-1 is exactly one simple horizontal ring. `lift_cycle` independently
-/// authorizes every join through topology identity, whole-fin incidence, and
-/// surface-lifted distance. The exact coordinate relation rules out even tiny
-/// same-carrier overlaps without asking the generic pair engine to reinterpret
-/// coincident Line2d carriers.
+/// authorizes every proof-local chart join through topology identity,
+/// whole-fin incidence, and surface-lifted distance. Checking before the
+/// integer chart translation avoids losing one ulp to subtracting and
+/// re-adding a period while still rejecting any authored overlap.
 fn horizontal_ring_is_simple(raw: &[RawSpan<'_>], cycle: &LiftedCycle<'_>, period: f64) -> bool {
     let Some(first) = raw.first() else {
         return false;
@@ -403,7 +403,7 @@ fn horizontal_ring_is_simple(raw: &[RawSpan<'_>], cycle: &LiftedCycle<'_>, perio
             && span.start.y.to_bits() == height.to_bits()
             && span.end.y.to_bits() == height.to_bits()
             && next.start.y.to_bits() == height.to_bits()
-            && exact_periodic_coordinate_join(span.end.x, next.start.x, period)
+            && exact_periodic_geometry_join(span.geometry, next.geometry, period)
             && if cycle.winding > 0 {
                 du.lo() > 0.0
             } else {
@@ -412,12 +412,23 @@ fn horizontal_ring_is_simple(raw: &[RawSpan<'_>], cycle: &LiftedCycle<'_>, perio
     })
 }
 
-fn exact_periodic_coordinate_join(left: f64, right: f64, period: f64) -> bool {
-    left.is_finite()
-        && right.is_finite()
-        && (left.to_bits() == right.to_bits()
-            || (left + period).to_bits() == right.to_bits()
-            || left.to_bits() == (right + period).to_bits())
+fn exact_periodic_geometry_join(
+    left: BoundedPcurveSpan<'_>,
+    right: BoundedPcurveSpan<'_>,
+    period: f64,
+) -> bool {
+    let Some((_, left)) = span_endpoints(left.with_chart_offset(Point2::default())) else {
+        return false;
+    };
+    let Some((right, _)) = span_endpoints(right.with_chart_offset(Point2::default())) else {
+        return false;
+    };
+    left.y.to_bits() == right.y.to_bits()
+        && left.x.is_finite()
+        && right.x.is_finite()
+        && (left.x.to_bits() == right.x.to_bits()
+            || (left.x + period).to_bits() == right.x.to_bits()
+            || left.x.to_bits() == (right.x + period).to_bits())
 }
 
 /// Check one base traversal together with both adjacent period translates.

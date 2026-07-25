@@ -80,7 +80,7 @@ pub(crate) fn plan_parallel_cylinder_coincident_boolean<'a>(
         SectionPlanningAdmission::CoincidentCaps(relation),
         bindings,
         arranged,
-        |faces, spans| append_cap_faces(store, graph, &caps, faces, spans, linear),
+        |_, faces, spans, _| append_cap_faces(store, graph, &caps, faces, spans, linear),
     )
 }
 
@@ -213,6 +213,7 @@ fn append_cap_faces(
             source_face: cap.target_face().clone(),
             selected_orientation: plan.orientation(),
             loops: vec![loop_],
+            merge_sources: None,
         });
     }
     Ok(())
