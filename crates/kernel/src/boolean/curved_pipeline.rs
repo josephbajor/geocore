@@ -40,7 +40,8 @@ use super::mixed_shell_plan::materialize::{
     materialize_mixed_shell_component_inputs, prepare_mixed_shell_materialization,
 };
 use super::mixed_shell_plan::{
-    MixedShellPlanError, plan_mixed_shell, plan_support_contact_mixed_shell,
+    MixedShellPlanError, arrange_projected_ring_hole_mixed_shell, complete_mixed_shell_plan,
+    plan_mixed_shell,
 };
 use super::pipeline::PLANAR_BOOLEAN_REALIZATION_WORK;
 use super::select::PlanarBooleanOperation;
@@ -374,16 +375,18 @@ fn execute_mixed_support_contact(
     let contact_ring = prepared
         .cap_ring(contact.boundary())
         .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
-    let plan = plan_support_contact_mixed_shell(
+    let arrangement = arrange_projected_ring_hole_mixed_shell(
         &edit.state.store,
         graph,
-        contact,
         prepared.bindings(),
         selected,
+        contact.host_face(),
         contact_ring,
         linear,
     )
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
