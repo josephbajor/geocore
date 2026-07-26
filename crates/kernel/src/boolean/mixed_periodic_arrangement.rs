@@ -21,8 +21,8 @@ use super::face_arrangement::{
     ArrangementCycle, ArrangementDartKey, ArrangementDirection, ArrangementEdgeKey,
     CertifiedCellTopology, CertifiedCycleAssignment, CertifiedCycleSide, CertifiedEndpointRotation,
     CertifiedSurfaceEmbedding, DirectedCutFragment, DirectedSourceSpan, FaceArrangementInput,
-    SurfaceArrangementError, SurfaceFaceArrangement, arrange_bounded_surface,
-    preview_bounded_surface_cycles,
+    SurfaceArrangementError, SurfaceFaceArrangement, TangencyVertexError, arrange_bounded_surface,
+    certify_tangency_vertex, preview_bounded_surface_cycles,
 };
 use crate::{
     BodySectionGraph, FaceId, SectionCompletion, SectionPeriodicCycleOrientation,
@@ -242,6 +242,59 @@ pub(crate) enum PeriodicArrangementCellKey {
     TraceCell(PeriodicBoundaryTraceKey),
 }
 
+/// Exact identity of one endpoint-free ring in a tangency-degenerate cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PeriodicTangencyRingKey(usize);
+
+impl PeriodicTangencyRingKey {
+    pub(crate) const fn new(ring: usize) -> Self {
+        Self(ring)
+    }
+
+    pub(crate) const fn ring(self) -> usize {
+        self.0
+    }
+}
+
+/// Shared geometric point at which two topologically distinct rings touch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PeriodicTangencyVertexKey(usize);
+
+impl PeriodicTangencyVertexKey {
+    pub(crate) const fn new(vertex: usize) -> Self {
+        Self(vertex)
+    }
+
+    pub(crate) const fn vertex(self) -> usize {
+        self.0
+    }
+}
+
+/// The open annular cell bounded by two rings that meet without crossing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PeriodicTangencyCellKey;
+
+pub(crate) type MixedPeriodicTangencyArrangement = SurfaceFaceArrangement<
+    PeriodicTangencyRingKey,
+    (),
+    PeriodicTangencyVertexKey,
+    PeriodicTangencyCellKey,
+>;
+
+type PeriodicTangencySurfaceError = SurfaceArrangementError<
+    PeriodicTangencyRingKey,
+    (),
+    PeriodicTangencyVertexKey,
+    PeriodicTangencyCellKey,
+>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MixedPeriodicTangencyArrangementError {
+    Vertex(TangencyVertexError),
+    Arrangement(PeriodicTangencySurfaceError),
+    Contract,
+}
+
 /// Stable identity of one trace-delimited annulus cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PeriodicBoundaryTraceKey {
@@ -348,6 +401,64 @@ impl PeriodicBoundaryTraceOwner {
             source_component: None,
         }
     }
+}
+
+/// Arrange one annular cell whose endpoint-free boundaries are tangent.
+///
+/// The shared key is a geometric vertex but represents two topological
+/// boundary vertices. The certified noncrossing rotation keeps each ring on
+/// its own boundary cycle while joining their exterior sides at the contact.
+pub(crate) fn arrange_mixed_periodic_tangency_cell(
+    mut rings: [PeriodicTangencyRingKey; 2],
+    vertex: PeriodicTangencyVertexKey,
+) -> Result<MixedPeriodicTangencyArrangement, MixedPeriodicTangencyArrangementError> {
+    rings.sort_unstable();
+    let rotation = certify_tangency_vertex(vertex, rings)
+        .map_err(MixedPeriodicTangencyArrangementError::Vertex)?;
+    let source_spans = rings
+        .map(|ring| DirectedSourceSpan::whole_loop(ring, vertex))
+        .to_vec();
+    let assignments = vec![
+        CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(rings[0], ArrangementDirection::Forward),
+            CertifiedCycleSide::Cell(PeriodicTangencyCellKey),
+        ),
+        CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(rings[1], ArrangementDirection::Forward),
+            CertifiedCycleSide::Cell(PeriodicTangencyCellKey),
+        ),
+        CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(rings[0], ArrangementDirection::Reverse),
+            CertifiedCycleSide::Exterior,
+        ),
+    ];
+    let arrangement = arrange_bounded_surface(
+        FaceArrangementInput::new(source_spans, Vec::new(), vec![rotation]),
+        CertifiedSurfaceEmbedding::new(
+            assignments,
+            vec![CertifiedCellTopology::new(PeriodicTangencyCellKey, 0)],
+            0,
+        ),
+    )
+    .map_err(MixedPeriodicTangencyArrangementError::Arrangement)?;
+    let [cell] = arrangement.cells() else {
+        return Err(MixedPeriodicTangencyArrangementError::Contract);
+    };
+    let valid = cell.key() == &PeriodicTangencyCellKey
+        && cell.boundaries().len() == 2
+        && cell.euler_characteristic() == 0
+        && cell.genus() == 0
+        && arrangement.source_spans().len() == 2
+        && arrangement.cut_fragments().is_empty()
+        && arrangement.adjacency().is_empty()
+        && arrangement.proof().source_boundary_components() == 2
+        && arrangement.proof().primal_components() == 2
+        && arrangement.proof().surface_euler_characteristic() == 0
+        && arrangement.proof().surface_genus() == 0;
+    if !valid {
+        return Err(MixedPeriodicTangencyArrangementError::Contract);
+    }
+    Ok(arrangement)
 }
 
 /// Adapt the sealed periodic embedding for one source cylinder face.

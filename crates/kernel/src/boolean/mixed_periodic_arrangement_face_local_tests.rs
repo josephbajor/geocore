@@ -20,25 +20,69 @@ use crate::{
 };
 
 #[test]
-fn tangent_periodic_boundaries_keep_noncrossing_endpoint_rotation() {
-    use super::super::face_arrangement::{
-        ArrangementDartKey, ArrangementDirection, TangencyVertexError, certify_tangency_vertex,
-    };
+fn tangent_periodic_boundaries_form_one_degenerate_annular_cell() {
+    use super::super::face_arrangement::{ArrangementDartKey, ArrangementDirection};
 
-    let certified = certify_tangency_vertex(7, [11, 13]).unwrap();
-    assert_eq!(certified.endpoint(), &7);
+    let rings = [
+        PeriodicTangencyRingKey::new(11),
+        PeriodicTangencyRingKey::new(13),
+    ];
+    let vertex = PeriodicTangencyVertexKey::new(7);
+    let arrangement = arrange_mixed_periodic_tangency_cell(rings, vertex).unwrap();
+    let [cell] = arrangement.cells() else {
+        panic!("one tangency-degenerate cell");
+    };
+    assert_eq!(cell.key(), &PeriodicTangencyCellKey);
+    assert_eq!(cell.boundaries().len(), 2);
+    assert_eq!(cell.euler_characteristic(), 0);
+    assert_eq!(cell.genus(), 0);
+    assert!(
+        cell.boundaries().iter().all(|boundary| {
+            boundary.vertices() == [vertex, vertex] && boundary.uses().len() == 1
+        })
+    );
+    assert_eq!(arrangement.proof().source_boundary_components(), 2);
+    assert_eq!(arrangement.proof().primal_components(), 2);
+    assert_eq!(arrangement.proof().surface_euler_characteristic(), 0);
+    assert_eq!(arrangement.proof().surface_genus(), 0);
+    let degree = arrangement.proof().endpoint_degrees();
+    assert_eq!(degree.len(), 1);
+    assert_eq!(degree[0].0, vertex);
+    assert_eq!(degree[0].1.source(), 4);
+    assert_eq!(degree[0].1.cut(), 0);
+    let uses = cell
+        .boundaries()
+        .iter()
+        .flat_map(|boundary| boundary.uses())
+        .cloned()
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        certified.outgoing(),
-        &[
-            ArrangementDartKey::source(11, ArrangementDirection::Forward),
-            ArrangementDartKey::source(11, ArrangementDirection::Reverse),
-            ArrangementDartKey::source(13, ArrangementDirection::Forward),
-            ArrangementDartKey::source(13, ArrangementDirection::Reverse),
-        ]
+        uses,
+        BTreeSet::from([
+            ArrangementDartKey::source(rings[0], ArrangementDirection::Forward),
+            ArrangementDartKey::source(rings[1], ArrangementDirection::Forward),
+        ])
+    );
+}
+
+#[test]
+fn tangent_periodic_cell_is_order_invariant_and_refuses_coincident_rings() {
+    use super::super::face_arrangement::TangencyVertexError;
+
+    let rings = [
+        PeriodicTangencyRingKey::new(11),
+        PeriodicTangencyRingKey::new(13),
+    ];
+    let vertex = PeriodicTangencyVertexKey::new(7);
+    assert_eq!(
+        arrange_mixed_periodic_tangency_cell([rings[1], rings[0]], vertex).unwrap(),
+        arrange_mixed_periodic_tangency_cell(rings, vertex).unwrap(),
     );
     assert_eq!(
-        certify_tangency_vertex(7, [11, 11]),
-        Err(TangencyVertexError::CoincidentBoundary)
+        arrange_mixed_periodic_tangency_cell([rings[0], rings[0]], vertex),
+        Err(MixedPeriodicTangencyArrangementError::Vertex(
+            TangencyVertexError::CoincidentBoundary
+        ))
     );
 }
 

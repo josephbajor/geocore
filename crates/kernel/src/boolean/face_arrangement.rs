@@ -141,11 +141,16 @@ impl<C, V> DirectedCutFragment<C, V> {
 pub(crate) struct CertifiedEndpointRotation<S, C, V> {
     endpoint: V,
     outgoing: Vec<ArrangementDartKey<S, C>>,
+    topological_vertices: usize,
 }
 
 impl<S, C, V> CertifiedEndpointRotation<S, C, V> {
     pub(crate) const fn new(endpoint: V, outgoing: Vec<ArrangementDartKey<S, C>>) -> Self {
-        Self { endpoint, outgoing }
+        Self {
+            endpoint,
+            outgoing,
+            topological_vertices: 1,
+        }
     }
 
     pub(crate) const fn endpoint(&self) -> &V {
@@ -178,6 +183,7 @@ pub(crate) fn certify_tangency_vertex<S: Clone + Eq, V>(
             ArrangementDartKey::source(second.clone(), ArrangementDirection::Forward),
             ArrangementDartKey::source(second, ArrangementDirection::Reverse),
         ],
+        topological_vertices: 2,
     })
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +560,7 @@ pub(crate) enum SurfaceArrangementError<S, C, V, K> {
 type FaceResult<S, C, V, T> = Result<T, FaceArrangementError<S, C, V>>;
 type SurfaceResult<S, C, V, K, T> = Result<T, SurfaceArrangementError<S, C, V, K>>;
 type EndpointRotations<S, C, V> = BTreeMap<V, Vec<ArrangementDartKey<S, C>>>;
+type CanonicalRotations<S, C, V> = (EndpointRotations<S, C, V>, BTreeSet<V>);
 type SurfaceCells<S, C, V, K> = Vec<SurfaceArrangementCell<S, C, V, K>>;
 
 impl<S, C, V> FaceArrangement<S, C, V> {
@@ -613,6 +620,7 @@ struct CanonicalInput<S, C, V> {
     rotations: BTreeMap<V, Vec<ArrangementDartKey<S, C>>>,
     endpoints: BTreeMap<ArrangementDartKey<S, C>, (V, V)>,
     degrees: BTreeMap<V, ArrangementEndpointDegree>,
+    tangency_vertices: BTreeSet<V>,
 }
 pub(crate) fn arrange_bounded_face<S, C, V>(
     input: FaceArrangementInput<S, C, V>,
@@ -628,7 +636,7 @@ where
     let mut cycles = traverse_cycles(&canonical)?;
     cycles.sort_unstable();
 
-    let vertex_count = canonical.degrees.len() as isize;
+    let vertex_count = (canonical.degrees.len() + canonical.tangency_vertices.len()) as isize;
     let edge_count = (canonical.sources.len() + canonical.cuts.len()) as isize;
     let euler_characteristic = vertex_count - edge_count + cycles.len() as isize;
     if euler_characteristic != 2 {
@@ -703,7 +711,9 @@ where
     }
 
     let source_boundary_components =
-        graph_component_count(source_edge_endpoints(&canonical.sources));
+        graph_component_count(source_edge_endpoints(&canonical.sources))
+            .checked_add(canonical.tangency_vertices.len())
+            .ok_or(SurfaceArrangementError::TopologyArithmeticOverflow)?;
     let surface_genus = orientable_genus(
         source_boundary_components,
         embedding.surface_euler_characteristic,
@@ -712,8 +722,12 @@ where
         boundary_components: source_boundary_components,
         euler_characteristic: embedding.surface_euler_characteristic,
     })?;
-    let vertex_count = i64::try_from(canonical.degrees.len())
-        .map_err(|_| SurfaceArrangementError::TopologyArithmeticOverflow)?;
+    let vertex_count = canonical
+        .degrees
+        .len()
+        .checked_add(canonical.tangency_vertices.len())
+        .and_then(|count| i64::try_from(count).ok())
+        .ok_or(SurfaceArrangementError::TopologyArithmeticOverflow)?;
     let edge_count = i64::try_from(canonical.sources.len() + canonical.cuts.len())
         .map_err(|_| SurfaceArrangementError::TopologyArithmeticOverflow)?;
     let cell_characteristic = cells.iter().try_fold(0_i64, |sum, cell| {
@@ -748,7 +762,9 @@ where
             .values()
             .filter(|side| matches!(side, CertifiedCycleSide::Exterior))
             .count(),
-        primal_components: graph_component_count(canonical.endpoints.values().cloned()),
+        primal_components: graph_component_count(canonical.endpoints.values().cloned())
+            .checked_add(canonical.tangency_vertices.len())
+            .ok_or(SurfaceArrangementError::TopologyArithmeticOverflow)?,
         source_boundary_components,
         cell_genera: cells
             .iter()
@@ -1144,6 +1160,9 @@ where
         );
     }
 
+    let (rotations, tangency_vertices) = canonicalize_rotations(input.rotations, &incidence)?;
+    validate_tangency_sources(&sources, &rotations, &tangency_vertices)?;
+
     let mut degrees = BTreeMap::new();
     for (endpoint, outgoing) in &incidence {
         let source = outgoing
@@ -1151,7 +1170,15 @@ where
             .filter(|dart| matches!(dart.edge, ArrangementEdgeKey::Source(_)))
             .count();
         let cut = outgoing.len() - source;
-        validate_degree(endpoint, source, cut)?;
+        if tangency_vertices.contains(endpoint) {
+            if source != 4 || cut != 0 {
+                return Err(FaceArrangementError::EndpointIncidenceMismatch(
+                    endpoint.clone(),
+                ));
+            }
+        } else {
+            validate_degree(endpoint, source, cut)?;
+        }
         if source == 2 {
             let forward = outgoing
                 .iter()
@@ -1183,13 +1210,13 @@ where
         degrees.insert(endpoint.clone(), ArrangementEndpointDegree { source, cut });
     }
 
-    let rotations = canonicalize_rotations(input.rotations, &incidence)?;
     Ok(CanonicalInput {
         sources,
         cuts,
         rotations,
         endpoints,
         degrees,
+        tangency_vertices,
     })
 }
 
@@ -1249,13 +1276,14 @@ where
 fn canonicalize_rotations<S, C, V>(
     rotations: Vec<CertifiedEndpointRotation<S, C, V>>,
     incidence: &BTreeMap<V, BTreeSet<ArrangementDartKey<S, C>>>,
-) -> FaceResult<S, C, V, EndpointRotations<S, C, V>>
+) -> FaceResult<S, C, V, CanonicalRotations<S, C, V>>
 where
     S: Clone + Ord,
     C: Clone + Ord,
     V: Clone + Ord,
 {
     let mut result = BTreeMap::new();
+    let mut tangency_vertices = BTreeSet::new();
     for rotation in rotations {
         if !incidence.contains_key(&rotation.endpoint) {
             return Err(FaceArrangementError::UnexpectedEndpointRotation(
@@ -1275,6 +1303,17 @@ where
                 rotation.endpoint,
             ));
         }
+        match rotation.topological_vertices {
+            1 => {}
+            2 if is_tangency_rotation(&rotation.outgoing) => {
+                tangency_vertices.insert(rotation.endpoint.clone());
+            }
+            _ => {
+                return Err(FaceArrangementError::EndpointIncidenceMismatch(
+                    rotation.endpoint,
+                ));
+            }
+        }
         let mut outgoing = rotation.outgoing;
         if let Some((offset, _)) = outgoing.iter().enumerate().min_by_key(|(_, dart)| *dart) {
             outgoing.rotate_left(offset);
@@ -1288,7 +1327,84 @@ where
             ));
         }
     }
-    Ok(result)
+    Ok((result, tangency_vertices))
+}
+
+fn is_tangency_rotation<S: Eq, C>(outgoing: &[ArrangementDartKey<S, C>]) -> bool {
+    if outgoing.len() != 4 {
+        return false;
+    }
+    (0..outgoing.len()).any(|offset| {
+        let first = &outgoing[offset];
+        let first_twin = &outgoing[(offset + 1) % outgoing.len()];
+        let second = &outgoing[(offset + 2) % outgoing.len()];
+        let second_twin = &outgoing[(offset + 3) % outgoing.len()];
+        matches!(
+            (
+                first.edge(),
+                first.direction(),
+                first_twin.edge(),
+                first_twin.direction(),
+                second.edge(),
+                second.direction(),
+                second_twin.edge(),
+                second_twin.direction(),
+            ),
+            (
+                ArrangementEdgeKey::Source(first_key),
+                ArrangementDirection::Forward,
+                ArrangementEdgeKey::Source(first_twin_key),
+                ArrangementDirection::Reverse,
+                ArrangementEdgeKey::Source(second_key),
+                ArrangementDirection::Forward,
+                ArrangementEdgeKey::Source(second_twin_key),
+                ArrangementDirection::Reverse,
+            ) if first_key == first_twin_key
+                && second_key == second_twin_key
+                && first_key != second_key
+        )
+    })
+}
+
+fn validate_tangency_sources<S, C, V>(
+    sources: &[DirectedSourceSpan<S, V>],
+    rotations: &EndpointRotations<S, C, V>,
+    tangency_vertices: &BTreeSet<V>,
+) -> FaceResult<S, C, V, ()>
+where
+    S: Clone + Ord,
+    C: Clone,
+    V: Clone + Ord,
+{
+    let by_key = sources
+        .iter()
+        .map(|source| (source.key.clone(), source))
+        .collect::<BTreeMap<_, _>>();
+    for vertex in tangency_vertices {
+        let Some(rotation) = rotations.get(vertex) else {
+            return Err(FaceArrangementError::MissingEndpointRotation(
+                vertex.clone(),
+            ));
+        };
+        for dart in rotation {
+            let ArrangementEdgeKey::Source(key) = dart.edge() else {
+                return Err(FaceArrangementError::EndpointIncidenceMismatch(
+                    vertex.clone(),
+                ));
+            };
+            let Some(source) = by_key.get(key) else {
+                return Err(FaceArrangementError::EndpointIncidenceMismatch(
+                    vertex.clone(),
+                ));
+            };
+            if !source.whole_loop || source.start != *vertex || source.end != *vertex {
+                return Err(FaceArrangementError::EndpointIncidenceMismatch(
+                    vertex.clone(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ensure_primal_connected<S, C, V>(
