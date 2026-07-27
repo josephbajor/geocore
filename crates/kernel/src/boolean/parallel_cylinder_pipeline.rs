@@ -12,8 +12,8 @@ use super::curved_pipeline::{
 use super::curved_realize::realize_certified_cylinder_source_copies;
 use super::curved_source::CertifiedCylinderSource;
 use super::mixed_shell_plan::{
-    MixedBoundedSourceRoot, MixedShellProofPlan, plan_mixed_shell,
-    plan_parallel_cylinder_coincident_boolean,
+    MixedBoundedSourceRoot, MixedShellProofPlan, arrange_parallel_cylinder_coincident_boolean,
+    complete_mixed_shell_plan, plan_mixed_shell,
 };
 use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
@@ -248,7 +248,7 @@ fn execute_coincident_cap_boolean(
             "certified coincident-cap Boolean selected no boundary",
         ));
     }
-    let plan = plan_parallel_cylinder_coincident_boolean(
+    let arrangement = arrange_parallel_cylinder_coincident_boolean(
         &edit.state.store,
         graph,
         prepared.bindings(),
@@ -257,6 +257,8 @@ fn execute_coincident_cap_boolean(
         linear,
     )
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     if !coincident_cap_plan_matches_relation(&plan, relation) {
         return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
             "coincident-cap shell omitted certified boundary evidence",

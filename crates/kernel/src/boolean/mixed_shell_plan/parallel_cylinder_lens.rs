@@ -25,16 +25,20 @@ struct ReversedBoundarySegment {
     end: MixedShellVertexKey,
 }
 
-/// Build one regularized Boolean plan under the exact coincident-cap relation.
-pub(crate) fn plan_parallel_cylinder_coincident_boolean<'a>(
+/// Arrange one regularized Boolean boundary under the exact coincident-cap relation.
+pub(crate) fn arrange_parallel_cylinder_coincident_boolean<'a>(
     store: &Store,
     graph: &BodySectionGraph,
     bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
     selected: SelectedParallelCylinderCoincidentBoundary,
     relation: &CertifiedParallelCylinderCoincidentCapRelation,
     linear: f64,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    if graph.completion() != SectionCompletion::Indeterminate || graph.gaps().is_empty() {
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
+    if graph.completion() != SectionCompletion::Indeterminate
+        || graph.gaps().is_empty()
+        || relation.overlap_ends().len() != 2
+        || relation.rulings().len() != 2
+    {
         return Err(MixedShellPlanError::SectionIncomplete);
     }
     let (selected, cap_plans) = selected.into_parts();
@@ -74,14 +78,9 @@ pub(crate) fn plan_parallel_cylinder_coincident_boolean<'a>(
         validate_cap_selection(store, graph, cap, physical_end, end)?;
     }
 
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::CoincidentCaps(relation),
-        bindings,
-        arranged,
-        |_, faces, spans, _, _| append_cap_faces(store, graph, &caps, faces, spans, linear),
-    )
+    let mut arrangement = arrange_selected_mixed_shell(store, graph, bindings, arranged, false)?;
+    arrange_cap_faces(store, graph, &caps, &mut arrangement, linear)?;
+    Ok(arrangement)
 }
 
 fn validate_cap_selection(
@@ -150,17 +149,17 @@ fn validate_cap_selection(
     Ok(())
 }
 
-fn append_cap_faces(
+fn arrange_cap_faces(
     store: &Store,
     graph: &BodySectionGraph,
     caps: &BTreeMap<usize, SelectedCoincidentCapPlan>,
-    faces: &mut Vec<MixedShellFacePlan>,
-    spans: &mut [MixedBoundedSourceSpanPlan],
+    arrangement: &mut MixedShellArrangement<'_>,
     linear: f64,
 ) -> Result<(), MixedShellPlanError> {
     for (&physical_end, plan) in caps {
         let cap = plan.target();
-        if faces
+        if arrangement
+            .faces
             .iter()
             .any(|face| face.source() == cap.target_source())
         {
@@ -186,8 +185,8 @@ fn append_cap_faces(
                     side_cell,
                     span,
                     side_orientation,
-                    faces,
-                    spans,
+                    &arrangement.faces,
+                    &arrangement.bounded_source_spans,
                     linear,
                 )?,
                 SelectedCoincidentCapBoundaryUse::SectionArc {
@@ -203,12 +202,12 @@ fn append_cap_faces(
                     endpoints,
                     side_cell,
                     side_orientation,
-                    faces,
+                    &arrangement.faces,
                 )?,
             });
         }
         let loop_ = close_reversed_segments(physical_end, segments)?;
-        faces.push(MixedShellFacePlan {
+        arrangement.faces.push(MixedShellFacePlan {
             source: cap.target_source(),
             source_face: cap.target_face().clone(),
             selected_orientation: plan.orientation(),

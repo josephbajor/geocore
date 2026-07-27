@@ -26,7 +26,7 @@ mod parallel_cylinder_lens;
 #[path = "mixed_shell_plan/projected_source_circle.rs"]
 mod projected_source_circle;
 
-pub(crate) use parallel_cylinder_lens::plan_parallel_cylinder_coincident_boolean;
+pub(crate) use parallel_cylinder_lens::arrange_parallel_cylinder_coincident_boolean;
 pub(crate) use projected_source_circle::{
     ProjectedEndpointFreeSourceCircle, ProjectedSourceCircleOnPlane,
     ProjectedSourceCircleOnPlaneError,
@@ -644,28 +644,6 @@ struct SectionUseLineage {
     fragment: usize,
     arrangement_to_section: ArrangementDirection,
     cylinder_period_shift: i64,
-}
-
-enum SectionPlanningAdmission<'a> {
-    CoincidentCaps(
-        &'a super::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation,
-    ),
-}
-
-impl SectionPlanningAdmission<'_> {
-    fn validate(&self, graph: &BodySectionGraph) -> Result<(), MixedShellPlanError> {
-        match self {
-            Self::CoincidentCaps(relation)
-                if graph.completion() == SectionCompletion::Indeterminate
-                    && !graph.gaps().is_empty()
-                    && relation.overlap_ends().len() == 2
-                    && relation.rulings().len() == 2 =>
-            {
-                Ok(())
-            }
-            _ => Err(MixedShellPlanError::SectionIncomplete),
-        }
-    }
 }
 
 pub(crate) fn plan_mixed_shell<'a>(
@@ -2095,32 +2073,6 @@ pub(crate) fn arrange_source_arc_overlays_mixed_shell<'a>(
         }
     }
     Ok(output)
-}
-
-fn plan_mixed_shell_with_augmentation<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    admission: SectionPlanningAdmission<'_>,
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = (MixedShellCellKey, OperandSide, SelectedOrientation)>,
-    augment: impl FnOnce(
-        &BTreeMap<MixedSourceFaceKey, MixedArrangementBinding<'a>>,
-        &mut Vec<MixedShellFacePlan>,
-        &mut Vec<MixedBoundedSourceSpanPlan>,
-        &mut Vec<MixedCylinderCapRing>,
-        &mut Vec<MixedDerivedRingPlan>,
-    ) -> Result<(), MixedShellPlanError>,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    admission.validate(graph)?;
-    let mut arrangement = arrange_selected_mixed_shell(store, graph, bindings, selected, false)?;
-    augment(
-        &arrangement.bindings,
-        &mut arrangement.faces,
-        &mut arrangement.bounded_source_spans,
-        &mut arrangement.cap_rings,
-        &mut arrangement.derived_rings,
-    )?;
-    complete_mixed_shell_plan(store, graph, arrangement)
 }
 
 fn arrange_selected_mixed_shell<'a>(
