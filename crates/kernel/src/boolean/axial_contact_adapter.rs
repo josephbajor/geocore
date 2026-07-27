@@ -35,8 +35,8 @@ use super::mixed_periodic_arrangement::{
 };
 use super::mixed_shell_plan::{
     MixedArrangementBinding, MixedShellCellKey, arrange_coincident_cylinder_sides_mixed_shell,
-    arrange_projected_ring_hole_with_source_lineage, arrange_source_arc_overlays_mixed_shell,
-    complete_mixed_shell_plan, plan_common_support_mixed_shell,
+    arrange_common_support_spans_mixed_shell, arrange_projected_ring_hole_with_source_lineage,
+    arrange_source_arc_overlays_mixed_shell, complete_mixed_shell_plan,
     plan_internal_tangency_bands_mixed_shell, plan_internal_tangency_union_mixed_shell,
     source_face_key,
 };
@@ -213,16 +213,18 @@ pub(super) fn execute_common_support_boolean(
         prepared.classified.clone(),
     )
     .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
-    let plan = plan_common_support_mixed_shell(
+    let arrangement = arrange_common_support_spans_mixed_shell(
         &edit.state.store,
         graph,
-        relation,
-        &interval,
         prepared.bindings(),
         selected,
+        &interval,
+        relation.preorder(),
         linear,
     )
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 

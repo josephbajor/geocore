@@ -646,7 +646,6 @@ struct SectionUseLineage {
 }
 
 enum SectionPlanningAdmission<'a> {
-    CommonSupport(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport),
     InternalTangency(
         &'a super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
     ),
@@ -658,13 +657,6 @@ enum SectionPlanningAdmission<'a> {
 impl SectionPlanningAdmission<'_> {
     fn validate(&self, graph: &BodySectionGraph) -> Result<(), MixedShellPlanError> {
         match self {
-            Self::CommonSupport(relation)
-                if graph.completion() == SectionCompletion::Indeterminate
-                    && !graph.gaps().is_empty()
-                    && relation.boundaries().len() == 4 =>
-            {
-                Ok(())
-            }
             Self::InternalTangency(relation)
                 if graph.completion() == SectionCompletion::Indeterminate
                     && !graph.gaps().is_empty()
@@ -823,34 +815,6 @@ fn arrange_projected_ring_hole<'a>(
     });
     arrangement.cap_rings.push(ring.clone());
     Ok(arrangement)
-}
-
-pub(crate) fn plan_common_support_mixed_shell<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport,
-    interval: &super::axial_interval_sweep::AxialIntervalPlan,
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-    tolerance: f64,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::CommonSupport(relation),
-        bindings,
-        selected.into_iter().map(selected_cell),
-        |_, faces, _, rings, _| {
-            graft_common_support_spans(
-                store,
-                faces,
-                rings,
-                interval,
-                relation.preorder(),
-                tolerance,
-            )
-        },
-    )
 }
 
 pub(crate) fn plan_internal_tangency_bands_mixed_shell<'a>(
@@ -1670,14 +1634,15 @@ fn axis_parameter_identity_is_exact(
     })
 }
 
-fn graft_common_support_spans(
+pub(crate) fn arrange_common_support_spans_mixed_shell<'a>(
     store: &Store,
-    faces: &mut Vec<MixedShellFacePlan>,
-    rings: &mut Vec<MixedCylinderCapRing>,
+    graph: &BodySectionGraph,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
     interval: &super::axial_interval_sweep::AxialIntervalPlan,
     preorder: &super::axial_interval_sweep::CertifiedAxialEndpointPreorder,
     tolerance: f64,
-) -> Result<(), MixedShellPlanError> {
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     use core::cmp::Ordering;
 
     use super::axial_interval_sweep::{
@@ -1685,6 +1650,15 @@ fn graft_common_support_spans(
     };
 
     let fail = || MixedShellPlanError::CommonSupportBoundaryMismatch;
+    let mut arrangement = arrange_selected_mixed_shell(
+        store,
+        graph,
+        bindings,
+        selected.into_iter().map(selected_cell),
+        false,
+    )?;
+    let faces = &mut arrangement.faces;
+    let rings = &mut arrangement.cap_rings;
     let source_faces = faces.clone();
     let source_rings = rings.clone();
     let split_operand = match interval.spans() {
@@ -1848,7 +1822,7 @@ fn graft_common_support_spans(
         });
         faces.extend(boundary_faces);
     }
-    Ok(())
+    Ok(arrangement)
 }
 
 fn sole_interval_operand(
