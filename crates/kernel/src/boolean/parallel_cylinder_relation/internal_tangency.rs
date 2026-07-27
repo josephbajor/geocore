@@ -48,13 +48,10 @@ impl CertifiedParallelCylinderInternalRadialTangency {
         &self.boundaries
     }
 
-    /// Exact side-pcurve height for one certified authored boundary.
-    pub(crate) const fn axial_parameter(&self, operand: usize, boundary: usize) -> Option<f64> {
-        if operand < 2 && boundary < 2 {
-            Some(f64::from_bits(self.axial_parameter_bits[operand][boundary]))
-        } else {
-            None
-        }
+    /// Exact side-pcurve heights for all certified authored boundaries.
+    pub(crate) fn axial_parameters(&self) -> [[f64; 2]; 2] {
+        self.axial_parameter_bits
+            .map(|boundaries| boundaries.map(f64::from_bits))
     }
 
     /// Complete exact total preorder of the four authored endpoint identities.

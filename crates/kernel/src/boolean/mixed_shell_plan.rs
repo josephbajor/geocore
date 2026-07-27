@@ -42,7 +42,8 @@ use super::mixed_face_arrangement::{
 };
 use super::mixed_periodic_arrangement::{
     MixedPeriodicFaceArrangement, PeriodicArrangementCellKey, PeriodicArrangementVertexKey,
-    PeriodicCutFragmentKey, PeriodicSourceLoopKey,
+    PeriodicCutFragmentKey, PeriodicSourceLoopKey, PeriodicTangencyRingKey,
+    PeriodicTangencyVertexKey, arrange_mixed_periodic_tangency_cell,
 };
 use crate::section::{SectionSkewCylinderPersistenceInput, bounded_skew_persistence_input};
 use crate::{
@@ -646,9 +647,6 @@ struct SectionUseLineage {
 }
 
 enum SectionPlanningAdmission<'a> {
-    InternalTangency(
-        &'a super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
-    ),
     CoincidentCaps(
         &'a super::parallel_cylinder_relation::CertifiedParallelCylinderCoincidentCapRelation,
     ),
@@ -657,13 +655,6 @@ enum SectionPlanningAdmission<'a> {
 impl SectionPlanningAdmission<'_> {
     fn validate(&self, graph: &BodySectionGraph) -> Result<(), MixedShellPlanError> {
         match self {
-            Self::InternalTangency(relation)
-                if graph.completion() == SectionCompletion::Indeterminate
-                    && !graph.gaps().is_empty()
-                    && relation.boundaries().len() == 4 =>
-            {
-                Ok(())
-            }
             Self::CoincidentCaps(relation)
                 if graph.completion() == SectionCompletion::Indeterminate
                     && !graph.gaps().is_empty()
@@ -817,46 +808,19 @@ fn arrange_projected_ring_hole<'a>(
     Ok(arrangement)
 }
 
-pub(crate) fn plan_internal_tangency_bands_mixed_shell<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
-    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
-    interval: &super::axial_interval_sweep::AxialIntervalPlan,
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::InternalTangency(relation),
-        bindings,
-        selected.into_iter().map(selected_cell),
-        |_, faces, _, rings, derived| {
-            graft_internal_tangency_bands(faces, rings, derived, cylinders, relation, interval)
-        },
-    )
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InternalTangencyArrangementGeometry<'a> {
+    pub(crate) contained_operand: usize,
+    pub(crate) axial_parameters: [[f64; 2]; 2],
+    pub(crate) preorder: &'a super::axial_interval_sweep::CertifiedAxialEndpointPreorder,
 }
 
-pub(crate) fn plan_internal_tangency_union_mixed_shell<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
-    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
-    tails: &[super::axial_interval_sweep::PlannedAxialSpan],
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::InternalTangency(relation),
-        bindings,
-        selected.into_iter().map(selected_cell),
-        |_, faces, _, rings, derived| {
-            graft_internal_tangency_union(faces, rings, derived, cylinders, relation, tails)
-        },
-    )
+fn valid_internal_tangency_geometry(geometry: InternalTangencyArrangementGeometry<'_>) -> bool {
+    geometry.contained_operand < 2
+        && geometry
+            .axial_parameters
+            .iter()
+            .all(|boundaries| boundaries.iter().all(|parameter| parameter.is_finite()))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -874,28 +838,38 @@ struct InternalTangencyBand {
     split: Option<AnalyticFaceSplitPiece>,
 }
 
-fn graft_internal_tangency_bands(
-    faces: &mut Vec<MixedShellFacePlan>,
-    rings: &mut Vec<MixedCylinderCapRing>,
-    derived: &mut Vec<MixedDerivedRingPlan>,
+pub(crate) fn arrange_internal_tangency_bands_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    geometry: InternalTangencyArrangementGeometry<'_>,
     cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
     interval: &super::axial_interval_sweep::AxialIntervalPlan,
-) -> Result<(), MixedShellPlanError> {
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
-    bind_internal_tangency_boundaries(cylinders, relation)?;
-    if interval.spans().len() > 2 {
+    if !valid_internal_tangency_geometry(geometry) || interval.spans().len() > 2 {
         return Err(fail());
     }
+    let mut arrangement = arrange_selected_mixed_shell(
+        store,
+        graph,
+        bindings,
+        selected.into_iter().map(selected_cell),
+        false,
+    )?;
+    let faces = &mut arrangement.faces;
+    let rings = &mut arrangement.cap_rings;
+    let derived = &mut arrangement.derived_rings;
     let source_faces = faces.clone();
     let source_rings = rings.clone();
-    let contained = relation.contained_operand();
+    let contained = geometry.contained_operand;
     let source = cylinders.get(contained).ok_or_else(fail)?;
     faces.clear();
     rings.clear();
     for (span_index, span) in interval.spans().iter().enumerate() {
         let endpoints = [span.low(), span.high()]
-            .map(|contributors| bind_internal_boundary_class(relation, contributors))
+            .map(|contributors| bind_internal_boundary_class(geometry, contributors))
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         let [low, high] = endpoints.as_slice() else {
@@ -981,11 +955,9 @@ fn graft_internal_tangency_bands(
             let sibling = InternalTangencyBoundary {
                 operand: boundary.operand,
                 boundary: 1 - boundary.boundary,
-                axial_parameter: relation
-                    .axial_parameter(boundary.operand, 1 - boundary.boundary)
-                    .ok_or_else(fail)?,
+                axial_parameter: geometry.axial_parameters[boundary.operand][1 - boundary.boundary],
             };
-            let source_low = compare_internal_boundaries(relation, *boundary, sibling)
+            let source_low = compare_internal_boundaries(geometry, *boundary, sibling)
                 == core::cmp::Ordering::Less;
             if source_low != (end == 0) {
                 cap.selected_orientation = reverse_selected_orientation(cap.selected_orientation);
@@ -999,32 +971,41 @@ fn graft_internal_tangency_bands(
             faces.push(cap);
         }
     }
-    Ok(())
+    Ok(arrangement)
 }
 
-fn graft_internal_tangency_union(
-    faces: &mut Vec<MixedShellFacePlan>,
-    rings: &mut Vec<MixedCylinderCapRing>,
-    derived: &mut Vec<MixedDerivedRingPlan>,
+pub(crate) fn arrange_internal_tangency_union_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    geometry: InternalTangencyArrangementGeometry<'_>,
     cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
     tails: &[super::axial_interval_sweep::PlannedAxialSpan],
-) -> Result<(), MixedShellPlanError> {
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     use core::cmp::Ordering;
 
     use super::axial_interval_sweep::AxialIntervalOperand;
-    use super::face_arrangement::certify_tangency_vertex;
 
     let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
-    bind_internal_tangency_boundaries(cylinders, relation)?;
-    if !(1..=2).contains(&tails.len()) {
+    if !valid_internal_tangency_geometry(geometry) || !(1..=2).contains(&tails.len()) {
         return Err(fail());
     }
-    let contained = relation.contained_operand();
-    let containing = relation.containing_operand();
+    let mut arrangement = arrange_selected_mixed_shell(
+        store,
+        graph,
+        bindings,
+        selected.into_iter().map(selected_cell),
+        false,
+    )?;
+    let faces = &mut arrangement.faces;
+    let rings = &mut arrangement.cap_rings;
+    let derived = &mut arrangement.derived_rings;
+    let contained = geometry.contained_operand;
+    let containing = 1 - geometry.contained_operand;
     let source_faces = faces.clone();
     let source_rings = rings.clone();
-    let [outer_low, outer_high] = ordered_internal_boundaries(relation, containing)?;
+    let [outer_low, outer_high] = ordered_internal_boundaries(geometry, containing)?;
     let mut bands = Vec::with_capacity(tails.len() + 1);
     for (tail_index, tail) in tails.iter().enumerate() {
         let operand = if contained == 0 {
@@ -1035,8 +1016,8 @@ fn graft_internal_tangency_union(
         if !tail.side_operands().contains(operand) {
             return Err(fail());
         }
-        let low = single_internal_boundary(bind_internal_boundary_class(relation, tail.low())?)?;
-        let high = single_internal_boundary(bind_internal_boundary_class(relation, tail.high())?)?;
+        let low = single_internal_boundary(bind_internal_boundary_class(geometry, tail.low())?)?;
+        let high = single_internal_boundary(bind_internal_boundary_class(geometry, tail.high())?)?;
         bands.push(InternalTangencyBand {
             operand: contained,
             low,
@@ -1054,7 +1035,7 @@ fn graft_internal_tangency_union(
         high: outer_high,
         split: None,
     });
-    bands.sort_by(|first, second| compare_internal_boundaries(relation, first.low, second.low));
+    bands.sort_by(|first, second| compare_internal_boundaries(geometry, first.low, second.low));
     if bands.windows(2).any(|pair| {
         pair[0].operand == pair[1].operand
             || !same_internal_boundary(pair[0].high, pair[1].low)
@@ -1140,6 +1121,7 @@ fn graft_internal_tangency_union(
         outer_ring: usize,
         inner_ring: usize,
         boundary: InternalTangencyBoundary,
+        arranged_boundaries: Vec<(usize, ArrangementDirection)>,
     }
     let mut contacts = Vec::with_capacity(tails.len());
     for contact_index in 0..tails.len() {
@@ -1171,7 +1153,28 @@ fn graft_internal_tangency_union(
         .map_err(|_| fail())?;
         let outer_ring = derived.len();
         let inner_ring = outer_ring + 1;
-        certify_tangency_vertex(contact_index, [outer_ring, inner_ring]).map_err(|_| fail())?;
+        let tangency = arrange_mixed_periodic_tangency_cell(
+            [
+                PeriodicTangencyRingKey::new(outer_ring),
+                PeriodicTangencyRingKey::new(inner_ring),
+            ],
+            PeriodicTangencyVertexKey::new(contact_index),
+        )
+        .map_err(|_| fail())?;
+        let [cell] = tangency.cells() else {
+            return Err(fail());
+        };
+        let arranged_boundaries = cell
+            .boundaries()
+            .iter()
+            .map(|cycle| {
+                let use_ = cycle.uses().first().ok_or_else(fail)?;
+                let ArrangementEdgeKey::Source(ring) = use_.edge() else {
+                    return Err(fail());
+                };
+                Ok((ring.ring(), use_.direction()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let point = outer_circle.eval(0.0);
         derived.push(MixedDerivedRingPlan::tangent(
             outer_circle,
@@ -1195,6 +1198,7 @@ fn graft_internal_tangency_union(
             outer_ring,
             inner_ring,
             boundary,
+            arranged_boundaries,
         });
     }
 
@@ -1312,20 +1316,30 @@ fn graft_internal_tangency_union(
             source_ring.cap_source(),
             source_ring.cap_face(),
         )?;
+        let uses = contact
+            .arranged_boundaries
+            .iter()
+            .map(|(ring, direction)| {
+                let side_direction = if *ring == contact.outer_ring {
+                    outer_side
+                } else {
+                    inner_side
+                };
+                derived_ring_use(
+                    *ring,
+                    compose_direction(*direction, opposite(side_direction)),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let vertex = MixedShellVertexKey::Tangency(contact.vertex);
         shoulder.loops = vec![MixedShellLoopPlan {
-            uses: vec![
-                derived_ring_use(contact.outer_ring, opposite(outer_side), None),
-                derived_ring_use(contact.inner_ring, opposite(inner_side), None),
-            ],
-            vertices: vec![
-                MixedShellVertexKey::Tangency(contact.vertex),
-                MixedShellVertexKey::Tangency(contact.vertex),
-                MixedShellVertexKey::Tangency(contact.vertex),
-            ],
+            vertices: vec![vertex; uses.len() + 1],
+            uses,
         }];
         faces.push(shoulder);
     }
-    Ok(())
+    Ok(arrangement)
 }
 
 fn source_face(
@@ -1404,30 +1418,8 @@ fn derived_ring_loop(
     })
 }
 
-fn bind_internal_tangency_boundaries(
-    cylinders: [&super::curved_source::CertifiedCylinderSource; 2],
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
-) -> Result<(), MixedShellPlanError> {
-    let fail = || MixedShellPlanError::InternalTangencyBoundaryMismatch;
-    let mut seen = [[false; 2]; 2];
-    for witness in relation.boundaries() {
-        let boundary = cylinders
-            .get(witness.operand())
-            .and_then(|source| source.boundaries().get(witness.boundary()))
-            .ok_or_else(fail)?;
-        if seen[witness.operand()][witness.boundary()]
-            || boundary.cap_face() != witness.cap_face()
-            || boundary.edge() != witness.edge()
-        {
-            return Err(fail());
-        }
-        seen[witness.operand()][witness.boundary()] = true;
-    }
-    (seen == [[true; 2]; 2]).then_some(()).ok_or_else(fail)
-}
-
 fn bind_internal_boundary_class(
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    geometry: InternalTangencyArrangementGeometry<'_>,
     contributors: super::axial_interval_sweep::AxialEndpointContributors,
 ) -> Result<Vec<InternalTangencyBoundary>, MixedShellPlanError> {
     use super::axial_interval_sweep::{AuthoredAxialEndpoint, AxialIntervalOperand};
@@ -1452,9 +1444,7 @@ fn bind_internal_boundary_class(
         boundaries.push(InternalTangencyBoundary {
             operand,
             boundary,
-            axial_parameter: relation
-                .axial_parameter(operand, boundary)
-                .ok_or_else(fail)?,
+            axial_parameter: geometry.axial_parameters[operand][boundary],
         });
     }
     (!boundaries.is_empty() && boundaries.len() <= 2)
@@ -1529,17 +1519,15 @@ fn internal_ring_lineage(
 }
 
 fn ordered_internal_boundaries(
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    geometry: InternalTangencyArrangementGeometry<'_>,
     operand: usize,
 ) -> Result<[InternalTangencyBoundary; 2], MixedShellPlanError> {
     let boundaries = [0, 1].map(|boundary| InternalTangencyBoundary {
         operand,
         boundary,
-        axial_parameter: relation
-            .axial_parameter(operand, boundary)
-            .unwrap_or(f64::NAN),
+        axial_parameter: geometry.axial_parameters[operand][boundary],
     });
-    match compare_internal_boundaries(relation, boundaries[0], boundaries[1]) {
+    match compare_internal_boundaries(geometry, boundaries[0], boundaries[1]) {
         core::cmp::Ordering::Less => Ok(boundaries),
         core::cmp::Ordering::Greater => Ok([boundaries[1], boundaries[0]]),
         core::cmp::Ordering::Equal => Err(MixedShellPlanError::InternalTangencyBoundaryMismatch),
@@ -1556,7 +1544,7 @@ fn single_internal_boundary(
 }
 
 fn compare_internal_boundaries(
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
+    geometry: InternalTangencyArrangementGeometry<'_>,
     first: InternalTangencyBoundary,
     second: InternalTangencyBoundary,
 ) -> core::cmp::Ordering {
@@ -1578,8 +1566,8 @@ fn compare_internal_boundaries(
             },
         )
     };
-    relation
-        .preorder()
+    geometry
+        .preorder
         .compare(contributor(first), contributor(second))
 }
 

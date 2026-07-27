@@ -1130,12 +1130,12 @@ fn exact_internal_tangency_retains_containment_boundaries_and_endpoint_preorder(
                     }
                     for (operand, height) in expected_heights.into_iter().enumerate() {
                         assert_eq!(
-                            relation.axial_parameter(operand, 0).unwrap().to_bits(),
+                            relation.axial_parameters()[operand][0].to_bits(),
                             0.0_f64.to_bits(),
                             "{context} swapped={is_swapped}: operand {operand} start parameter",
                         );
                         assert_eq!(
-                            relation.axial_parameter(operand, 1).unwrap().to_bits(),
+                            relation.axial_parameters()[operand][1].to_bits(),
                             height.to_bits(),
                             "{context} swapped={is_swapped}: operand {operand} end parameter",
                         );

@@ -34,11 +34,11 @@ use super::mixed_periodic_arrangement::{
     MixedPeriodicFaceArrangement, arrange_mixed_periodic_face_from_embedding,
 };
 use super::mixed_shell_plan::{
-    MixedArrangementBinding, MixedShellCellKey, arrange_coincident_cylinder_sides_mixed_shell,
-    arrange_common_support_spans_mixed_shell, arrange_projected_ring_hole_with_source_lineage,
-    arrange_source_arc_overlays_mixed_shell, complete_mixed_shell_plan,
-    plan_internal_tangency_bands_mixed_shell, plan_internal_tangency_union_mixed_shell,
-    source_face_key,
+    InternalTangencyArrangementGeometry, MixedArrangementBinding, MixedShellCellKey,
+    arrange_coincident_cylinder_sides_mixed_shell, arrange_common_support_spans_mixed_shell,
+    arrange_internal_tangency_bands_mixed_shell, arrange_internal_tangency_union_mixed_shell,
+    arrange_projected_ring_hole_with_source_lineage, arrange_source_arc_overlays_mixed_shell,
+    complete_mixed_shell_plan, source_face_key,
 };
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCommonSupport,
@@ -320,20 +320,25 @@ pub(super) fn execute_internal_tangency_boolean(
         prepared.classified.clone(),
     )
     .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
-    let plan = match &request {
-        InternalTangencyRequest::Bands(interval) => plan_internal_tangency_bands_mixed_shell(
+    let geometry = InternalTangencyArrangementGeometry {
+        contained_operand: relation.contained_operand(),
+        axial_parameters: relation.axial_parameters(),
+        preorder: relation.preorder(),
+    };
+    let arrangement = match &request {
+        InternalTangencyRequest::Bands(interval) => arrange_internal_tangency_bands_mixed_shell(
             &edit.state.store,
             graph,
-            relation,
+            geometry,
             cylinders,
             interval,
             prepared.bindings(),
             selected,
         ),
-        InternalTangencyRequest::Union(tails) => plan_internal_tangency_union_mixed_shell(
+        InternalTangencyRequest::Union(tails) => arrange_internal_tangency_union_mixed_shell(
             &edit.state.store,
             graph,
-            relation,
+            geometry,
             cylinders,
             tails,
             prepared.bindings(),
@@ -341,6 +346,8 @@ pub(super) fn execute_internal_tangency_boolean(
         ),
     }
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
