@@ -242,7 +242,6 @@ pub(crate) enum PeriodicArrangementCellKey {
     TraceCell(PeriodicBoundaryTraceKey),
 }
 
-/// Exact identity of one endpoint-free ring in a tangency-degenerate cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PeriodicTangencyRingKey(usize);
 
@@ -256,7 +255,6 @@ impl PeriodicTangencyRingKey {
     }
 }
 
-/// Shared geometric point at which two topologically distinct rings touch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PeriodicTangencyVertexKey(usize);
 
@@ -270,7 +268,6 @@ impl PeriodicTangencyVertexKey {
     }
 }
 
-/// The open annular cell bounded by two rings that meet without crossing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PeriodicTangencyCellKey;
 

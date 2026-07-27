@@ -141,7 +141,7 @@ impl<C, V> DirectedCutFragment<C, V> {
 pub(crate) struct CertifiedEndpointRotation<S, C, V> {
     endpoint: V,
     outgoing: Vec<ArrangementDartKey<S, C>>,
-    topological_vertices: usize,
+    tangency: bool,
 }
 
 impl<S, C, V> CertifiedEndpointRotation<S, C, V> {
@@ -149,7 +149,7 @@ impl<S, C, V> CertifiedEndpointRotation<S, C, V> {
         Self {
             endpoint,
             outgoing,
-            topological_vertices: 1,
+            tangency: false,
         }
     }
 
@@ -183,7 +183,7 @@ pub(crate) fn certify_tangency_vertex<S: Clone + Eq, V>(
             ArrangementDartKey::source(second.clone(), ArrangementDirection::Forward),
             ArrangementDartKey::source(second, ArrangementDirection::Reverse),
         ],
-        topological_vertices: 2,
+        tangency: true,
     })
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1161,7 +1161,6 @@ where
     }
 
     let (rotations, tangency_vertices) = canonicalize_rotations(input.rotations, &incidence)?;
-    validate_tangency_sources(&sources, &rotations, &tangency_vertices)?;
 
     let mut degrees = BTreeMap::new();
     for (endpoint, outgoing) in &incidence {
@@ -1171,11 +1170,9 @@ where
             .count();
         let cut = outgoing.len() - source;
         if tangency_vertices.contains(endpoint) {
-            if source != 4 || cut != 0 {
-                return Err(FaceArrangementError::EndpointIncidenceMismatch(
-                    endpoint.clone(),
-                ));
-            }
+            (source == 4 && cut == 0)
+                .then_some(())
+                .ok_or_else(|| FaceArrangementError::EndpointIncidenceMismatch(endpoint.clone()))?;
         } else {
             validate_degree(endpoint, source, cut)?;
         }
@@ -1303,16 +1300,13 @@ where
                 rotation.endpoint,
             ));
         }
-        match rotation.topological_vertices {
-            1 => {}
-            2 if is_tangency_rotation(&rotation.outgoing) => {
-                tangency_vertices.insert(rotation.endpoint.clone());
-            }
-            _ => {
+        if rotation.tangency {
+            if !is_tangency_rotation(&rotation.outgoing) {
                 return Err(FaceArrangementError::EndpointIncidenceMismatch(
                     rotation.endpoint,
                 ));
             }
+            tangency_vertices.insert(rotation.endpoint.clone());
         }
         let mut outgoing = rotation.outgoing;
         if let Some((offset, _)) = outgoing.iter().enumerate().min_by_key(|(_, dart)| *dart) {
@@ -1331,80 +1325,27 @@ where
 }
 
 fn is_tangency_rotation<S: Eq, C>(outgoing: &[ArrangementDartKey<S, C>]) -> bool {
-    if outgoing.len() != 4 {
-        return false;
-    }
-    (0..outgoing.len()).any(|offset| {
-        let first = &outgoing[offset];
-        let first_twin = &outgoing[(offset + 1) % outgoing.len()];
-        let second = &outgoing[(offset + 2) % outgoing.len()];
-        let second_twin = &outgoing[(offset + 3) % outgoing.len()];
+    let paired = |first: &ArrangementDartKey<S, C>, second: &ArrangementDartKey<S, C>| {
         matches!(
             (
                 first.edge(),
                 first.direction(),
-                first_twin.edge(),
-                first_twin.direction(),
                 second.edge(),
                 second.direction(),
-                second_twin.edge(),
-                second_twin.direction(),
             ),
             (
                 ArrangementEdgeKey::Source(first_key),
                 ArrangementDirection::Forward,
-                ArrangementEdgeKey::Source(first_twin_key),
-                ArrangementDirection::Reverse,
                 ArrangementEdgeKey::Source(second_key),
-                ArrangementDirection::Forward,
-                ArrangementEdgeKey::Source(second_twin_key),
                 ArrangementDirection::Reverse,
-            ) if first_key == first_twin_key
-                && second_key == second_twin_key
-                && first_key != second_key
+            ) if first_key == second_key
         )
-    })
-}
-
-fn validate_tangency_sources<S, C, V>(
-    sources: &[DirectedSourceSpan<S, V>],
-    rotations: &EndpointRotations<S, C, V>,
-    tangency_vertices: &BTreeSet<V>,
-) -> FaceResult<S, C, V, ()>
-where
-    S: Clone + Ord,
-    C: Clone,
-    V: Clone + Ord,
-{
-    let by_key = sources
-        .iter()
-        .map(|source| (source.key.clone(), source))
-        .collect::<BTreeMap<_, _>>();
-    for vertex in tangency_vertices {
-        let Some(rotation) = rotations.get(vertex) else {
-            return Err(FaceArrangementError::MissingEndpointRotation(
-                vertex.clone(),
-            ));
-        };
-        for dart in rotation {
-            let ArrangementEdgeKey::Source(key) = dart.edge() else {
-                return Err(FaceArrangementError::EndpointIncidenceMismatch(
-                    vertex.clone(),
-                ));
-            };
-            let Some(source) = by_key.get(key) else {
-                return Err(FaceArrangementError::EndpointIncidenceMismatch(
-                    vertex.clone(),
-                ));
-            };
-            if !source.whole_loop || source.start != *vertex || source.end != *vertex {
-                return Err(FaceArrangementError::EndpointIncidenceMismatch(
-                    vertex.clone(),
-                ));
-            }
-        }
-    }
-    Ok(())
+    };
+    outgoing.len() == 4
+        && (0..4).any(|offset| {
+            paired(&outgoing[offset], &outgoing[(offset + 1) % 4])
+                && paired(&outgoing[(offset + 2) % 4], &outgoing[(offset + 3) % 4])
+        })
 }
 
 fn ensure_primal_connected<S, C, V>(

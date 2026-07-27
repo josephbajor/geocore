@@ -1,11 +1,6 @@
 //! Read-only complete-plan proof for one transverse finite-cylinder pair.
-//!
-//! The generic mixed-shell planner intentionally permits relation-specific
-//! Section subsets.  A prepared transverse cylinder pair has the stronger
-//! contract that every admitted Section fragment must bound the selected
-//! result.  This adapter proves that stronger invariant after exact physical
-//! edge coalescing, precharges persistent composite certification, and stops
-//! before certificate construction or topology allocation.
+//! Validates the pair's complete-section contract after shared arrangement
+//! planning coalesces exact physical incidence, before topology allocation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,7 +18,7 @@ use super::materialize::{
 };
 use super::{
     MixedPcurveLineage, MixedSectionEdgePlan, MixedShellEdgeKey, MixedShellPlanError,
-    MixedShellProofPlan, MixedSourceFaceKey, plan_mixed_shell,
+    MixedShellProofPlan, MixedSourceFaceKey, arrange_mixed_shell, plan_mixed_shell,
 };
 use crate::BodySectionGraph;
 use crate::error::Error;
@@ -95,8 +90,9 @@ pub(crate) fn plan_cylinder_pair_boundary(
 ) -> Result<CertifiedCylinderPairPlan, CylinderPairPlanError> {
     let selected = select_boundary_fragments(operation, prepared.classified())
         .map_err(CylinderPairPlanError::Selection)?;
-    let plan = plan_mixed_shell(store, graph, prepared.bindings(), selected)
+    let arrangement = arrange_mixed_shell(store, graph, prepared.bindings(), selected)
         .map_err(CylinderPairPlanError::Plan)?;
+    let plan = plan_mixed_shell(store, graph, arrangement).map_err(CylinderPairPlanError::Plan)?;
     let blueprint = prepare_mixed_shell_materialization(&plan, store)
         .map_err(CylinderPairPlanError::PhysicalIncidence)?;
     let validation_work = cylinder_pair_validation_work(

@@ -1033,7 +1033,7 @@ mod tests {
     use super::super::curved_source::{CylinderSourceOutcome, extract_cylinder_source};
     use super::super::extract::extract_planar_source_body;
     use super::super::mixed_shell_plan::{
-        MixedShellCellKind, MixedShellEdgeKey, MixedShellVertexKey,
+        MixedShellCellKind, MixedShellEdgeKey, MixedShellVertexKey, arrange_mixed_shell,
         components::partition_prepared_mixed_shell_components,
         materialize::{
             MixedShellScalarInputs, materialize_mixed_shell_component_inputs,
@@ -1157,8 +1157,10 @@ mod tests {
                 continue;
             }
 
-            let plan =
-                plan_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected).unwrap();
+            let arrangement =
+                arrange_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected)
+                    .unwrap();
+            let plan = plan_mixed_shell(&part.state.store, &graph, arrangement).unwrap();
             assert_eq!(plan.cap_rings().len(), 2);
             for ring in plan.cap_rings() {
                 let face = plan
@@ -1397,9 +1399,10 @@ mod tests {
                 )
                 .unwrap();
                 let selected = select_boundary_fragments(operation, prepared.classified()).unwrap();
-                let plan =
-                    plan_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected)
+                let arrangement =
+                    arrange_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected)
                         .unwrap();
+                let plan = plan_mixed_shell(&part.state.store, &graph, arrangement).unwrap();
                 assert!(
                     plan.materialization_gaps().is_empty(),
                     "{operation:?}: {:?}",

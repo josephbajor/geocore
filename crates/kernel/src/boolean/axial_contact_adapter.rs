@@ -38,7 +38,7 @@ use super::mixed_shell_plan::{
     arrange_coincident_cylinder_sides_mixed_shell, arrange_common_support_spans_mixed_shell,
     arrange_internal_tangency_bands_mixed_shell, arrange_internal_tangency_union_mixed_shell,
     arrange_projected_ring_hole_with_source_lineage, arrange_source_arc_overlays_mixed_shell,
-    complete_mixed_shell_plan, source_face_key,
+    plan_mixed_shell, source_face_key,
 };
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCommonSupport,
@@ -223,8 +223,8 @@ pub(super) fn execute_common_support_boolean(
         linear,
     )
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -346,8 +346,8 @@ pub(super) fn execute_internal_tangency_boolean(
         ),
     }
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -389,8 +389,8 @@ fn execute_strict_secant_contact(
         linear,
     )
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -628,8 +628,8 @@ fn execute_internal_contact(
         linear,
     )
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -679,8 +679,8 @@ fn execute_coincident_contact(
         linear,
     )
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 

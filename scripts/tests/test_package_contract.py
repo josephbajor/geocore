@@ -65,9 +65,12 @@ class SpineFreezeTests(unittest.TestCase):
 }
 fn indeterminate() {}
 """
+    MIXED_SHELL_SOURCE = "pub(crate) fn plan_mixed_shell() {}\n"
 
     def test_reviewed_certifiers_and_filenames_pass(self) -> None:
-        validate_spine_freeze(self.SOURCE, SPINE_FROZEN_FILENAMES)
+        validate_spine_freeze(
+            self.SOURCE, self.MIXED_SHELL_SOURCE, SPINE_FROZEN_FILENAMES
+        )
 
     def test_new_certifier_or_frozen_filename_fails(self) -> None:
         source = self.SOURCE.replace(
@@ -79,7 +82,24 @@ fn indeterminate() {}
         with self.assertRaisesRegex(
             ContractError, "new_certifiers=.*certify_new_shell.*new_filenames="
         ):
-            validate_spine_freeze(source, paths)
+            validate_spine_freeze(source, self.MIXED_SHELL_SOURCE, paths)
+
+    def test_mixed_shell_admission_extra_planner_and_callback_fail(self) -> None:
+        source = """enum SectionPlanningAdmission { CoincidentCaps }
+fn plan_mixed_shell() {}
+fn plan_internal_tangency_mixed_shell() {}
+fn finish_shell(hook: impl FnOnce(&mut Vec<MixedShellFacePlan>)) {}
+"""
+        with self.assertRaisesRegex(
+            ContractError,
+            "mixed_shell_planners=.*plan_internal_tangency_mixed_shell"
+            ".*section_planning_admission=True.*plan_callback=True",
+        ):
+            validate_spine_freeze(self.SOURCE, source, SPINE_FROZEN_FILENAMES)
+
+    def test_missing_mixed_shell_planner_fails(self) -> None:
+        with self.assertRaisesRegex(ContractError, "mixed_shell_planners=\\[\\]"):
+            validate_spine_freeze(self.SOURCE, "", SPINE_FROZEN_FILENAMES)
 
 
 if __name__ == "__main__":

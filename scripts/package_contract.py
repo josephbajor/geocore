@@ -215,8 +215,10 @@ def validate_facade_client(metadata: dict[str, Any]) -> None:
         )
 
 
-def validate_spine_freeze(shell_source: str, paths: Iterable[str]) -> None:
-    """Reject new shell certifiers and frozen planner/proof filename families."""
+def validate_spine_freeze(
+    shell_source: str, mixed_shell_source: str, paths: Iterable[str]
+) -> None:
+    """Reject growth of shell certification and mixed-shell planning spines."""
     cascade = shell_source[
         shell_source.index("if body_kind != BodyKind::Solid") :
         shell_source.index("\nfn indeterminate()")
@@ -231,10 +233,29 @@ def validate_spine_freeze(shell_source: str, paths: Iterable[str]) -> None:
     }
     new_certifiers = sorted(certifiers - LIVE_SHELL_CERTIFIERS)
     new_filenames = sorted(frozen - SPINE_FROZEN_FILENAMES)
-    if new_certifiers or new_filenames:
+    planners = set(
+        re.findall(r"\bfn\s+(plan_[a-z0-9_]*mixed_shell)\b", mixed_shell_source)
+    )
+    admission = "SectionPlanningAdmission" in mixed_shell_source
+    callback = bool(
+        re.search(
+            r"\b(?:impl|dyn)\s+Fn(?:Once|Mut)?\b"
+            r"|\b[A-Z][A-Za-z0-9_]*\s*:\s*Fn(?:Once|Mut)?\b|[:=]\s*fn\s*\(",
+            mixed_shell_source,
+        )
+    )
+    if (
+        new_certifiers
+        or new_filenames
+        or planners != {"plan_mixed_shell"}
+        or admission
+        or callback
+    ):
         raise ContractError(
             "spine freeze changed: "
-            f"new_certifiers={new_certifiers}, new_filenames={new_filenames}"
+            f"new_certifiers={new_certifiers}, new_filenames={new_filenames}, "
+            f"mixed_shell_planners={sorted(planners)}, "
+            f"section_planning_admission={admission}, plan_callback={callback}"
         )
 
 
@@ -257,8 +278,18 @@ def main() -> int:
     )
     validate_package_files(package.stdout.splitlines())
     validate_facade_client(json.loads(metadata.stdout))
+    mixed_shell_paths = [
+        repository / "crates/kernel/src/boolean/mixed_shell_plan.rs",
+        *sorted(
+            (repository / "crates/kernel/src/boolean/mixed_shell_plan").glob("*.rs")
+        ),
+    ]
     validate_spine_freeze(
         (repository / "crates/ktopo/src/shell_proof.rs").read_text(),
+        "\n".join(
+            path.read_text().split("\n#[cfg(test)]\nmod tests", 1)[0]
+            for path in mixed_shell_paths
+        ),
         (str(path.relative_to(repository)) for path in repository.glob("crates/**/*.rs")),
     )
     print("package, facade-client, and spine-freeze contracts are current")

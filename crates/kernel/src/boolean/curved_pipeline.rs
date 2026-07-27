@@ -40,7 +40,7 @@ use super::mixed_shell_plan::materialize::{
     materialize_mixed_shell_component_inputs, prepare_mixed_shell_materialization,
 };
 use super::mixed_shell_plan::{
-    MixedShellPlanError, arrange_projected_ring_hole_mixed_shell, complete_mixed_shell_plan,
+    MixedShellPlanError, arrange_mixed_shell, arrange_projected_ring_hole_mixed_shell,
     plan_mixed_shell,
 };
 use super::pipeline::PLANAR_BOOLEAN_REALIZATION_WORK;
@@ -334,8 +334,10 @@ fn execute_mixed_bounded_arc(
             .collect::<Vec<_>>();
         return realize_source_body_copies(edit, &sources, scope);
     }
-    let plan = plan_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
+    let arrangement = arrange_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
         .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
 
     // Complete exact-scalar evidence is materialized and preflighted before
     // the failure-atomic realization transaction opens.
@@ -385,8 +387,8 @@ fn execute_mixed_support_contact(
         linear,
     )
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 

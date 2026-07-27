@@ -12,8 +12,8 @@ use super::curved_pipeline::{
 use super::curved_realize::realize_certified_cylinder_source_copies;
 use super::curved_source::CertifiedCylinderSource;
 use super::mixed_shell_plan::{
-    MixedBoundedSourceRoot, MixedShellProofPlan, arrange_parallel_cylinder_coincident_boolean,
-    complete_mixed_shell_plan, plan_mixed_shell,
+    MixedBoundedSourceRoot, MixedShellProofPlan, arrange_mixed_shell,
+    arrange_parallel_cylinder_coincident_boolean, plan_mixed_shell,
 };
 use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
@@ -28,13 +28,9 @@ use crate::section::section_bodies_in_scope;
 use crate::session::PartEdit;
 use crate::{BodyId, BodySectionGraph};
 
-/// Consume proof-complete parallel-cylinder relations through Full-checked
-/// realization paths.
-///
-/// Interior-disjoint sources retain whole boundaries, including exact external
-/// tangency under regularized-solid semantics. Volumetric overlaps use shared
-/// arrangement, truth selection, and shell planning. Commutative operations
-/// receive a canonical source order; Subtract preserves caller order.
+/// Consume proof-complete parallel-cylinder relations through shared
+/// arrangements and Full-checked realization. Commutative operations receive
+/// a canonical source order; Subtract preserves caller order.
 pub(super) fn execute_parallel_cylinder_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -207,8 +203,10 @@ fn execute_complete_relation(
             "certified positive-volume parallel-cylinder Boolean selected no boundary",
         ));
     }
-    let plan = plan_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
+    let arrangement = arrange_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
         .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     if !plan_matches_relation(&plan, relation) {
         return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
             "parallel-cylinder shell omitted certified section evidence",
@@ -257,8 +255,8 @@ fn execute_coincident_cap_boolean(
         linear,
     )
     .map_err(mixed_plan_failure)?;
-    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
-        .map_err(mixed_plan_failure)?;
+    let plan =
+        plan_mixed_shell(&edit.state.store, graph, arrangement).map_err(mixed_plan_failure)?;
     if !coincident_cap_plan_matches_relation(&plan, relation) {
         return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
             "coincident-cap shell omitted certified boundary evidence",

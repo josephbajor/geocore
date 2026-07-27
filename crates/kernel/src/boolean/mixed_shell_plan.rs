@@ -646,12 +646,12 @@ struct SectionUseLineage {
     cylinder_period_shift: i64,
 }
 
-pub(crate) fn plan_mixed_shell<'a>(
+pub(crate) fn arrange_mixed_shell<'a>(
     store: &Store,
     graph: &BodySectionGraph,
     bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
     selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     if graph.completion() != SectionCompletion::Complete || !graph.gaps().is_empty() {
         return Err(MixedShellPlanError::SectionIncomplete);
     }
@@ -659,14 +659,13 @@ pub(crate) fn plan_mixed_shell<'a>(
         .curve_fragments()
         .iter()
         .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole));
-    let arrangement = arrange_selected_mixed_shell(
+    arrange_selected_mixed_shell(
         store,
         graph,
         bindings,
         selected.into_iter().map(selected_cell),
         face_only_lineage,
-    )?;
-    complete_mixed_shell_plan(store, graph, arrangement)
+    )
 }
 
 pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
@@ -2326,7 +2325,7 @@ fn arrange_selected_mixed_shell<'a>(
     })
 }
 
-pub(crate) fn complete_mixed_shell_plan(
+pub(crate) fn plan_mixed_shell(
     store: &Store,
     graph: &BodySectionGraph,
     arrangement: MixedShellArrangement<'_>,
@@ -3884,6 +3883,16 @@ mod tests {
     )>;
     type SelectedMixedCells = Vec<SelectedBoundaryFragment<MixedShellCellKey, ()>>;
 
+    fn plan_selected<'a>(
+        store: &Store,
+        graph: &BodySectionGraph,
+        bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+        selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+    ) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+        let arrangement = arrange_mixed_shell(store, graph, bindings, selected)?;
+        plan_mixed_shell(store, graph, arrangement)
+    }
+
     fn store_shape(store: &Store) -> [usize; 5] {
         [
             store.count::<ktopo::entity::Face>(),
@@ -4243,7 +4252,7 @@ mod tests {
                                 lineage: output.lineage(),
                             }
                         }));
-                    let plan = plan_mixed_shell(store, graph, bindings, selected).unwrap();
+                    let plan = plan_selected(store, graph, bindings, selected).unwrap();
                     for edge in plan.section_edges() {
                         let uses = plan
                             .faces()
@@ -4325,12 +4334,12 @@ mod tests {
                     bindings
                 };
                 let expected =
-                    plan_mixed_shell(store, graph, make_bindings(), selected.clone()).unwrap();
+                    plan_selected(store, graph, make_bindings(), selected.clone()).unwrap();
                 let mut bindings = make_bindings();
                 bindings.reverse();
                 let mut reversed_selected = selected;
                 reversed_selected.reverse();
-                let actual = plan_mixed_shell(store, graph, bindings, reversed_selected).unwrap();
+                let actual = plan_selected(store, graph, bindings, reversed_selected).unwrap();
                 assert_eq!(actual, expected);
                 assert_eq!(
                     materialize::prepare_mixed_shell_materialization(&actual, store).unwrap(),
@@ -4408,7 +4417,7 @@ mod tests {
                         },
                     ));
                     assert!(matches!(
-                        plan_mixed_shell(store, graph, bindings, selected.clone()),
+                        plan_selected(store, graph, bindings, selected.clone()),
                         Err(MixedShellPlanError::PlanarLineageMismatch(_))
                     ));
                 }
@@ -4428,7 +4437,7 @@ mod tests {
                     }
                 }));
                 assert!(matches!(
-                    plan_mixed_shell(store, graph, bindings, selected),
+                    plan_selected(store, graph, bindings, selected),
                     Err(MixedShellPlanError::SectionUseCount { actual: 1, .. })
                 ));
 
@@ -4447,7 +4456,7 @@ mod tests {
                     select_boundary_fragments(RegularizedBooleanOperation::Unite, [forged])
                         .unwrap();
                 assert!(matches!(
-                    plan_mixed_shell(
+                    plan_selected(
                         store,
                         graph,
                         [MixedArrangementBinding::Periodic {
