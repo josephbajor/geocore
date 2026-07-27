@@ -148,6 +148,18 @@ KERNEL_PACKAGE_FILES = {
     "tests/lifecycle/parallel_cylinder_boolean/radial_miss_setops.rs",
 }
 
+# Spine freeze (see `validate_spine_freeze`). These two allowlists close out the
+# 2026-07-24..27 consolidation that routed every cylinder-pair boolean through the
+# generic arrangement -> plan -> materialize spine, deleting the hand-assembly
+# planners and the certifiers pair-bonded to them. Before that work, each new
+# configuration cost a bespoke planner plus a bespoke shell proof, which is rule R1
+# enumeration one level up. The allowlists pin the surface that survived so the
+# pattern cannot regrow silently: no certifier without a live producer, and no new
+# member of the per-configuration planner/proof filename families.
+#
+# Adding an entry here is an operator review event, not a way to unblock a build. A
+# configuration the spine cannot express is refused, not special-cased. History:
+# commits 62c60bf..aa15f9f.
 LIVE_SHELL_CERTIFIERS = frozenset(
     "certify_whole_closed_surface certify_sphere_cap_shell certify_cylinder_band_shell "
     "certify_cylindrical_host_shell certify_bounded_skew_lobe_shell "
