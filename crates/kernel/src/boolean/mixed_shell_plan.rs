@@ -646,7 +646,6 @@ struct SectionUseLineage {
 }
 
 enum SectionPlanningAdmission<'a> {
-    AxialContact(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact),
     CommonSupport(&'a super::parallel_cylinder_relation::CertifiedParallelCylinderCommonSupport),
     InternalTangency(
         &'a super::parallel_cylinder_relation::CertifiedParallelCylinderInternalRadialTangency,
@@ -659,14 +658,6 @@ enum SectionPlanningAdmission<'a> {
 impl SectionPlanningAdmission<'_> {
     fn validate(&self, graph: &BodySectionGraph) -> Result<(), MixedShellPlanError> {
         match self {
-            Self::AxialContact(relation)
-                if graph.completion() == SectionCompletion::Indeterminate
-                    && !graph.gaps().is_empty()
-                    && relation.contact_boundaries()[0].operand()
-                        != relation.contact_boundaries()[1].operand() =>
-            {
-                Ok(())
-            }
             Self::CommonSupport(relation)
                 if graph.completion() == SectionCompletion::Indeterminate
                     && !graph.gaps().is_empty()
@@ -717,33 +708,6 @@ pub(crate) fn plan_mixed_shell<'a>(
     complete_mixed_shell_plan(store, graph, arrangement)
 }
 
-pub(crate) fn plan_axial_contact_mixed_shell<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact,
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-    tolerance: f64,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::AxialContact(relation),
-        bindings,
-        selected.into_iter().map(selected_cell),
-        |arrangements, faces, bounded_source_spans, _, _| {
-            rebase_axial_contact_boundary_arcs(
-                store,
-                graph,
-                arrangements,
-                faces,
-                bounded_source_spans,
-                tolerance,
-            )
-        },
-    )
-}
-
 pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
     store: &Store,
     graph: &BodySectionGraph,
@@ -753,18 +717,66 @@ pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
     ring: &MixedCylinderCapRing,
     tolerance: f64,
 ) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
+    arrange_projected_ring_hole(
+        store,
+        graph,
+        bindings,
+        selected,
+        target_face,
+        ring,
+        tolerance,
+        true,
+    )
+}
+
+pub(crate) fn arrange_projected_ring_hole_with_source_lineage<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+    target_face: RawFaceId,
+    ring: &MixedCylinderCapRing,
+    tolerance: f64,
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
+    arrange_projected_ring_hole(
+        store,
+        graph,
+        bindings,
+        selected,
+        target_face,
+        ring,
+        tolerance,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn arrange_projected_ring_hole<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+    target_face: RawFaceId,
+    ring: &MixedCylinderCapRing,
+    tolerance: f64,
+    face_only_lineage: bool,
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     let fail = || MixedShellPlanError::AxialContactBoundaryMismatch;
     let mut arrangement = arrange_selected_mixed_shell(
         store,
         graph,
         bindings,
         selected.into_iter().map(selected_cell),
-        true,
+        face_only_lineage,
     )?;
     if arrangement
         .faces
         .iter()
         .any(|face| face.source_face == *ring.cap_face())
+        || arrangement.cap_rings.iter().any(|candidate| {
+            candidate.side_source() == ring.side_source()
+                && candidate.side_loop_key() == ring.side_loop_key()
+        })
     {
         return Err(fail());
     }
@@ -779,23 +791,6 @@ pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let [target] = targets.as_slice() else {
-        return Err(fail());
-    };
-    let side_directions = arrangement
-        .faces
-        .iter()
-        .flat_map(|face| &face.loops)
-        .flat_map(|loop_| &loop_.uses)
-        .filter_map(|use_| {
-            (use_.edge
-                == (MixedShellEdgeKey::PeriodicSource {
-                    source: ring.side_source(),
-                    loop_key: ring.side_loop_key(),
-                }))
-            .then_some(use_.direction)
-        })
-        .collect::<Vec<_>>();
-    let [side_direction] = side_directions.as_slice() else {
         return Err(fail());
     };
     let target = &mut arrangement.faces[*target];
@@ -820,63 +815,14 @@ pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
                 source: ring.side_source(),
                 loop_key: ring.side_loop_key(),
             },
-            direction: opposite(*side_direction),
+            // Finalized from the selected periodic-side authority.
+            direction: ArrangementDirection::Forward,
             pcurve: MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(proof),
         }],
         vertices: vec![seam.clone(), seam],
     });
     arrangement.cap_rings.push(ring.clone());
     Ok(arrangement)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_internal_axial_contact_mixed_shell<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact,
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-    outer_contact: &MixedCylinderCapRing,
-    inner_contact: &MixedCylinderCapRing,
-    tolerance: f64,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::AxialContact(relation),
-        bindings,
-        selected.into_iter().map(selected_cell),
-        |_, faces, _, cap_rings, _| {
-            append_internal_contact_hole(
-                store,
-                faces,
-                cap_rings,
-                outer_contact,
-                inner_contact,
-                tolerance,
-            )
-        },
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_coincident_axial_contact_mixed_shell<'a>(
-    store: &Store,
-    graph: &BodySectionGraph,
-    relation: &super::parallel_cylinder_relation::CertifiedParallelCylinderAxialContact,
-    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
-    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
-    far_rings: [&MixedCylinderCapRing; 2],
-    tolerance: f64,
-) -> Result<MixedShellProofPlan, MixedShellPlanError> {
-    plan_mixed_shell_with_augmentation(
-        store,
-        graph,
-        SectionPlanningAdmission::AxialContact(relation),
-        bindings,
-        selected.into_iter().map(selected_cell),
-        |_, faces, _, _, _| merge_coincident_side_faces(store, faces, far_rings, tolerance),
-    )
 }
 
 pub(crate) fn plan_common_support_mixed_shell<'a>(
@@ -1913,72 +1859,23 @@ fn sole_interval_operand(
     operands.next().is_none().then_some(first)
 }
 
-fn append_internal_contact_hole(
+pub(crate) fn arrange_coincident_cylinder_sides_mixed_shell<'a>(
     store: &Store,
-    faces: &mut [MixedShellFacePlan],
-    cap_rings: &mut Vec<MixedCylinderCapRing>,
-    outer: &MixedCylinderCapRing,
-    inner: &MixedCylinderCapRing,
-    tolerance: f64,
-) -> Result<(), MixedShellPlanError> {
-    let fail = || MixedShellPlanError::AxialContactBoundaryMismatch;
-    if outer.side_source() == inner.side_source()
-        || cap_rings.iter().any(|ring| {
-            ring.side_source() == inner.side_source()
-                && ring.side_loop_key() == inner.side_loop_key()
-        })
-    {
-        return Err(fail());
-    }
-    let matching = faces
-        .iter()
-        .enumerate()
-        .filter(|face| {
-            face.1.source == outer.cap_source() && face.1.source_face == *outer.cap_face()
-        })
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    let [target_index] = matching.as_slice() else {
-        return Err(fail());
-    };
-    let target = &mut faces[*target_index];
-    if target.loops.len() != 1 {
-        return Err(fail());
-    }
-    let proof = ProjectedEndpointFreeSourceCircle::certify(
-        store,
-        inner,
-        target.source,
-        &target.source_face,
-        tolerance,
-    )
-    .map_err(MixedShellPlanError::ProjectedSourceCircle)?;
-    let seam = MixedShellVertexKey::ProofSeam {
-        source: inner.side_source(),
-        loop_key: inner.side_loop_key(),
-    };
-    target.loops.push(MixedShellLoopPlan {
-        uses: vec![MixedShellEdgeUse {
-            edge: MixedShellEdgeKey::PeriodicSource {
-                source: inner.side_source(),
-                loop_key: inner.side_loop_key(),
-            },
-            direction: ArrangementDirection::Forward,
-            pcurve: MixedPcurveLineage::ProjectedEndpointFreeSourceCircle(proof),
-        }],
-        vertices: vec![seam.clone(), seam],
-    });
-    cap_rings.push(inner.clone());
-    Ok(())
-}
-
-fn merge_coincident_side_faces(
-    store: &Store,
-    faces: &mut Vec<MixedShellFacePlan>,
+    graph: &BodySectionGraph,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
     far_rings: [&MixedCylinderCapRing; 2],
     tolerance: f64,
-) -> Result<(), MixedShellPlanError> {
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     let fail = || MixedShellPlanError::AxialContactBoundaryMismatch;
+    let mut arrangement = arrange_selected_mixed_shell(
+        store,
+        graph,
+        bindings,
+        selected.into_iter().map(selected_cell),
+        false,
+    )?;
+    let faces = &mut arrangement.faces;
     if far_rings[0].side_source() == far_rings[1].side_source() {
         return Err(fail());
     }
@@ -2061,17 +1958,16 @@ fn merge_coincident_side_faces(
             split_lineage: None,
         },
     );
-    Ok(())
+    Ok(arrangement)
 }
 
-fn rebase_axial_contact_boundary_arcs(
+pub(crate) fn arrange_source_arc_overlays_mixed_shell<'a>(
     store: &Store,
     graph: &BodySectionGraph,
-    arrangements: &BTreeMap<MixedSourceFaceKey, MixedArrangementBinding<'_>>,
-    faces: &mut [MixedShellFacePlan],
-    bounded_source_spans: &mut [MixedBoundedSourceSpanPlan],
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
     tolerance: f64,
-) -> Result<(), MixedShellPlanError> {
+) -> Result<MixedShellArrangement<'a>, MixedShellPlanError> {
     #[derive(Clone)]
     struct BoundaryRebase {
         fragment: usize,
@@ -2081,6 +1977,16 @@ fn rebase_axial_contact_boundary_arcs(
     }
 
     let fail = || MixedShellPlanError::AxialContactBoundaryMismatch;
+    let mut output = arrange_selected_mixed_shell(
+        store,
+        graph,
+        bindings,
+        selected.into_iter().map(selected_cell),
+        false,
+    )?;
+    let arrangements = &output.bindings;
+    let bounded_source_spans = &mut output.bounded_source_spans;
+    let faces = &mut output.faces;
     let mut rebases = BTreeMap::new();
     for (&source, binding) in arrangements {
         let MixedArrangementBinding::Periodic {
@@ -2226,7 +2132,7 @@ fn rebase_axial_contact_boundary_arcs(
             return Err(fail());
         }
     }
-    Ok(())
+    Ok(output)
 }
 
 fn plan_mixed_shell_with_augmentation<'a>(

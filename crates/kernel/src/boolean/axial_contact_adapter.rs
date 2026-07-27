@@ -34,10 +34,11 @@ use super::mixed_periodic_arrangement::{
     MixedPeriodicFaceArrangement, arrange_mixed_periodic_face_from_embedding,
 };
 use super::mixed_shell_plan::{
-    MixedArrangementBinding, MixedShellCellKey, plan_axial_contact_mixed_shell,
-    plan_coincident_axial_contact_mixed_shell, plan_common_support_mixed_shell,
-    plan_internal_axial_contact_mixed_shell, plan_internal_tangency_bands_mixed_shell,
-    plan_internal_tangency_union_mixed_shell, source_face_key,
+    MixedArrangementBinding, MixedShellCellKey, arrange_coincident_cylinder_sides_mixed_shell,
+    arrange_projected_ring_hole_with_source_lineage, arrange_source_arc_overlays_mixed_shell,
+    complete_mixed_shell_plan, plan_common_support_mixed_shell,
+    plan_internal_tangency_bands_mixed_shell, plan_internal_tangency_union_mixed_shell,
+    source_face_key,
 };
 use super::parallel_cylinder_relation::{
     CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCommonSupport,
@@ -160,11 +161,11 @@ pub(super) fn execute_axial_contact_unite(
             execute_strict_secant_contact(edit, bodies, cylinders, graph, contact, linear, scope)
         }
         ContactRadialRelation::StrictInternal { outer } => execute_internal_contact(
-            edit, bodies, cylinders, graph, contact, sources, outer, linear, scope,
+            edit, bodies, cylinders, graph, sources, outer, linear, scope,
         ),
-        ContactRadialRelation::Coincident => execute_coincident_contact(
-            edit, bodies, cylinders, graph, contact, sources, linear, scope,
-        ),
+        ContactRadialRelation::Coincident => {
+            execute_coincident_contact(edit, bodies, cylinders, graph, sources, linear, scope)
+        }
         ContactRadialRelation::ExactExternalTangent => realize_certified_cylinder_source_copies(
             edit,
             &[
@@ -371,15 +372,16 @@ fn execute_strict_secant_contact(
         prepared.classified.clone(),
     )
     .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
-    let plan = plan_axial_contact_mixed_shell(
+    let arrangement = arrange_source_arc_overlays_mixed_shell(
         &edit.state.store,
         graph,
-        contact,
         prepared.bindings(),
         selected,
         linear,
     )
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -572,7 +574,6 @@ fn execute_internal_contact(
     bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
     graph: &BodySectionGraph,
-    contact: &CertifiedParallelCylinderAxialContact,
     sources: [ContactSource<'_>; 2],
     outer: usize,
     linear: f64,
@@ -608,17 +609,18 @@ fn execute_internal_contact(
     )
     .map_err(|error| PipelineFailure::Refused(CurvedBooleanPipelineRefusal::Selection(error)))?;
     let inner_contact = &prepared.rings[inner][sources[inner].contact_boundary];
-    let plan = plan_internal_axial_contact_mixed_shell(
+    let arrangement = arrange_projected_ring_hole_with_source_lineage(
         &edit.state.store,
         graph,
-        contact,
         prepared.bindings(),
         selected,
-        outer_contact,
+        outer_contact.cap_face().raw(),
         inner_contact,
         linear,
     )
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
@@ -628,7 +630,6 @@ fn execute_coincident_contact(
     bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
     graph: &BodySectionGraph,
-    contact: &CertifiedParallelCylinderAxialContact,
     sources: [ContactSource<'_>; 2],
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
@@ -660,16 +661,17 @@ fn execute_coincident_contact(
         &prepared.rings[0][sources[0].far_boundary],
         &prepared.rings[1][sources[1].far_boundary],
     ];
-    let plan = plan_coincident_axial_contact_mixed_shell(
+    let arrangement = arrange_coincident_cylinder_sides_mixed_shell(
         &edit.state.store,
         graph,
-        contact,
         prepared.bindings(),
         selected,
         far_rings,
         linear,
     )
     .map_err(mixed_plan_failure)?;
+    let plan = complete_mixed_shell_plan(&edit.state.store, graph, arrangement)
+        .map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope)
 }
 
