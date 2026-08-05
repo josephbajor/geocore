@@ -17,12 +17,12 @@
 use super::*;
 use crate::entity::FinId;
 
-use super::mixed_profile_prism_proof::{
+use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
+use super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, Side, Translation, certified_close, certified_nonzero,
     certified_parallel, certify_sweep_support, mapped_vertex, oriented_dot_sign, peer_face,
     prepare_cap, ruling_connects, translated_carrier, translated_vertices,
 };
-use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
 
 #[cfg(test)]
 #[path = "cap_reaching_cylinder_shell_proof/tests.rs"]

@@ -45,6 +45,8 @@ mod cylindrical_host_proof;
 mod mixed_profile_prism_proof;
 #[path = "portal_cylinder_shell_proof.rs"]
 mod portal_cylinder_shell_proof;
+#[path = "shell_lemmas.rs"]
+mod shell_lemmas;
 #[path = "two_host_axial_chain_shell_proof.rs"]
 mod two_host_axial_chain_shell_proof;
 #[cfg(test)]

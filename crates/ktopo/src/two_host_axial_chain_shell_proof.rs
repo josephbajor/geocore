@@ -17,12 +17,12 @@
 use super::*;
 use crate::entity::FinId;
 
-use super::mixed_profile_prism_proof::{
+use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
+use super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, Translation, certified_close, certified_nonzero,
     certified_parallel, mapped_vertex, oriented_dot_sign, peer_face, prepare_cap, ruling_connects,
     translated_vertices,
 };
-use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
 use crate::semantic_planar_math::{
     IntervalVec3, cross as interval_cross, dot as interval_dot, point as interval_point,
     sub as interval_sub,

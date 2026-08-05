@@ -17,7 +17,7 @@ use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::Vec2;
 
-use super::mixed_profile_prism_proof::{
+use super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, Side, certified_nonzero, certified_parallel,
     certify_sweep_support, edge_has_vertices, mapped_vertex, oriented_dot_sign, peer_face,
     prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,

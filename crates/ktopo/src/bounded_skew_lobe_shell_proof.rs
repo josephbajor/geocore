@@ -8,7 +8,7 @@
 //! complete finite-window family and every other member is certified outside
 //! both Cylinder face interiors.
 
-use super::mixed_profile_prism_proof::{
+use super::shell_lemmas::{
     Cap, ProfileCarrier, certified_parallel, oriented_dot_sign, peer_face, prepare_cap,
 };
 use super::{ShellCertification, ShellEmbedding, ShellOrientation};
