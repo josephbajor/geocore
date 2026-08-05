@@ -1,5 +1,6 @@
 """Contract tests for deterministic developer test lanes."""
 
+import sys
 import unittest
 
 from scripts.test_lanes import (
@@ -16,6 +17,7 @@ from scripts.test_lanes import (
     focused_stage,
     format_inventory,
     full_stages,
+    guard_stages,
     repository_inventory,
     standard_stages,
     validate_workspace_packages,
@@ -124,6 +126,30 @@ class CommandTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.inventory = repository_inventory()
 
+    def test_every_ritual_lane_fronts_the_ci_guard_prefix(self) -> None:
+        guards = tuple(stage.command for stage in guard_stages())
+        self.assertIn(("cargo", "fmt", "--all", "--check"), guards)
+        self.assertIn(
+            ("cargo", "clippy", "--all-targets", "--", "-D", "warnings"), guards
+        )
+        self.assertEqual(
+            tuple(command[1:] for command in guards if command[0] == sys.executable),
+            (
+                ("scripts/package_contract.py",),
+                ("scripts/legacy_api_contract.py",),
+                ("scripts/doc_budget.py",),
+                ("scripts/benchmark_baseline.py", "smoke"),
+                ("scripts/benchmark_baseline.py", "validate"),
+            ),
+        )
+        for stages in (
+            fast_stages(self.inventory),
+            standard_stages(self.inventory),
+            full_stages(),
+        ):
+            commands = tuple(stage.command for stage in stages)
+            self.assertEqual(commands[: len(guards)], guards)
+
     def test_fast_commands_never_select_a_production_ratchet(self) -> None:
         commands = tuple(stage.command for stage in fast_stages(self.inventory))
         flattened = {argument for command in commands for argument in command}
@@ -134,7 +160,7 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("--doc", flattened)
         self.assertIn("unittest", flattened)
         self.assertEqual(
-            commands[0],
+            commands[len(guard_stages())],
             ("cargo", "test", "--workspace", "--lib", "--bins"),
         )
         self.assertEqual(
@@ -169,7 +195,7 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("--doc", flattened)
         self.assertIn("unittest", flattened)
         self.assertEqual(
-            commands[0],
+            commands[len(guard_stages())],
             ("cargo", "test", "--workspace", "--lib", "--bins"),
         )
 
@@ -182,23 +208,30 @@ class CommandTests(unittest.TestCase):
 
     def test_full_commands_preserve_all_targets_docs_and_tooling(self) -> None:
         commands = tuple(stage.command for stage in full_stages())
+        guard_count = len(guard_stages())
         self.assertEqual(
-            commands[0], ("cargo", "test", "--workspace", "--all-targets")
+            commands[guard_count],
+            ("cargo", "test", "--workspace", "--all-targets"),
         )
         self.assertEqual(
-            commands[1], ("cargo", "test", "--workspace", "--doc")
+            commands[guard_count + 1], ("cargo", "test", "--workspace", "--doc")
         )
-        self.assertEqual(commands[2][1:4], ("-m", "unittest", "discover"))
+        self.assertEqual(
+            commands[guard_count + 2][1:4], ("-m", "unittest", "discover")
+        )
 
-    def test_release_reaches_every_cargo_stage_in_every_lane(self) -> None:
+    def test_release_reaches_every_cargo_test_stage_in_every_lane(self) -> None:
         lane_stages = (
             fast_stages(self.inventory, release=True),
             standard_stages(self.inventory, release=True),
             docs_stages(release=True),
             full_stages(release=True),
         )
+        guard_commands = {stage.command for stage in guard_stages()}
         for stages in lane_stages:
             for stage in stages:
+                if stage.command in guard_commands:
+                    continue
                 if stage.command[0] == "cargo":
                     self.assertEqual(stage.command[:3], ("cargo", "test", "--release"))
 

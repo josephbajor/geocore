@@ -384,6 +384,45 @@ def _lane_contract_stage() -> Stage:
     )
 
 
+def guard_stages() -> tuple[Stage, ...]:
+    """Build the CI-parity guard prefix shared by every ritual lane.
+
+    ORCHESTRATION.md directs `fast` before commit and `standard` before
+    handoff, while CI's `checks` and `quality-contracts` jobs enforce format,
+    Clippy, and the offline guard scripts. A lane without those guards let the
+    local ritual pass on a commit CI then rejected, so every ritual lane fronts
+    the same offline guards CI runs. Keep this tuple synchronized with ci.yml;
+    the lane contract tests pin its presence at the head of each ritual lane.
+    """
+    return (
+        Stage("workspace format gate", ("cargo", "fmt", "--all", "--check")),
+        Stage(
+            "package and facade contracts",
+            (sys.executable, "scripts/package_contract.py"),
+        ),
+        Stage(
+            "legacy API contract",
+            (sys.executable, "scripts/legacy_api_contract.py"),
+        ),
+        Stage(
+            "documentation budgets",
+            (sys.executable, "scripts/doc_budget.py"),
+        ),
+        Stage(
+            "benchmark contract smoke",
+            (sys.executable, "scripts/benchmark_baseline.py", "smoke"),
+        ),
+        Stage(
+            "benchmark baseline validation",
+            (sys.executable, "scripts/benchmark_baseline.py", "validate"),
+        ),
+        Stage(
+            "workspace Clippy gate",
+            ("cargo", "clippy", "--all-targets", "--", "-D", "warnings"),
+        ),
+    )
+
+
 def _workspace_and_integration_stages(
     targets: Sequence[IntegrationTarget],
     release: bool,
@@ -414,11 +453,14 @@ def _workspace_and_integration_stages(
 
 
 def fast_stages(inventory: LaneInventory, release: bool = False) -> tuple[Stage, ...]:
-    """Build the curated inner-loop smoke gate."""
-    stages = _workspace_and_integration_stages(
-        inventory.fast_smoke_targets,
-        release,
-        "fast-smoke",
+    """Build the guarded inner-loop smoke gate."""
+    stages = list(guard_stages())
+    stages.extend(
+        _workspace_and_integration_stages(
+            inventory.fast_smoke_targets,
+            release,
+            "fast-smoke",
+        )
     )
     stages.append(_lane_contract_stage())
     return tuple(stages)
@@ -428,10 +470,13 @@ def standard_stages(
     inventory: LaneInventory, release: bool = False
 ) -> tuple[Stage, ...]:
     """Build the broad code/tooling gate without production-corpus ratchets."""
-    stages = _workspace_and_integration_stages(
-        inventory.standard_targets,
-        release,
-        "standard",
+    stages = list(guard_stages())
+    stages.extend(
+        _workspace_and_integration_stages(
+            inventory.standard_targets,
+            release,
+            "standard",
+        )
     )
     stages.append(_tooling_contract_stage())
     return tuple(stages)
@@ -452,6 +497,7 @@ def full_stages(release: bool = False) -> tuple[Stage, ...]:
     """Build the pre-merge lane, including all production-corpus ratchets."""
     base = _cargo_test_base(release)
     return (
+        *guard_stages(),
         Stage(
             "all workspace targets",
             tuple(base + ["--workspace", "--all-targets"]),
@@ -563,13 +609,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     fast = subparsers.add_parser(
-        "fast", help="run workspace unit tests and a curated integration smoke set"
+        "fast",
+        help="run CI guards, workspace unit tests, and a curated smoke set",
     )
     _add_execution_flags(fast)
 
     standard = subparsers.add_parser(
         "standard",
-        help="run every non-corpus target plus tooling contracts",
+        help="run CI guards plus every non-corpus target and tooling contracts",
     )
     _add_execution_flags(standard)
 
@@ -579,7 +626,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_execution_flags(docs)
 
     full = subparsers.add_parser(
-        "full", help="run every workspace target, doc test, and tooling contract"
+        "full",
+        help="run CI guards, every workspace target, doc tests, and contracts",
     )
     _add_execution_flags(full)
 
