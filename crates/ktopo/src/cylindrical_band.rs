@@ -444,6 +444,14 @@ mod tests {
         store.get(shell).unwrap().faces().try_into().unwrap()
     }
 
+    fn assert_positive_routing(store: &Store, output: CylindricalBandSolidOutput) {
+        crate::shell_proof::assert_cylinder_band_routing(
+            store,
+            output.shell(),
+            crate::shell_proof::ShellOrientation::Positive,
+        );
+    }
+
     fn assemble_with_lineage() -> (
         Store,
         CylindricalBandSolidOutput,
@@ -459,6 +467,7 @@ mod tests {
             .with_cap_sources([Some(sources[1]), Some(sources[2])]);
         let mut transaction = store.transaction().unwrap();
         let output = transaction.assemble_cylindrical_band_solid(&input).unwrap();
+        assert_positive_routing(transaction.store(), output);
         let decision = transaction
             .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
             .unwrap();
@@ -474,6 +483,7 @@ mod tests {
         let input = CylindricalBandSolidInput::new(frame, 1.25, ParamRange::new(-1.5, 2.75));
         let mut transaction = store.transaction().unwrap();
         let output = transaction.assemble_cylindrical_band_solid(&input).unwrap();
+        assert_positive_routing(transaction.store(), output);
         assert_eq!(
             transaction
                 .store()
@@ -523,6 +533,7 @@ mod tests {
         let input = CylindricalBandSolidInput::new(frame, 0.75, ParamRange::new(0.5, 1.5));
         let mut transaction = store.transaction().unwrap();
         let output = transaction.assemble_cylindrical_band_solid(&input).unwrap();
+        assert_positive_routing(transaction.store(), output);
         let decision = transaction
             .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
             .unwrap();

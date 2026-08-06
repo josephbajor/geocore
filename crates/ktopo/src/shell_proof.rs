@@ -400,6 +400,48 @@ fn certify_cylinder_band_shell(
     Ok(certify_cylinder_band_shell_proof(store, shell_id)?.map(|proof| proof.certification))
 }
 
+#[cfg(test)]
+pub(crate) fn assert_sphere_cap_routing(
+    store: &Store,
+    shell_id: ShellId,
+    expected_orientation: ShellOrientation,
+) {
+    let legacy = certify_sphere_cap_shell(store, shell_id)
+        .expect("legacy sphere-cap proof evaluates")
+        .expect("sphere-cap family is admitted by its legacy proof");
+    let generalized =
+        convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(store, shell_id, None)
+            .expect("generalized convex proof evaluates")
+            .expect("sphere-cap family is admitted by the generalized proof");
+    let expected = ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: expected_orientation,
+    };
+    assert_eq!(legacy, expected, "legacy sphere-cap value changed");
+    assert_eq!(generalized, legacy, "sphere-cap routing value differs");
+}
+
+#[cfg(test)]
+pub(crate) fn assert_cylinder_band_routing(
+    store: &Store,
+    shell_id: ShellId,
+    expected_orientation: ShellOrientation,
+) {
+    let legacy = certify_cylinder_band_shell(store, shell_id)
+        .expect("legacy cylinder-band proof evaluates")
+        .expect("cylinder-band family is admitted by its legacy proof");
+    let generalized =
+        convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(store, shell_id, None)
+            .expect("generalized convex proof evaluates")
+            .expect("cylinder-band family is admitted by the generalized proof");
+    let expected = ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: expected_orientation,
+    };
+    assert_eq!(legacy, expected, "legacy cylinder-band value changed");
+    assert_eq!(generalized, legacy, "cylinder-band routing value differs");
+}
+
 pub(crate) fn certify_cylinder_band_shell_proof(
     store: &Store,
     shell_id: ShellId,
@@ -1728,6 +1770,7 @@ mod tests {
         let mut store = Store::new();
         let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
         let shell = solid_shell(&store, body);
+        assert_cylinder_band_routing(&store, shell, ShellOrientation::Positive);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1750,6 +1793,7 @@ mod tests {
             })
             .unwrap();
         store.get_mut(side).unwrap().sense = Sense::Reversed;
+        assert_cylinder_band_routing(&store, shell, ShellOrientation::Invalid);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1781,6 +1825,7 @@ mod tests {
             let mut store = Store::new();
             let body = cylinder(&mut store, &frame, 1.5, 2.0).unwrap();
             let shell = solid_shell(&store, body);
+            assert_cylinder_band_routing(&store, shell, ShellOrientation::Positive);
             assert_eq!(
                 certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
                 ShellCertification {
