@@ -10,7 +10,7 @@
 use crate::entity::{BodyKind, RegionId, RegionKind, Sense, ShellId, VertexId};
 use crate::geom::SurfaceGeom;
 use crate::shell_proof::{
-    ShellEmbedding, ShellOrientation, certify_cylinder_band_shell_proof, certify_shell_in_scope,
+    ShellEmbedding, ShellOrientation, certify_shell_in_scope, prove_cylinder_band_shell,
 };
 use crate::store::Store;
 use kcore::error::Result;
@@ -62,8 +62,8 @@ pub(crate) fn certify_cylindrical_cavity_region_in_scope(
     let [first, second] = region.shells.as_slice() else {
         return Ok(CylindricalCavityRegionCertification::NotApplicable);
     };
-    let first_band = certify_cylinder_band_shell_proof(store, *first)?;
-    let second_band = certify_cylinder_band_shell_proof(store, *second)?;
+    let first_band = prove_cylinder_band_shell(store, *first)?;
+    let second_band = prove_cylinder_band_shell(store, *second)?;
     let (outer_shell, cavity) = match (first_band, second_band) {
         (None, Some(cavity)) if shell_is_planar(store, *first)? => (*first, cavity),
         (Some(cavity), None) if shell_is_planar(store, *second)? => (*second, cavity),

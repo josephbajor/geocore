@@ -7,8 +7,8 @@ use crate::convex_containment::{
 use crate::entity::{BodyKind, RegionId, RegionKind, Sense, ShellId, VertexId};
 use crate::geom::SurfaceGeom;
 use crate::shell_proof::{
-    CylinderBandShellProof, ShellEmbedding, ShellOrientation, certify_cylinder_band_shell_proof,
-    certify_shell_in_scope,
+    CylinderBandShellProof, ShellEmbedding, ShellOrientation, certify_shell_in_scope,
+    prove_cylinder_band_shell,
 };
 use crate::store::Store;
 use kcore::error::Result;
@@ -77,7 +77,7 @@ pub(crate) fn certify_mixed_convex_region_in_scope(
     let mut band = None;
     let mut planar_shells = Vec::new();
     for &shell in &region.shells {
-        if let Some(candidate) = certify_cylinder_band_shell_proof(store, shell)? {
+        if let Some(candidate) = prove_cylinder_band_shell(store, shell)? {
             if band.replace(candidate).is_some() {
                 return Ok(MixedConvexRegionCertification::NotApplicable);
             }

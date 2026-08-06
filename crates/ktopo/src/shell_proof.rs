@@ -195,8 +195,6 @@ fn certify_shell_impl(
         };
     }
     attempt!(certify_whole_closed_surface);
-    attempt!(certify_sphere_cap_shell);
-    attempt!(certify_cylinder_band_shell);
     attempt!(scoped cylindrical_host_proof::certify_cylindrical_host_shell);
     attempt!(scoped bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell);
     attempt!(scoped mixed_profile_prism_proof::certify_mixed_profile_prism);
@@ -249,131 +247,6 @@ fn certify_whole_closed_surface(
     }))
 }
 
-fn certify_sphere_cap_shell(
-    store: &Store,
-    shell_id: ShellId,
-) -> Result<Option<ShellCertification>> {
-    let shell = store.get(shell_id)?;
-    if shell.faces.len() != 2 {
-        return Ok(None);
-    }
-    let mut sphere_face = None;
-    let mut plane_face = None;
-    for &face_id in &shell.faces {
-        match store.get(store.get(face_id)?.surface)? {
-            SurfaceGeom::Sphere(_) => sphere_face = Some(face_id),
-            SurfaceGeom::Plane(_) => plane_face = Some(face_id),
-            _ => return Ok(None),
-        }
-    }
-    let (Some(sphere_face_id), Some(plane_face_id)) = (sphere_face, plane_face) else {
-        return Ok(None);
-    };
-    let sphere_face = store.get(sphere_face_id)?;
-    let plane_face = store.get(plane_face_id)?;
-    if sphere_face.loops.len() != 1 || plane_face.loops.len() != 1 {
-        return Ok(None);
-    }
-    let sphere_loop = store.get(sphere_face.loops[0])?;
-    let plane_loop = store.get(plane_face.loops[0])?;
-    if sphere_loop.fins.len() != 1
-        || plane_loop.fins.len() != 1
-        || certify_loop_simplicity(store, sphere_face.loops[0])? != LoopSimplicity::Certified
-        || certify_loop_simplicity(store, plane_face.loops[0])? != LoopSimplicity::Certified
-    {
-        return Ok(None);
-    }
-    let sphere_fin = store.get(sphere_loop.fins[0])?;
-    let plane_fin = store.get(plane_loop.fins[0])?;
-    if sphere_fin.edge != plane_fin.edge {
-        return Ok(None);
-    }
-    let edge = store.get(sphere_fin.edge)?;
-    if edge.tolerance.is_some() {
-        return Ok(None);
-    }
-    let Some(curve_id) = edge.curve else {
-        return Ok(None);
-    };
-    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
-        return Ok(None);
-    };
-    let SurfaceGeom::Sphere(sphere) = store.get(sphere_face.surface)? else {
-        unreachable!("classified above");
-    };
-    let SurfaceGeom::Plane(plane) = store.get(plane_face.surface)? else {
-        unreachable!("classified above");
-    };
-    if certify_edge_surface_incidence(
-        store,
-        sphere_fin.edge,
-        sphere_face.surface,
-        LINEAR_RESOLUTION,
-    )? != IncidenceCertification::Certified
-        || certify_edge_surface_incidence(
-            store,
-            plane_fin.edge,
-            plane_face.surface,
-            LINEAR_RESOLUTION,
-        )? != IncidenceCertification::Certified
-    {
-        return Ok(None);
-    }
-
-    let plane_normal = plane.frame().z();
-    if 1.0 - circle.frame().z().dot(plane_normal).abs() > ANGULAR_RESOLUTION {
-        return Ok(None);
-    }
-    let center_offset = sphere.frame().origin() - plane.frame().origin();
-    let signed_height = center_offset.dot(plane_normal);
-    if signed_height.abs() >= sphere.radius() {
-        return Ok(None);
-    }
-    let expected_center = sphere.frame().origin() - plane_normal * signed_height;
-    let expected_radius =
-        (sphere.radius() * sphere.radius() - signed_height * signed_height).sqrt();
-    if circle.frame().origin().dist(expected_center) > LINEAR_RESOLUTION
-        || (circle.radius() - expected_radius).abs() > LINEAR_RESOLUTION
-    {
-        return Ok(None);
-    }
-
-    let range = match edge.bounds {
-        Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => {
-            kgeom::param::ParamRange::new(lo, hi)
-        }
-        Some(_) => return Ok(None),
-        None => circle.param_range(),
-    };
-    let parameter = if sphere_fin.sense.is_forward() {
-        range.lo
-    } else {
-        range.hi
-    };
-    let point = circle.eval(parameter);
-    let mut tangent = circle.eval_derivs(parameter, 1).d[1];
-    if !sphere_fin.sense.is_forward() {
-        tangent = -tangent;
-    }
-    let sphere_normal =
-        (point - sphere.frame().origin()) / sphere.radius() * sense_factor(sphere_face.sense);
-    let cap_interior = sphere_normal.cross(tangent);
-    let plane_outward = plane_normal * sense_factor(plane_face.sense);
-    let alignment = cap_interior.dot(-plane_outward);
-    if alignment.abs() <= circle.radius() * ANGULAR_RESOLUTION {
-        return Ok(None);
-    }
-    let orientation_valid = sphere_face.sense == Sense::Forward && alignment > 0.0;
-    Ok(Some(ShellCertification {
-        embedding: ShellEmbedding::Certified,
-        orientation: if orientation_valid {
-            ShellOrientation::Positive
-        } else {
-            ShellOrientation::Invalid
-        },
-    }))
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CylinderBandShellProof {
     pub(crate) certification: ShellCertification,
@@ -382,33 +255,12 @@ pub(crate) struct CylinderBandShellProof {
     pub(crate) high_center: Point3,
 }
 
-/// Certify a finite full-period cylindrical band closed by two circular
-/// planar caps.
-///
-/// Admission is entirely topology and geometry driven: exactly one
-/// cylindrical face owns two single-fin ring loops, each ring edge is shared
-/// with exactly one single-fin planar cap, and whole-fin incidence proves all
-/// four lifts. The certified edge-to-pcurve correspondences then prove both
-/// axial levels and each cap chart's orientation relative to the cylinder
-/// chart. This establishes an embedded `S1 × [a, b]` band with two disks
-/// without relying on constructor order, rounded model-space frame equality,
-/// or sampled agreement.
-fn certify_cylinder_band_shell(
-    store: &Store,
-    shell_id: ShellId,
-) -> Result<Option<ShellCertification>> {
-    Ok(certify_cylinder_band_shell_proof(store, shell_id)?.map(|proof| proof.certification))
-}
-
 #[cfg(test)]
 pub(crate) fn assert_sphere_cap_routing(
     store: &Store,
     shell_id: ShellId,
     expected_orientation: ShellOrientation,
 ) {
-    let legacy = certify_sphere_cap_shell(store, shell_id)
-        .expect("legacy sphere-cap proof evaluates")
-        .expect("sphere-cap family is admitted by its legacy proof");
     let generalized =
         convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(store, shell_id, None)
             .expect("generalized convex proof evaluates")
@@ -417,8 +269,7 @@ pub(crate) fn assert_sphere_cap_routing(
         embedding: ShellEmbedding::Certified,
         orientation: expected_orientation,
     };
-    assert_eq!(legacy, expected, "legacy sphere-cap value changed");
-    assert_eq!(generalized, legacy, "sphere-cap routing value differs");
+    assert_eq!(generalized, expected, "sphere-cap routing value changed");
 }
 
 #[cfg(test)]
@@ -427,9 +278,6 @@ pub(crate) fn assert_cylinder_band_routing(
     shell_id: ShellId,
     expected_orientation: ShellOrientation,
 ) {
-    let legacy = certify_cylinder_band_shell(store, shell_id)
-        .expect("legacy cylinder-band proof evaluates")
-        .expect("cylinder-band family is admitted by its legacy proof");
     let generalized =
         convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(store, shell_id, None)
             .expect("generalized convex proof evaluates")
@@ -438,11 +286,15 @@ pub(crate) fn assert_cylinder_band_routing(
         embedding: ShellEmbedding::Certified,
         orientation: expected_orientation,
     };
-    assert_eq!(legacy, expected, "legacy cylinder-band value changed");
-    assert_eq!(generalized, legacy, "cylinder-band routing value differs");
+    assert_eq!(generalized, expected, "cylinder-band routing value changed");
 }
 
-pub(crate) fn certify_cylinder_band_shell_proof(
+/// Prove the topology and geometry of a finite full-period cylindrical band
+/// closed by two circular planar caps for region containment.
+///
+/// Shell certification is owned by the generalized convex cylindrical
+/// theorem; this structural proof remains shared by region containment.
+pub(crate) fn prove_cylinder_band_shell(
     store: &Store,
     shell_id: ShellId,
 ) -> Result<Option<CylinderBandShellProof>> {
@@ -1888,7 +1740,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            certify_cylinder_band_shell_proof(transaction.store(), shell)
+            prove_cylinder_band_shell(transaction.store(), shell)
                 .unwrap()
                 .is_none(),
             "a stale cap pcurve must not license the shifted chart frame"
