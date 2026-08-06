@@ -24,6 +24,9 @@ use kgeom::curve::Circle;
 mod cap_reaching;
 #[path = "shell_surgery/cap_reaching_sweep.rs"]
 mod cap_reaching_sweep;
+#[cfg(test)]
+#[path = "shell_surgery/cap_reaching_tests.rs"]
+mod cap_reaching_tests;
 #[path = "shell_surgery/chord_portal.rs"]
 mod chord_portal;
 #[cfg(test)]
@@ -311,38 +314,6 @@ pub(super) fn certify_shell_surgery(
         }
     }
     Ok(None)
-}
-
-/// Transitional legacy entry used only while cap-reaching routing equality is
-/// pinned.  The family wrapper supplies independently scanned raw evidence;
-/// every proof predicate still runs here in the shared theorem verifier.
-pub(super) fn certify_cap_reaching_candidate(
-    store: &Store,
-    shell_id: ShellId,
-    host_face: FaceId,
-    cylinder: Cylinder,
-    cylinders: Vec<(FaceId, Cylinder)>,
-    planar_faces: Vec<FaceId>,
-) -> Result<Option<ShellCertification>> {
-    cap_reaching_sweep::certify_cap_reaching_evidence(
-        store,
-        shell_id,
-        &CapReachingSurgeryEvidence {
-            shell: shell_id,
-            host_face,
-            cylinder,
-            cylinders,
-            planar_faces,
-        },
-    )
-}
-
-pub(super) fn cap_reaching_proof_work(
-    store: &Store,
-    shell_id: ShellId,
-    cylinder_count: usize,
-) -> Result<Option<u64>> {
-    cap_reaching_sweep::proof_work(store, shell_id, cylinder_count)
 }
 
 #[cfg(test)]

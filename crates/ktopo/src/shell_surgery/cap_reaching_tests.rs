@@ -4,10 +4,22 @@ use crate::analytic_shell::cylinder_cylinder_tests::{
     cap_reaching_cylinder_boss_input, cap_reaching_cylinder_notch_input,
 };
 use crate::check::{CheckLevel, CheckOutcome, check_body_report};
-use crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK;
 use crate::transaction::FullCommitRequirement;
 
 const TOLERANCE: f64 = 1.0e-12;
+const CAP_REACHING_CYLINDER_SHELL_WORK: StageId = SHELL_SURGERY_WORK;
+
+fn certify_cap_reaching_cylinder_shell(
+    store: &Store,
+    shell_id: ShellId,
+    scope: Option<&mut OperationScope<'_, '_>>,
+) -> Result<Option<ShellCertification>> {
+    certify_shell_surgery(store, shell_id, scope)
+}
+
+fn proof_work(store: &Store, shell_id: ShellId, cylinder_count: usize) -> Result<Option<u64>> {
+    cap_reaching_sweep::proof_work(store, shell_id, cylinder_count)
+}
 
 #[derive(Debug, Clone, Copy)]
 enum TerminalCase {
@@ -103,10 +115,7 @@ fn cap_reaching_discovery_claims_have_no_proof_authority() {
             TOLERANCE,
         )
         .unwrap();
-    super::super::shell_surgery::assert_cap_reaching_evidence_claims_are_rechecked(
-        transaction.store(),
-        output.shell(),
-    );
+    super::assert_cap_reaching_evidence_claims_are_rechecked(transaction.store(), output.shell());
 }
 
 #[test]

@@ -38,8 +38,6 @@ use self::shell_lemmas::{
 
 #[path = "bounded_skew_lobe_shell_proof.rs"]
 pub(crate) mod bounded_skew_lobe_shell_proof;
-#[path = "cap_reaching_cylinder_shell_proof.rs"]
-mod cap_reaching_cylinder_shell_proof;
 #[path = "convex_cylindrical_shell_proof.rs"]
 mod convex_cylindrical_shell_proof;
 #[path = "mixed_profile_prism_proof.rs"]
@@ -52,8 +50,6 @@ mod shell_surgery;
 mod two_host_axial_chain_shell_proof;
 #[cfg(test)]
 pub(crate) use bounded_skew_lobe_shell_proof::BOUNDED_SKEW_LOBE_SHELL_WORK;
-#[cfg(test)]
-pub(crate) use cap_reaching_cylinder_shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 #[cfg(test)]
@@ -82,7 +78,6 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
     facet_pairs
         .overlaid(&bounded_skew_lobe_shell_proof::bounded_skew_lobe_shell_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
-        .overlaid(&cap_reaching_cylinder_shell_proof::cap_reaching_cylinder_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::axial_contact_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::two_host_axial_chain_proof_budget())
         .overlaid(&shell_surgery::shell_surgery_proof_budget())
@@ -190,7 +185,6 @@ fn certify_shell_impl(
     attempt!(scoped shell_surgery::certify_shell_surgery);
     attempt!(scoped bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell);
     attempt!(scoped mixed_profile_prism_proof::certify_mixed_profile_prism);
-    attempt!(scoped cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell);
     attempt!(scoped two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell);
     attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
