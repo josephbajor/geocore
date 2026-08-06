@@ -22,6 +22,9 @@ use kgeom::curve::Circle;
 
 #[path = "shell_surgery/chord_portal.rs"]
 mod chord_portal;
+#[cfg(test)]
+#[path = "shell_surgery/chord_portal_tests.rs"]
+mod chord_portal_tests;
 #[path = "shell_surgery/cylindrical_host.rs"]
 mod cylindrical_host;
 #[cfg(test)]

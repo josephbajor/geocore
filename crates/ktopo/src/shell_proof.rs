@@ -40,8 +40,6 @@ use self::shell_lemmas::{
 pub(crate) mod bounded_skew_lobe_shell_proof;
 #[path = "cap_reaching_cylinder_shell_proof.rs"]
 mod cap_reaching_cylinder_shell_proof;
-#[path = "chord_portal_shell_proof.rs"]
-mod chord_portal_shell_proof;
 #[path = "convex_cylindrical_shell_proof.rs"]
 mod convex_cylindrical_shell_proof;
 #[path = "mixed_profile_prism_proof.rs"]
@@ -58,8 +56,6 @@ mod two_host_axial_chain_shell_proof;
 pub(crate) use bounded_skew_lobe_shell_proof::BOUNDED_SKEW_LOBE_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use cap_reaching_cylinder_shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK;
-#[cfg(test)]
-pub(crate) use chord_portal_shell_proof::CHORD_PORTAL_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 #[cfg(test)]
@@ -92,7 +88,6 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         .overlaid(&cap_reaching_cylinder_shell_proof::cap_reaching_cylinder_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::axial_contact_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::two_host_axial_chain_proof_budget())
-        .overlaid(&chord_portal_shell_proof::chord_portal_shell_proof_budget())
         .overlaid(&shell_surgery::shell_surgery_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
@@ -201,7 +196,6 @@ fn certify_shell_impl(
     attempt!(scoped cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell);
     attempt!(scoped two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell);
     attempt!(scoped portal_cylinder_shell_proof::certify_portal_cylinder_shell);
-    attempt!(scoped chord_portal_shell_proof::certify_chord_portal_shell);
     attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
     if convex != indeterminate() {
