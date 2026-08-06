@@ -2,10 +2,13 @@
 //!
 //! This recognizer does not consume constructor provenance or enumerate a
 //! named solid layout. It reconstructs one or more pairwise-disjoint finite
-//! rectangular charts on one exact analytic cylinder from live pcurves,
+//! partial charts or whole-period annular charts on one exact analytic
+//! cylinder from live pcurves,
 //! obtains every planar constraint through manifold peer incidence, and
 //! proves with outward intervals that every complete cylinder patch and every
-//! boundary edge lie in every constraint. Planar face cells are simple Jordan
+//! boundary edge lie in every constraint. Full-period rectangular charts
+//! require explicit closure winding and complementary uses of one seam edge.
+//! Planar face cells are simple Jordan
 //! domains whose boundaries lie in the convex intersection. A strict interior
 //! witness makes that intersection full dimensional.
 //!
@@ -21,7 +24,7 @@ use super::shell_lemmas::{
 };
 use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
-use crate::entity::{FaceDomain, FinId};
+use crate::entity::{FaceDomain, FinId, FinPcurve, SeamSide, SurfaceParameter};
 use kcore::math;
 use kgeom::param::ParamRange;
 
@@ -44,11 +47,23 @@ pub(super) fn convex_cylindrical_shell_proof_budget() -> BudgetPlan {
 }
 
 #[derive(Debug)]
-struct RectangularCylinderPatch {
+struct CylinderPatch {
     face: FaceId,
     cylinder: Cylinder,
     domain: FaceDomain,
     boundary_fins: Vec<FinId>,
+    local_orientation_valid: bool,
+    allows_self_seam: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RectangularBoundaryUse {
+    edge: EdgeId,
+    sense: Sense,
+    pcurve: FinPcurve,
+    start: Point2,
+    end: Point2,
+    vertices: [VertexId; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +130,8 @@ pub(super) fn certify_convex_cylindrical_shell(
         if !same_cylinder_representation(candidate, cylinder) {
             return Ok(Some(indeterminate()));
         }
-        let Some(patch) = prepare_rectangular_patch(store, face, candidate)? else {
+        let Some(patch) = prepare_cylinder_patch(store, shell_id, face, candidate, &planar_faces)?
+        else {
             return Ok(Some(indeterminate()));
         };
         patches.push(patch);
@@ -123,7 +139,7 @@ pub(super) fn certify_convex_cylindrical_shell(
     if !patch_interiors_are_pairwise_disjoint(&patches) {
         return Ok(Some(indeterminate()));
     }
-    if !certify_face_cells_and_incidence(store, shell_id)? {
+    if !certify_face_cells_and_incidence(store, shell_id, &patches)? {
         return Ok(Some(indeterminate()));
     }
     let Some((witness, supports)) =
@@ -210,11 +226,24 @@ fn convex_cylindrical_proof_work(
         }))
 }
 
+fn prepare_cylinder_patch(
+    store: &Store,
+    shell_id: ShellId,
+    face_id: FaceId,
+    cylinder: Cylinder,
+    planar_faces: &[FaceId],
+) -> Result<Option<CylinderPatch>> {
+    if let Some(patch) = prepare_rectangular_patch(store, face_id, cylinder)? {
+        return Ok(Some(patch));
+    }
+    prepare_periodic_band_patch(store, shell_id, face_id, cylinder, planar_faces)
+}
+
 fn prepare_rectangular_patch(
     store: &Store,
     face_id: FaceId,
     cylinder: Cylinder,
-) -> Result<Option<RectangularCylinderPatch>> {
+) -> Result<Option<CylinderPatch>> {
     let face = store.get(face_id)?;
     let [loop_id] = face.loops.as_slice() else {
         return Ok(None);
@@ -223,14 +252,13 @@ fn prepare_rectangular_patch(
         return Ok(None);
     };
     let loop_ = store.get(*loop_id)?;
-    if loop_.fins.len() < 4
-        || certify_loop_simplicity(store, *loop_id)? != LoopSimplicity::Certified
-    {
+    if loop_.fins.len() < 4 {
         return Ok(None);
     }
 
     let mut traversal = Vec::with_capacity(loop_.fins.len());
     let mut traversal_vertices = Vec::with_capacity(loop_.fins.len());
+    let mut boundary_uses = Vec::with_capacity(loop_.fins.len());
     for &fin_id in &loop_.fins {
         if certify_whole_fin_incidence(store, face_id, *loop_id, fin_id, LINEAR_RESOLUTION)
             != WholeFinIncidence::Certified
@@ -242,8 +270,7 @@ fn prepare_rectangular_patch(
         let (Some((lo, hi)), Some(pcurve)) = (edge.bounds, fin.pcurve) else {
             return Ok(None);
         };
-        if edge.tolerance.is_some() || pcurve.closure_winding().is_some() || pcurve.seam().is_some()
-        {
+        if edge.tolerance.is_some() {
             return Ok(None);
         }
         let curve = store.get(pcurve.curve())?;
@@ -286,6 +313,14 @@ fn prepare_rectangular_patch(
             return Ok(None);
         }
         traversal.push((start, end));
+        boundary_uses.push(RectangularBoundaryUse {
+            edge: fin.edge,
+            sense: fin.sense,
+            pcurve,
+            start,
+            end,
+            vertices: [tail, head],
+        });
     }
     if traversal
         .iter()
@@ -309,9 +344,33 @@ fn prepare_rectangular_patch(
         return Ok(None);
     }
     let u_width = proof_domain.u.width();
-    if !u_width.is_finite() || u_width <= 0.0 || u_width > core::f64::consts::PI {
+    let ordinary_partial_chart = u_width.is_finite()
+        && u_width > 0.0
+        && u_width <= core::f64::consts::PI
+        && boundary_uses
+            .iter()
+            .all(|use_| use_.pcurve.closure_winding().is_none() && use_.pcurve.seam().is_none());
+    let seam_closed_full_period_chart = u_width.is_finite()
+        && certify_parameter_join(u_width, core::f64::consts::TAU, cylinder.radius())
+        && full_period_rectangle_is_seam_closed(&boundary_uses, nominal_domain, cylinder.radius());
+    if !ordinary_partial_chart && !seam_closed_full_period_chart {
         return Ok(None);
     }
+    if !seam_closed_full_period_chart
+        && certify_loop_simplicity(store, *loop_id)? != LoopSimplicity::Certified
+    {
+        return Ok(None);
+    }
+    let local_orientation_valid = if seam_closed_full_period_chart {
+        full_period_rectangle_orientation(&boundary_uses, nominal_domain)
+            == Some(if face.sense == Sense::Forward {
+                PredicateOrientation::Positive
+            } else {
+                PredicateOrientation::Negative
+            })
+    } else {
+        true
+    };
 
     let mut coverage: [Vec<(f64, f64)>; 4] = core::array::from_fn(|_| Vec::new());
     for &(start, end) in &traversal {
@@ -337,12 +396,220 @@ fn prepare_rectangular_patch(
             return Ok(None);
         }
     }
-    Ok(Some(RectangularCylinderPatch {
+    Ok(Some(CylinderPatch {
         face: face_id,
         cylinder,
         domain: proof_domain,
         boundary_fins: loop_.fins.clone(),
+        local_orientation_valid,
+        allows_self_seam: seam_closed_full_period_chart,
     }))
+}
+
+fn prepare_periodic_band_patch(
+    store: &Store,
+    shell_id: ShellId,
+    face_id: FaceId,
+    cylinder: Cylinder,
+    planar_faces: &[FaceId],
+) -> Result<Option<CylinderPatch>> {
+    let face = store.get(face_id)?;
+    let ([first_loop, second_loop], [first_cap, second_cap], Some(declared_domain)) =
+        (face.loops.as_slice(), planar_faces, face.domain)
+    else {
+        return Ok(None);
+    };
+    let cap_faces = [*first_cap, *second_cap];
+    let Some(first_boundary) = cylinder_ring_boundary(
+        store,
+        shell_id,
+        face_id,
+        cylinder,
+        *first_loop,
+        CylinderRingBoundaryMode::Band(&cap_faces),
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(second_boundary) = cylinder_ring_boundary(
+        store,
+        shell_id,
+        face_id,
+        cylinder,
+        *second_loop,
+        CylinderRingBoundaryMode::Band(&cap_faces),
+    )?
+    else {
+        return Ok(None);
+    };
+    if first_boundary.edge == second_boundary.edge
+        || first_boundary.face == second_boundary.face
+        || !cap_faces.contains(&first_boundary.face)
+        || !cap_faces.contains(&second_boundary.face)
+    {
+        return Ok(None);
+    }
+    let Some((first_u, first_v)) = periodic_ring_chart(store, *first_loop, cylinder)? else {
+        return Ok(None);
+    };
+    let Some((second_u, second_v)) = periodic_ring_chart(store, *second_loop, cylinder)? else {
+        return Ok(None);
+    };
+    if !certify_parameter_join(first_u.lo, second_u.lo, cylinder.radius())
+        || !certify_parameter_join(first_u.hi, second_u.hi, cylinder.radius())
+        || !certify_parameter_join(first_v, first_boundary.axial_parameter, 1.0)
+        || !certify_parameter_join(second_v, second_boundary.axial_parameter, 1.0)
+    {
+        return Ok(None);
+    }
+    let (v_lo, v_hi) = (first_v.min(second_v), first_v.max(second_v));
+    let Ok(proof_domain) = FaceDomain::from_bounds(first_u.lo, first_u.hi, v_lo, v_hi) else {
+        return Ok(None);
+    };
+    if !declared_domain_contains(declared_domain, proof_domain) {
+        return Ok(None);
+    }
+    let (low, high) = if first_v < second_v {
+        (first_boundary, second_boundary)
+    } else {
+        (second_boundary, first_boundary)
+    };
+    let local_orientation_valid = low.side_traverses_positive_u == face.sense.is_forward()
+        && high.side_traverses_positive_u == (face.sense == Sense::Reversed);
+    Ok(Some(CylinderPatch {
+        face: face_id,
+        cylinder,
+        domain: proof_domain,
+        boundary_fins: vec![
+            store.get(*first_loop)?.fins[0],
+            store.get(*second_loop)?.fins[0],
+        ],
+        local_orientation_valid,
+        allows_self_seam: false,
+    }))
+}
+
+fn periodic_ring_chart(
+    store: &Store,
+    loop_id: LoopId,
+    cylinder: Cylinder,
+) -> Result<Option<(ParamRange, f64)>> {
+    let [fin_id] = store.get(loop_id)?.fins.as_slice() else {
+        return Ok(None);
+    };
+    let fin = store.get(*fin_id)?;
+    let edge = store.get(fin.edge)?;
+    let (Some(pcurve), Some(curve_id)) = (fin.pcurve, edge.curve) else {
+        return Ok(None);
+    };
+    let Some([winding, 0]) = pcurve.closure_winding() else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(None);
+    };
+    let Curve2dGeom::Line(line) = store.get(pcurve.curve())? else {
+        return Ok(None);
+    };
+    if winding.abs() != 1
+        || pcurve.seam().is_some()
+        || edge.bounds.is_some()
+        || edge.vertices != [None, None]
+        || line.dir().y != 0.0
+        || line.dir().x == 0.0
+    {
+        return Ok(None);
+    }
+    let edge_range = circle.param_range();
+    let start = pcurve.evaluate_uv(line, edge_range.lo, [Some(core::f64::consts::TAU), None])?;
+    let end = pcurve.evaluate_uv(line, edge_range.hi, [Some(core::f64::consts::TAU), None])?;
+    let expected_delta = f64::from(winding) * core::f64::consts::TAU;
+    if !certify_parameter_join(start.y, end.y, 1.0)
+        || !certify_parameter_join(end.x - start.x, expected_delta, cylinder.radius())
+    {
+        return Ok(None);
+    }
+    let u = ParamRange::new(start.x.min(end.x), start.x.max(end.x));
+    if !certify_parameter_join(u.width(), core::f64::consts::TAU, cylinder.radius()) {
+        return Ok(None);
+    }
+    Ok(Some((u, 0.5 * (start.y + end.y))))
+}
+
+fn full_period_rectangle_is_seam_closed(
+    uses: &[RectangularBoundaryUse],
+    domain: FaceDomain,
+    radius: f64,
+) -> bool {
+    if uses.len() != 4 {
+        return false;
+    }
+    let mut horizontal_count = 0;
+    let mut lower_seam = None;
+    let mut upper_seam = None;
+    for use_ in uses {
+        if use_.start.y == use_.end.y && use_.start.x != use_.end.x {
+            let Some([winding, 0]) = use_.pcurve.closure_winding() else {
+                return false;
+            };
+            if winding.abs() != 1
+                || use_.pcurve.seam().is_some()
+                || use_.vertices[0] != use_.vertices[1]
+                || !certify_parameter_join(
+                    (use_.end.x - use_.start.x).abs(),
+                    core::f64::consts::TAU,
+                    radius,
+                )
+            {
+                return false;
+            }
+            horizontal_count += 1;
+            continue;
+        }
+        if use_.start.x != use_.end.x
+            || use_.start.y == use_.end.y
+            || use_.pcurve.closure_winding().is_some()
+        {
+            return false;
+        }
+        let seam = match use_.pcurve.seam() {
+            Some(seam) if seam.direction() == SurfaceParameter::U => seam,
+            _ => return false,
+        };
+        let slot = match seam.side() {
+            SeamSide::Lower if certify_parameter_join(use_.start.x, domain.u.lo, radius) => {
+                &mut lower_seam
+            }
+            SeamSide::Upper if certify_parameter_join(use_.start.x, domain.u.hi, radius) => {
+                &mut upper_seam
+            }
+            _ => return false,
+        };
+        if slot.replace((use_.edge, use_.sense)).is_some() {
+            return false;
+        }
+    }
+    matches!((lower_seam, upper_seam), (Some((lower_edge, lower_sense)), Some((upper_edge, upper_sense)))
+        if lower_edge == upper_edge && lower_sense != upper_sense)
+        && horizontal_count == 2
+}
+
+fn full_period_rectangle_orientation(
+    uses: &[RectangularBoundaryUse],
+    domain: FaceDomain,
+) -> Option<PredicateOrientation> {
+    let mut lower = uses.iter().filter(|use_| {
+        use_.start.y == use_.end.y && use_.start.y == domain.v.lo && use_.start.x != use_.end.x
+    });
+    let use_ = lower.next()?;
+    if lower.next().is_some() {
+        return None;
+    }
+    Some(if use_.start.x < use_.end.x {
+        PredicateOrientation::Positive
+    } else {
+        PredicateOrientation::Negative
+    })
 }
 
 fn live_rectangular_domains(traversal: &[(Point2, Point2)]) -> Option<(FaceDomain, FaceDomain)> {
@@ -415,7 +682,7 @@ fn same_cylinder_representation(first: Cylinder, second: Cylinder) -> bool {
 /// open interiors overlap; each candidate is then refused unless outward
 /// arithmetic proves separation.  Unmanageably large chart lifts and
 /// rounding-ambiguous comparisons therefore fail closed.
-fn patch_interiors_are_pairwise_disjoint(patches: &[RectangularCylinderPatch]) -> bool {
+fn patch_interiors_are_pairwise_disjoint(patches: &[CylinderPatch]) -> bool {
     patches.iter().enumerate().all(|(index, first)| {
         patches[index + 1..]
             .iter()
@@ -423,10 +690,7 @@ fn patch_interiors_are_pairwise_disjoint(patches: &[RectangularCylinderPatch]) -
     })
 }
 
-fn patch_interiors_are_disjoint(
-    first: &RectangularCylinderPatch,
-    second: &RectangularCylinderPatch,
-) -> bool {
+fn patch_interiors_are_disjoint(first: &CylinderPatch, second: &CylinderPatch) -> bool {
     if first.domain.v.hi <= second.domain.v.lo || second.domain.v.hi <= first.domain.v.lo {
         return true;
     }
@@ -553,39 +817,56 @@ fn certify_parameter_join(first: f64, second: f64, metric_scale: f64) -> bool {
     distance.hi().is_finite() && distance.hi() <= LINEAR_RESOLUTION
 }
 
-fn certify_face_cells_and_incidence(store: &Store, shell_id: ShellId) -> Result<bool> {
+fn certify_face_cells_and_incidence(
+    store: &Store,
+    shell_id: ShellId,
+    patches: &[CylinderPatch],
+) -> Result<bool> {
     for &face_id in &store.get(shell_id)?.faces {
         let face = store.get(face_id)?;
-        let [loop_id] = face.loops.as_slice() else {
-            return Ok(false);
-        };
-        let loop_ = store.get(*loop_id)?;
-        if loop_.fins.is_empty()
-            || certify_loop_simplicity(store, *loop_id)? != LoopSimplicity::Certified
-            || certify_loop_orientation(store, face_id, *loop_id)?.is_none()
+        if face.loops.is_empty()
+            || certify_face_loop_layout(store, face_id)? != LoopContainment::Certified
         {
             return Ok(false);
         }
-        for &fin_id in &loop_.fins {
-            let fin = store.get(fin_id)?;
-            let edge = store.get(fin.edge)?;
-            let Some(pcurve) = fin.pcurve else {
-                return Ok(false);
-            };
-            if face.tolerance.is_some()
-                || edge.tolerance.is_some()
-                || !matches!(
-                    store.get(pcurve.curve())?,
-                    Curve2dGeom::Line(_) | Curve2dGeom::Circle(_)
-                )
-                || certify_whole_fin_incidence(store, face_id, *loop_id, fin_id, LINEAR_RESOLUTION)
-                    != WholeFinIncidence::Certified
+        for &loop_id in &face.loops {
+            let loop_ = store.get(loop_id)?;
+            let seam_closed = patches.iter().any(|patch| {
+                patch.face == face_id && patch.allows_self_seam && face.loops == [loop_id]
+            });
+            if loop_.fins.is_empty()
+                || (!seam_closed
+                    && certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified)
+                || (!seam_closed && certify_loop_orientation(store, face_id, loop_id)?.is_none())
             {
                 return Ok(false);
             }
-            for vertex in edge.vertices.into_iter().flatten() {
-                if store.get(vertex)?.tolerance.is_some() {
+            for &fin_id in &loop_.fins {
+                let fin = store.get(fin_id)?;
+                let edge = store.get(fin.edge)?;
+                let Some(pcurve) = fin.pcurve else {
                     return Ok(false);
+                };
+                if face.tolerance.is_some()
+                    || edge.tolerance.is_some()
+                    || !matches!(
+                        store.get(pcurve.curve())?,
+                        Curve2dGeom::Line(_) | Curve2dGeom::Circle(_)
+                    )
+                    || certify_whole_fin_incidence(
+                        store,
+                        face_id,
+                        loop_id,
+                        fin_id,
+                        LINEAR_RESOLUTION,
+                    ) != WholeFinIncidence::Certified
+                {
+                    return Ok(false);
+                }
+                for vertex in edge.vertices.into_iter().flatten() {
+                    if store.get(vertex)?.tolerance.is_some() {
+                        return Ok(false);
+                    }
                 }
             }
         }
@@ -593,7 +874,7 @@ fn certify_face_cells_and_incidence(store: &Store, shell_id: ShellId) -> Result<
     Ok(true)
 }
 
-fn strict_patch_witness(patch: &RectangularCylinderPatch) -> Option<Point3> {
+fn strict_patch_witness(patch: &CylinderPatch) -> Option<Point3> {
     let u = patch.domain.u.lo + patch.domain.u.width() * 0.5;
     let v = patch.domain.v.lo + patch.domain.v.width() * 0.5;
     if !u.is_finite() || !v.is_finite() {
@@ -612,7 +893,7 @@ fn strict_patch_witness(patch: &RectangularCylinderPatch) -> Option<Point3> {
     (radial.hi() < radius_squared.lo()).then_some(witness)
 }
 
-fn strict_axis_witness(patch: &RectangularCylinderPatch) -> Option<Point3> {
+fn strict_axis_witness(patch: &CylinderPatch) -> Option<Point3> {
     let v = patch.domain.v.lo + patch.domain.v.width() * 0.5;
     if !v.is_finite() {
         return None;
@@ -631,7 +912,7 @@ fn strictly_inside_cylinder(cylinder: Cylinder, witness: Point3) -> bool {
 
 fn find_strict_witness_and_planar_supports(
     store: &Store,
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
     planar_faces: &[FaceId],
 ) -> Result<Option<(Point3, Vec<PlanarSupport>)>> {
     for witness in patches
@@ -648,7 +929,7 @@ fn find_strict_witness_and_planar_supports(
 
 fn prepare_planar_supports(
     store: &Store,
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
     planar_faces: &[FaceId],
     witness: Point3,
 ) -> Result<Option<Vec<PlanarSupport>>> {
@@ -658,6 +939,9 @@ fn prepare_planar_supports(
             let Some(peer) = peer_face_from_fin_unchecked(store, fin_id)? else {
                 return Ok(None);
             };
+            if peer == patch.face && patch.allows_self_seam {
+                continue;
+            }
             if peer == patch.face
                 || !matches!(store.get(store.get(peer)?.surface)?, SurfaceGeom::Plane(_))
             {
@@ -721,7 +1005,7 @@ fn all_boundary_traces_satisfy_constraints(
     store: &Store,
     shell_id: ShellId,
     cylinder: Cylinder,
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
     supports: &[PlanarSupport],
 ) -> Result<bool> {
     let mut edges = Vec::new();
@@ -737,10 +1021,21 @@ fn all_boundary_traces_satisfy_constraints(
     }
     for edge_id in edges {
         let edge = store.get(edge_id)?;
-        let (Some(curve_id), Some((lo, hi))) = (edge.curve, edge.bounds) else {
+        let Some(curve_id) = edge.curve else {
             return Ok(false);
         };
         let curve = store.get(curve_id)?;
+        let (lo, hi) = match edge.bounds {
+            Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => (lo, hi),
+            Some(_) => return Ok(false),
+            None => {
+                let CurveGeom::Circle(circle) = curve else {
+                    return Ok(false);
+                };
+                let range = circle.param_range();
+                (range.lo, range.hi)
+            }
+        };
         for support in supports {
             let (range, scale) = if let Some(line) = exact_line_carrier(curve) {
                 let endpoints = [line.eval(lo), line.eval(hi)];
@@ -813,7 +1108,7 @@ fn all_boundary_traces_satisfy_constraints(
 fn edge_has_any_patch_face(
     store: &Store,
     edge_id: EdgeId,
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
 ) -> Result<bool> {
     for &fin_id in &store.get(edge_id)?.fins {
         let loop_id = store.get(fin_id)?.parent;
@@ -828,7 +1123,7 @@ fn edge_has_any_patch_face(
 fn certify_orientation(
     store: &Store,
     shell_id: ShellId,
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
     supports: &[PlanarSupport],
 ) -> Result<ShellOrientation> {
     let mut all_outward = true;
@@ -845,16 +1140,26 @@ fn certify_orientation(
     }
     for &face_id in &store.get(shell_id)?.faces {
         let face = store.get(face_id)?;
-        let [loop_id] = face.loops.as_slice() else {
+        if face.loops.is_empty() {
             return Ok(ShellOrientation::Indeterminate);
-        };
+        }
+        if let Some(periodic_patch) = patches.iter().find(|patch| {
+            patch.face == face_id && (patch.allows_self_seam || face.loops.len() == 2)
+        }) {
+            if !periodic_patch.local_orientation_valid {
+                return Ok(ShellOrientation::Invalid);
+            }
+            continue;
+        }
         let expected = if face.sense == Sense::Forward {
             PredicateOrientation::Positive
         } else {
             PredicateOrientation::Negative
         };
-        if certify_loop_orientation(store, face_id, *loop_id)? != Some(expected) {
-            return Ok(ShellOrientation::Invalid);
+        for &loop_id in &face.loops {
+            if certify_loop_orientation(store, face_id, loop_id)? != Some(expected) {
+                return Ok(ShellOrientation::Invalid);
+            }
         }
     }
     Ok(if all_outward {
@@ -867,7 +1172,7 @@ fn certify_orientation(
 }
 
 fn cylinder_patch_affine_range(
-    patch: &RectangularCylinderPatch,
+    patch: &CylinderPatch,
     normal: Vec3,
     plane_origin: Point3,
 ) -> Option<Interval> {
@@ -882,7 +1187,7 @@ fn cylinder_patch_affine_range(
 }
 
 fn cylinder_patches_affine_range(
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
     normal: Vec3,
     plane_origin: Point3,
 ) -> Option<Interval> {
@@ -918,10 +1223,7 @@ fn circle_matches_cylinder(circle: kgeom::curve::Circle, cylinder: Cylinder) -> 
     .all(|value| value.is_some_and(|interval| interval_abs_upper(interval) <= guard))
 }
 
-fn cylinder_patch_arithmetic_guard(
-    patch: &RectangularCylinderPatch,
-    plane_origin: Point3,
-) -> Option<f64> {
+fn cylinder_patch_arithmetic_guard(patch: &CylinderPatch, plane_origin: Point3) -> Option<f64> {
     arithmetic_guard(
         point_scale(patch.cylinder.frame().origin())
             .max(point_scale(plane_origin))
@@ -932,7 +1234,7 @@ fn cylinder_patch_arithmetic_guard(
 }
 
 fn cylinder_patches_arithmetic_guard(
-    patches: &[RectangularCylinderPatch],
+    patches: &[CylinderPatch],
     plane_origin: Point3,
 ) -> Option<f64> {
     patches.iter().try_fold(0.0_f64, |guard, patch| {
@@ -981,6 +1283,7 @@ mod tests {
         AnalyticShellPcurve, AnalyticShellSurface, AnalyticShellVertex, AnalyticVertexKey,
     };
     use crate::check::{CheckLevel, CheckOutcome, check_body_report};
+    use crate::make::{cylinder, cylindrical_sheet};
     use crate::transaction::FullCommitRequirement;
     use kgeom::curve::{Circle, Curve, Line};
     use kgeom::curve2d::{Circle2d, Line2d};
@@ -1002,6 +1305,30 @@ mod tests {
                 matches!(store.get(face.surface).unwrap(), SurfaceGeom::Cylinder(_))
             })
             .unwrap()
+    }
+
+    fn periodic_sheet_face(store: &mut Store) -> (FaceId, Cylinder) {
+        let body = cylindrical_sheet(store, &Frame::world(), 1.0, 2.0).unwrap();
+        let region = store.get(body).unwrap().regions[0];
+        let shell = store.get(region).unwrap().shells[0];
+        let face = store.get(shell).unwrap().faces[0];
+        let SurfaceGeom::Cylinder(cylinder) = *store.get(store.get(face).unwrap().surface).unwrap()
+        else {
+            panic!("cylindrical sheet has one cylinder face")
+        };
+        (face, cylinder)
+    }
+
+    fn solid_shell(store: &Store, body: crate::entity::BodyId) -> ShellId {
+        let region = store
+            .get(body)
+            .unwrap()
+            .regions
+            .iter()
+            .copied()
+            .find(|region| store.get(*region).unwrap().kind == RegionKind::Solid)
+            .unwrap();
+        store.get(region).unwrap().shells[0]
     }
 
     fn session_with_limit(allowed: u64) -> kcore::operation::SessionPolicy {
@@ -1421,6 +1748,186 @@ mod tests {
     }
 
     #[test]
+    fn seam_paired_closure_winding_proves_a_complete_periodic_rectangle() {
+        let mut store = Store::new();
+        let (face, cylinder) = periodic_sheet_face(&mut store);
+        let loop_id = store.get(face).unwrap().loops[0];
+        let mut uses = Vec::new();
+        let mut traversal = Vec::new();
+        for &fin_id in &store.get(loop_id).unwrap().fins {
+            let fin = store.get(fin_id).unwrap();
+            let edge = store.get(fin.edge).unwrap();
+            let (lo, hi) = edge.bounds.unwrap();
+            let pcurve = fin.pcurve.unwrap();
+            let curve = store.get(pcurve.curve()).unwrap();
+            let edge_parameters = if fin.sense == Sense::Forward {
+                [lo, hi]
+            } else {
+                [hi, lo]
+            };
+            let start = pcurve
+                .evaluate_uv(
+                    curve.as_curve(),
+                    edge_parameters[0],
+                    [Some(core::f64::consts::TAU), None],
+                )
+                .unwrap();
+            let end = pcurve
+                .evaluate_uv(
+                    curve.as_curve(),
+                    edge_parameters[1],
+                    [Some(core::f64::consts::TAU), None],
+                )
+                .unwrap();
+            let vertices = edge.vertices.map(Option::unwrap);
+            traversal.push((start, end));
+            uses.push(RectangularBoundaryUse {
+                edge: fin.edge,
+                sense: fin.sense,
+                pcurve,
+                start,
+                end,
+                vertices,
+            });
+        }
+        let (domain, proof_domain) = live_rectangular_domains(&traversal).unwrap();
+        assert!(certify_parameter_join(
+            proof_domain.u.width(),
+            core::f64::consts::TAU,
+            cylinder.radius(),
+        ));
+        assert!(full_period_rectangle_is_seam_closed(
+            &uses,
+            domain,
+            cylinder.radius(),
+        ));
+        assert_eq!(
+            full_period_rectangle_orientation(&uses, domain),
+            Some(PredicateOrientation::Positive)
+        );
+
+        let upper_seam = uses
+            .iter_mut()
+            .find(|use_| {
+                use_.pcurve
+                    .seam()
+                    .is_some_and(|seam| seam.side() == SeamSide::Upper)
+            })
+            .unwrap();
+        upper_seam.pcurve = upper_seam.pcurve.with_seam(crate::entity::PcurveSeam::new(
+            SurfaceParameter::U,
+            SeamSide::Lower,
+        ));
+        assert!(
+            !full_period_rectangle_is_seam_closed(&uses, domain, cylinder.radius()),
+            "duplicate lower seam roles must fail closed"
+        );
+    }
+
+    #[test]
+    fn endpoint_free_ring_pair_prepares_one_full_period_patch() {
+        let mut store = Store::new();
+        let body = cylinder(&mut store, &Frame::world(), 1.25, 2.5).unwrap();
+        let shell = solid_shell(&store, body);
+        let side = cylinder_face(&store, shell);
+        let SurfaceGeom::Cylinder(cylinder) = *store.get(store.get(side).unwrap().surface).unwrap()
+        else {
+            panic!("selected face has cylinder support")
+        };
+        let planar_faces = store
+            .get(shell)
+            .unwrap()
+            .faces
+            .iter()
+            .copied()
+            .filter(|face| {
+                matches!(
+                    store.get(store.get(*face).unwrap().surface).unwrap(),
+                    SurfaceGeom::Plane(_)
+                )
+            })
+            .collect::<Vec<_>>();
+        let patch = prepare_periodic_band_patch(&store, shell, side, cylinder, &planar_faces)
+            .unwrap()
+            .expect("two closure-winding rings prove one periodic annular patch");
+        assert!(certify_parameter_join(
+            patch.domain.u.width(),
+            core::f64::consts::TAU,
+            cylinder.radius(),
+        ));
+        assert_eq!(patch.domain.v, ParamRange::new(0.0, 2.5));
+        assert!(patch.local_orientation_valid);
+        assert_eq!(
+            certify_convex_cylindrical_shell(&store, shell, None)
+                .unwrap()
+                .unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Positive,
+            }
+        );
+    }
+
+    #[test]
+    fn full_period_patch_disjointness_is_proven_modulo_the_cylinder_period() {
+        let mut store = Store::new();
+        let (face, cylinder) = periodic_sheet_face(&mut store);
+        let patch = |u_lo, u_hi, v_lo, v_hi| CylinderPatch {
+            face,
+            cylinder,
+            domain: FaceDomain::from_bounds(u_lo, u_hi, v_lo, v_hi).unwrap(),
+            boundary_fins: Vec::new(),
+            local_orientation_valid: true,
+            allows_self_seam: false,
+        };
+        let first = patch(0.0, core::f64::consts::TAU, 0.0, 1.0);
+        let phase_shifted = patch(
+            core::f64::consts::TAU,
+            2.0 * core::f64::consts::TAU,
+            0.5,
+            1.5,
+        );
+        let axially_disjoint = patch(
+            core::f64::consts::TAU,
+            2.0 * core::f64::consts::TAU,
+            1.0,
+            2.0,
+        );
+        assert!(!patch_interiors_are_disjoint(&first, &phase_shifted));
+        assert!(patch_interiors_are_disjoint(&first, &axially_disjoint));
+    }
+
+    #[test]
+    fn full_period_patch_halfspace_range_contains_every_radial_extremum() {
+        let mut store = Store::new();
+        let (face, cylinder) = periodic_sheet_face(&mut store);
+        let patch = CylinderPatch {
+            face,
+            cylinder,
+            domain: FaceDomain::from_bounds(0.37, 0.37 + core::f64::consts::TAU, -1.0, 2.0)
+                .unwrap(),
+            boundary_fins: Vec::new(),
+            local_orientation_valid: true,
+            allows_self_seam: false,
+        };
+        let contained = cylinder_patch_affine_range(
+            &patch,
+            Vec3::new(1.0, 0.0, 0.0),
+            Point3::new(1.25, 0.0, 0.0),
+        )
+        .unwrap();
+        assert!(contained.lo() <= -2.25 && contained.hi() < 0.0);
+
+        let crossing = cylinder_patch_affine_range(
+            &patch,
+            Vec3::new(1.0, 0.0, 0.0),
+            Point3::new(0.75, 0.0, 0.0),
+        )
+        .unwrap();
+        assert!(crossing.lo() < 0.0 && crossing.hi() >= 0.25);
+    }
+
+    #[test]
     fn structural_half_cylinder_satisfies_every_convex_constraint() {
         let mut store = Store::new();
         let mut transaction = store.transaction().unwrap();
@@ -1455,7 +1962,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let patches = vec![patch];
-        assert!(certify_face_cells_and_incidence(transaction.store(), output.shell()).unwrap());
+        assert!(
+            certify_face_cells_and_incidence(transaction.store(), output.shell(), &patches)
+                .unwrap()
+        );
         let (witness, supports) =
             find_strict_witness_and_planar_supports(transaction.store(), &patches, &planar_faces)
                 .unwrap()
