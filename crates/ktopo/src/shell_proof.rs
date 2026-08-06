@@ -44,8 +44,6 @@ mod cap_reaching_cylinder_shell_proof;
 mod convex_cylindrical_shell_proof;
 #[path = "mixed_profile_prism_proof.rs"]
 mod mixed_profile_prism_proof;
-#[path = "portal_cylinder_shell_proof.rs"]
-mod portal_cylinder_shell_proof;
 #[path = "shell_lemmas.rs"]
 pub(crate) mod shell_lemmas;
 #[path = "shell_surgery.rs"]
@@ -83,7 +81,6 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
     );
     facet_pairs
         .overlaid(&bounded_skew_lobe_shell_proof::bounded_skew_lobe_shell_proof_budget())
-        .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
         .overlaid(&cap_reaching_cylinder_shell_proof::cap_reaching_cylinder_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::axial_contact_proof_budget())
@@ -195,7 +192,6 @@ fn certify_shell_impl(
     attempt!(scoped mixed_profile_prism_proof::certify_mixed_profile_prism);
     attempt!(scoped cap_reaching_cylinder_shell_proof::certify_cap_reaching_cylinder_shell);
     attempt!(scoped two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell);
-    attempt!(scoped portal_cylinder_shell_proof::certify_portal_cylinder_shell);
     attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
     if convex != indeterminate() {

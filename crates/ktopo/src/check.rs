@@ -2339,14 +2339,6 @@ mod tests {
                 16_777_216,
             )
         };
-        let portal_cylinder_snapshot = |consumed| {
-            snapshot(
-                kcore::operation::StageId::new("ktopo.check.portal-cylinder-shell-work").unwrap(),
-                ResourceKind::Work,
-                consumed,
-                16_777_216,
-            )
-        };
         let cavity_stage = crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK;
         let domain_stage = crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS;
         let planar_stage = crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK;
@@ -2394,7 +2386,6 @@ mod tests {
                 mixed_profile_snapshot(62_415),
                 snapshot(contact_stage, ResourceKind::Work, 0, 4096),
                 snapshot(planar_stage, ResourceKind::Work, 0, 200_000),
-                portal_cylinder_snapshot(0),
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
@@ -2475,7 +2466,6 @@ mod tests {
                 mixed_profile_snapshot(124_830),
                 snapshot(contact_stage, ResourceKind::Work, 0, 4096),
                 snapshot(planar_stage, ResourceKind::Work, 0, 200_000),
-                portal_cylinder_snapshot(0),
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),

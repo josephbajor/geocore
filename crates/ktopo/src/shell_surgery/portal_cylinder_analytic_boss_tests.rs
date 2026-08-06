@@ -374,7 +374,7 @@ fn six_face_parallel_cylinder_union_is_certified_and_checked() {
         certify_portal_cylinder_shell(transaction.store(), output.shell(), None).unwrap(),
         positive()
     );
-    super::super::shell_surgery::assert_periodic_host_evidence_claims_are_rechecked(
+    super::super::assert_periodic_host_evidence_claims_are_rechecked(
         transaction.store(),
         output.shell(),
     );
@@ -537,45 +537,4 @@ fn two_cylinder_host_scan_accepts_exact_work_and_rejects_n_minus_one() {
         error.limit().map(|limit| limit.stage),
         Some(PORTAL_CYLINDER_SHELL_WORK)
     );
-
-    assert_eq!(
-        super::super::shell_surgery::periodic_host_proof_work(transaction.store(), output.shell(),)
-            .unwrap(),
-        Some(REQUIRED_WORK)
-    );
-    for allowed in [REQUIRED_WORK, REQUIRED_WORK - 1] {
-        let budget = BudgetPlan::new([LimitSpec::new(
-            super::super::shell_surgery::SHELL_SURGERY_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            allowed,
-        )])
-        .unwrap();
-        let policy = kcore::operation::SessionPolicy::new(
-            kcore::operation::SessionPrecision::parasolid(),
-            kcore::operation::NumericalPolicy::v1(),
-            kcore::operation::ExecutionPolicy::Serial,
-            budget,
-            kcore::operation::PolicyVersion::V1,
-        );
-        let context = kcore::operation::OperationContext::new(
-            &policy,
-            kcore::tolerance::Tolerances::default(),
-        )
-        .unwrap();
-        let mut scope = OperationScope::new(&context);
-        let result = super::super::shell_surgery::certify_shell_surgery(
-            transaction.store(),
-            output.shell(),
-            Some(&mut scope),
-        );
-        if allowed == REQUIRED_WORK {
-            assert_eq!(result.unwrap(), positive());
-        } else {
-            assert_eq!(
-                result.unwrap_err().limit().map(|limit| limit.stage),
-                Some(super::super::shell_surgery::SHELL_SURGERY_WORK)
-            );
-        }
-    }
 }

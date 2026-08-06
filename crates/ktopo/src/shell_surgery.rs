@@ -34,6 +34,9 @@ mod cylindrical_host_tests;
 mod periodic_host_sweep;
 #[path = "shell_surgery/portal_cylinder.rs"]
 mod portal_cylinder;
+#[cfg(test)]
+#[path = "shell_surgery/portal_cylinder_tests.rs"]
+mod portal_cylinder_tests;
 #[path = "shell_surgery/profile_sweep.rs"]
 mod profile_sweep;
 
@@ -948,11 +951,6 @@ pub(super) fn assert_periodic_host_evidence_claims_are_rechecked(store: &Store, 
         .unwrap(),
         None
     );
-}
-
-#[cfg(test)]
-pub(super) fn periodic_host_proof_work(store: &Store, shell: ShellId) -> Result<Option<u64>> {
-    periodic_host_sweep::proof_work(store, shell)
 }
 
 #[cfg(test)]
