@@ -1159,6 +1159,13 @@ mod tests {
         )
     }
 
+    fn assert_chord_portal_routing_is_equal(store: &Store, shell: ShellId) {
+        let legacy = certify_chord_portal_shell(store, shell, None).unwrap();
+        let shared =
+            super::super::shell_surgery::certify_shell_surgery(store, shell, None).unwrap();
+        assert_eq!(shared, legacy);
+    }
+
     #[test]
     fn cap_crossing_attachment_and_pocket_are_full_certified() {
         for pocket in [false, true] {
@@ -1175,6 +1182,11 @@ mod tests {
                 }),
                 "pocket={pocket}"
             );
+            super::super::shell_surgery::assert_chord_portal_evidence_claims_are_rechecked(
+                transaction.store(),
+                output.shell(),
+            );
+            assert_chord_portal_routing_is_equal(transaction.store(), output.shell());
             let report =
                 check_body_report(transaction.store(), output.body(), CheckLevel::Full).unwrap();
             assert_eq!(
@@ -1213,6 +1225,7 @@ mod tests {
                 orientation: ShellOrientation::Positive,
             })
         );
+        assert_chord_portal_routing_is_equal(&sense, output.shell());
 
         let mut geometry = baseline.clone();
         let mut geometry_edit = geometry.transaction().unwrap();
@@ -1237,6 +1250,7 @@ mod tests {
                 orientation: ShellOrientation::Positive,
             })
         );
+        assert_chord_portal_routing_is_equal(geometry_edit.store(), output.shell());
 
         let mut topology = baseline;
         let portal_loop = topology.get(face(2)).unwrap().loops[1];
@@ -1249,6 +1263,7 @@ mod tests {
                 orientation: ShellOrientation::Positive,
             })
         );
+        assert_chord_portal_routing_is_equal(&topology, output.shell());
     }
 
     #[test]

@@ -11,7 +11,8 @@
 use super::shell_lemmas::{
     CylinderRingBoundary, CylinderRingBoundaryMode, all_shell_faces_consumed, certified_nonzero,
     certified_parallel, cylinder_ring_boundary, indeterminate, interval_vector_dot,
-    proof_work_budget, support_incident_within_resolution,
+    proof_work as quadratic_proof_work, proof_work_budget, shell_proof_size,
+    support_incident_within_resolution,
 };
 use super::*;
 use crate::analytic_tangency::{
@@ -19,11 +20,15 @@ use crate::analytic_tangency::{
 };
 use kgeom::curve::Circle;
 
+#[path = "shell_surgery/chord_portal.rs"]
+mod chord_portal;
 #[path = "shell_surgery/cylindrical_host.rs"]
 mod cylindrical_host;
 #[cfg(test)]
 #[path = "shell_surgery/cylindrical_host_tests.rs"]
 mod cylindrical_host_tests;
+#[path = "shell_surgery/profile_sweep.rs"]
+mod profile_sweep;
 
 /// Cumulative work for the one shared shell-surgery theorem.
 pub(crate) const SHELL_SURGERY_WORK: StageId = match StageId::new("ktopo.check.shell-surgery-work")
@@ -147,6 +152,20 @@ struct ShellSurgeryEvidence {
     relations: Vec<PairwiseRelationEvidence>,
 }
 
+#[derive(Debug, Clone)]
+struct ChordPortalFeatureEvidence {
+    portal_face: FaceId,
+    portal_loop: LoopId,
+    feature_faces: Vec<FaceId>,
+}
+
+#[derive(Debug, Clone)]
+struct ChordPortalSurgeryEvidence {
+    shell: ShellId,
+    base: PlanarBaseEvidence,
+    features: Vec<ChordPortalFeatureEvidence>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct VerifiedSweep {
     evidence: ProductSweepEvidenceSummary,
@@ -161,16 +180,16 @@ struct ProductSweepEvidenceSummary {
 }
 
 /// Attempt every untrusted surgery proposal and return only a theorem-derived
-/// result.  The current discovery slice proposes circular product sweeps; the
-/// evidence and verifier are intentionally family-neutral so later discovery
-/// modules can add other swept profiles without acquiring proof authority.
+/// result. Discovery slices propose circular and mixed-profile product sweeps;
+/// their evidence remains geometry/topology-only and has no proof authority.
 pub(super) fn certify_shell_surgery(
     store: &Store,
     shell_id: ShellId,
     scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
-    let proposals = cylindrical_host::discover(store, shell_id)?;
-    if proposals.is_empty() {
+    let circular_proposals = cylindrical_host::discover(store, shell_id)?;
+    let chord_proposals = chord_portal::discover(store, shell_id)?;
+    if circular_proposals.is_empty() && chord_proposals.is_empty() {
         return Ok(None);
     }
     if let Some(scope) = scope {
@@ -179,14 +198,41 @@ pub(super) fn certify_shell_surgery(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = circular_product_sweep_work(store, shell_id, proposals[0].features.len())?
-        else {
-            return Ok(Some(indeterminate()));
-        };
+        let mut work = 0_u64;
+        if let Some(proposal) = circular_proposals.first() {
+            let Some(circular_work) =
+                circular_product_sweep_work(store, shell_id, proposal.features.len())?
+            else {
+                return Ok(Some(indeterminate()));
+            };
+            let Some(next) = work.checked_add(circular_work) else {
+                return Ok(Some(indeterminate()));
+            };
+            work = next;
+        }
+        if !chord_proposals.is_empty() {
+            let Some(size) = shell_proof_size(store, shell_id)? else {
+                return Ok(Some(indeterminate()));
+            };
+            let Some(chord_work) = quadratic_proof_work(size, 32, 0, 1) else {
+                return Ok(Some(indeterminate()));
+            };
+            let Some(next) = work.checked_add(chord_work) else {
+                return Ok(Some(indeterminate()));
+            };
+            work = next;
+        }
         scope.ledger_mut().charge(SHELL_SURGERY_WORK, work)?;
     }
-    for evidence in &proposals {
+    for evidence in &circular_proposals {
         if let Some(certification) = certify_evidence(store, shell_id, evidence)? {
+            return Ok(Some(certification));
+        }
+    }
+    for evidence in &chord_proposals {
+        if let Some(certification) =
+            profile_sweep::certify_chord_portal_evidence(store, shell_id, evidence)?
+        {
             return Ok(Some(certification));
         }
     }
@@ -783,6 +829,44 @@ fn same_cylinder(first: Cylinder, second: Cylinder) -> bool {
 
 fn same_circle(first: Circle, second: Circle) -> bool {
     first.frame() == second.frame() && first.radius().to_bits() == second.radius().to_bits()
+}
+
+#[cfg(test)]
+pub(super) fn assert_chord_portal_evidence_claims_are_rechecked(store: &Store, shell: ShellId) {
+    let evidence = chord_portal::discover(store, shell)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("real chord-portal topology produces evidence");
+    assert_eq!(
+        profile_sweep::certify_chord_portal_evidence(store, shell, &evidence).unwrap(),
+        Some(ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            orientation: ShellOrientation::Positive,
+        })
+    );
+
+    let mut wrong_outer = evidence.clone();
+    let portal_loop = wrong_outer.features[0].portal_loop;
+    wrong_outer.base.facets[0].outer_loop = portal_loop;
+    assert_eq!(
+        profile_sweep::certify_chord_portal_evidence(store, shell, &wrong_outer).unwrap(),
+        None
+    );
+
+    let mut wrong_portal = evidence.clone();
+    wrong_portal.features[0].portal_loop = wrong_portal.base.facets[0].outer_loop;
+    assert_eq!(
+        profile_sweep::certify_chord_portal_evidence(store, shell, &wrong_portal).unwrap(),
+        None
+    );
+
+    let mut wrong_feature = evidence;
+    wrong_feature.features[0].feature_faces[0] = wrong_feature.base.facets[0].face;
+    assert_eq!(
+        profile_sweep::certify_chord_portal_evidence(store, shell, &wrong_feature).unwrap(),
+        None
+    );
 }
 
 #[cfg(test)]
