@@ -11,8 +11,7 @@
 use super::shell_lemmas::{
     CylinderRingBoundary, CylinderRingBoundaryMode, all_shell_faces_consumed, certified_nonzero,
     certified_parallel, cylinder_ring_boundary, indeterminate, interval_vector_dot,
-    proof_work as quadratic_proof_work, proof_work_budget, shell_proof_size,
-    support_incident_within_resolution,
+    proof_work_budget, support_incident_within_resolution,
 };
 use super::*;
 use crate::analytic_tangency::{
@@ -22,6 +21,9 @@ use kgeom::curve::Circle;
 
 #[path = "shell_surgery/cylindrical_host.rs"]
 mod cylindrical_host;
+#[cfg(test)]
+#[path = "shell_surgery/cylindrical_host_tests.rs"]
+mod cylindrical_host_tests;
 
 /// Cumulative work for the one shared shell-surgery theorem.
 pub(crate) const SHELL_SURGERY_WORK: StageId = match StageId::new("ktopo.check.shell-surgery-work")
@@ -177,13 +179,8 @@ pub(super) fn certify_shell_surgery(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(size) = shell_proof_size(store, shell_id)? else {
-            return Ok(Some(indeterminate()));
-        };
-        let Some(candidates) = u64::try_from(proposals.len()).ok() else {
-            return Ok(Some(indeterminate()));
-        };
-        let Some(work) = quadratic_proof_work(size, 64, 0, candidates) else {
+        let Some(work) = circular_product_sweep_work(store, shell_id, proposals[0].features.len())?
+        else {
             return Ok(Some(indeterminate()));
         };
         scope.ledger_mut().charge(SHELL_SURGERY_WORK, work)?;
@@ -194,6 +191,69 @@ pub(super) fn certify_shell_surgery(
         }
     }
     Ok(None)
+}
+
+/// Exact structural ceiling retained from the cylindrical-host family while
+/// charging it to the one shared theorem stage. Counts are reconstructed from
+/// the live shell rather than accepted from discovery evidence.
+fn circular_product_sweep_work(
+    store: &Store,
+    shell_id: ShellId,
+    feature_count: usize,
+) -> Result<Option<u64>> {
+    let shell = store.get(shell_id)?;
+    let Some(face_count) = u64::try_from(shell.faces.len()).ok() else {
+        return Ok(None);
+    };
+    let Some(features) = u64::try_from(feature_count).ok() else {
+        return Ok(None);
+    };
+    let mut loop_count = 0_u64;
+    let mut fin_count = 0_u64;
+    for &face_id in &shell.faces {
+        let face = store.get(face_id)?;
+        let Some(loops) = u64::try_from(face.loops.len()).ok() else {
+            return Ok(None);
+        };
+        let Some(next) = loop_count.checked_add(loops) else {
+            return Ok(None);
+        };
+        loop_count = next;
+        for &loop_id in &face.loops {
+            let Some(fins) = u64::try_from(store.get(loop_id)?.fins.len()).ok() else {
+                return Ok(None);
+            };
+            let Some(next) = fin_count.checked_add(fins) else {
+                return Ok(None);
+            };
+            fin_count = next;
+        }
+    }
+    let Some(layout) = loop_count.checked_mul(fin_count) else {
+        return Ok(None);
+    };
+    let Some(host_supports) = face_count.checked_mul(fin_count) else {
+        return Ok(None);
+    };
+    let Some(incidence_and_sweeps) = face_count
+        .checked_mul(features)
+        .and_then(|work| work.checked_mul(8))
+    else {
+        return Ok(None);
+    };
+    let Some(feature_pairs) = features
+        .checked_mul(features.saturating_sub(1))
+        .and_then(|ordered| ordered.checked_div(2))
+    else {
+        return Ok(None);
+    };
+    Ok(face_count
+        .checked_add(loop_count)
+        .and_then(|work| work.checked_add(fin_count))
+        .and_then(|work| work.checked_add(layout))
+        .and_then(|work| work.checked_add(host_supports))
+        .and_then(|work| work.checked_add(incidence_and_sweeps))
+        .and_then(|work| work.checked_add(feature_pairs)))
 }
 
 fn certify_evidence(
@@ -802,17 +862,23 @@ mod tests {
             .expect("one theorem-verified role assignment")
     }
 
-    fn assert_cylindrical_host_routing_is_equal(store: &Store, shell: ShellId) {
-        let legacy = super::super::cylindrical_host_proof::certify_cylindrical_host_shell(
-            store, shell, None,
-        )
-        .unwrap();
+    fn assert_cylindrical_host_shared_route(
+        store: &Store,
+        shell: ShellId,
+        expected_orientation: ShellOrientation,
+    ) {
         let shared = certify_shell_surgery(store, shell, None).unwrap();
-        assert_eq!(shared, legacy);
+        assert_eq!(
+            shared,
+            Some(ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: expected_orientation,
+            })
+        );
     }
 
     #[test]
-    fn cylindrical_host_legacy_and_shared_routes_are_equal_for_orientation_tamper() {
+    fn cylindrical_host_shared_route_preserves_orientation_tamper() {
         let mut store = Store::new();
         let mut transaction = store.transaction().unwrap();
         let output = transaction
@@ -838,11 +904,19 @@ mod tests {
                 .loops
                 .reverse();
         }
-        assert_cylindrical_host_routing_is_equal(transaction.store(), output.shell());
+        assert_cylindrical_host_shared_route(
+            transaction.store(),
+            output.shell(),
+            ShellOrientation::Positive,
+        );
 
         let side = output.bands()[0].side_face();
         transaction.store_mut().get_mut(side).unwrap().sense = Sense::Reversed;
-        assert_cylindrical_host_routing_is_equal(transaction.store(), output.shell());
+        assert_cylindrical_host_shared_route(
+            transaction.store(),
+            output.shell(),
+            ShellOrientation::Invalid,
+        );
     }
 
     #[test]
