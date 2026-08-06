@@ -52,6 +52,8 @@ mod mixed_profile_prism_proof;
 mod portal_cylinder_shell_proof;
 #[path = "shell_lemmas.rs"]
 pub(crate) mod shell_lemmas;
+#[path = "shell_surgery.rs"]
+mod shell_surgery;
 #[path = "two_host_axial_chain_shell_proof.rs"]
 mod two_host_axial_chain_shell_proof;
 #[cfg(test)]
@@ -66,6 +68,8 @@ pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 pub(crate) use cylindrical_host_proof::CYLINDRICAL_HOST_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use mixed_profile_prism_proof::MIXED_PROFILE_PRISM_WORK;
+#[cfg(test)]
+pub(crate) use shell_surgery::SHELL_SURGERY_WORK;
 #[cfg(test)]
 pub(crate) use two_host_axial_chain_shell_proof::PARALLEL_CYLINDER_CONTACT_SHELL_WORK;
 
@@ -94,6 +98,7 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         .overlaid(&two_host_axial_chain_shell_proof::axial_contact_proof_budget())
         .overlaid(&two_host_axial_chain_shell_proof::two_host_axial_chain_proof_budget())
         .overlaid(&chord_portal_shell_proof::chord_portal_shell_proof_budget())
+        .overlaid(&shell_surgery::shell_surgery_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
 
@@ -202,6 +207,7 @@ fn certify_shell_impl(
     attempt!(scoped two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell);
     attempt!(scoped portal_cylinder_shell_proof::certify_portal_cylinder_shell);
     attempt!(scoped chord_portal_shell_proof::certify_chord_portal_shell);
+    attempt!(scoped shell_surgery::certify_shell_surgery);
     attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
     if convex != indeterminate() {

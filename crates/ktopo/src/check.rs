@@ -2400,6 +2400,12 @@ mod tests {
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
+                snapshot(
+                    crate::shell_proof::SHELL_SURGERY_WORK,
+                    ResourceKind::Work,
+                    0,
+                    16_777_216,
+                ),
                 proof_snapshot(two_host_stage, 0),
             ]
         );
@@ -2477,6 +2483,12 @@ mod tests {
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
+                snapshot(
+                    crate::shell_proof::SHELL_SURGERY_WORK,
+                    ResourceKind::Work,
+                    0,
+                    16_777_216,
+                ),
                 proof_snapshot(two_host_stage, 0),
             ]
         );

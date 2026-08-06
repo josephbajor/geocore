@@ -165,7 +165,7 @@ LIVE_SHELL_CERTIFIERS = frozenset(
     "certify_bounded_skew_lobe_shell "
     "certify_mixed_profile_prism certify_cap_reaching_cylinder_shell "
     "certify_two_host_axial_chain_shell certify_portal_cylinder_shell "
-    "certify_chord_portal_shell certify_convex_cylindrical_shell "
+    "certify_chord_portal_shell certify_shell_surgery certify_convex_cylindrical_shell "
     "certify_convex_planar_shell "
     "certify_semantic_planar_shell_in_scope certify_general_planar_shell_in_scope".split()
 )
