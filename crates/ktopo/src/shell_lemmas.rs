@@ -83,74 +83,140 @@ pub(super) fn prepare_cap(store: &Store, face_id: FaceId) -> Result<Option<Cap>>
     let Some(loop_orientation) = certify_loop_orientation(store, face_id, *loop_id)? else {
         return Ok(None);
     };
-    let loop_ = store.get(*loop_id)?;
-    if loop_.face != face_id || loop_.fins.len() < 2 {
+    prepare_cap_loops(
+        store,
+        face_id,
+        *plane,
+        &[*loop_id],
+        (loop_orientation == PredicateOrientation::Positive) == face.sense.is_forward(),
+    )
+}
+
+/// Prepare one planar profile cap whose exact polygonal holes have certified
+/// strict containment. Single-loop analytic profiles retain the broader
+/// line/arc admission used by the other sweep theorems.
+pub(super) fn prepare_profile_cap(store: &Store, face_id: FaceId) -> Result<Option<Cap>> {
+    let face = store.get(face_id)?;
+    let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
+        return Ok(None);
+    };
+    if face.loops.len() == 1 {
+        return prepare_cap(store, face_id);
+    }
+    if face.loops.is_empty()
+        || certify_loop_containment(store, &face.loops)? != LoopContainment::Certified
+    {
         return Ok(None);
     }
-    let mut vertices = Vec::with_capacity(loop_.fins.len());
-    let mut uses = Vec::with_capacity(loop_.fins.len());
-    for &fin_id in &loop_.fins {
-        if certify_whole_fin_incidence(store, face_id, *loop_id, fin_id, LINEAR_RESOLUTION)
-            != WholeFinIncidence::Certified
-        {
+    let layout = crate::loop_proof::certify_planar_loop_layout(store, &face.loops)?;
+    let Some(outer) = layout.outer else {
+        return Ok(None);
+    };
+    let mut local_orientation_valid = true;
+    for &loop_id in &face.loops {
+        if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
             return Ok(None);
         }
-        let fin = store.get(fin_id)?;
-        let edge = store.get(fin.edge)?;
-        let (Some(curve_id), Some((lo, hi)), Some(tail), Some(head)) = (
-            edge.curve,
-            edge.bounds,
-            store.fin_tail(fin_id)?,
-            store.fin_head(fin_id)?,
-        ) else {
+        let Some(orientation) = layout
+            .orientations
+            .iter()
+            .find_map(|&(candidate, orientation)| {
+                (candidate == loop_id).then_some(orientation).flatten()
+            })
+        else {
             return Ok(None);
         };
-        if edge.tolerance.is_some()
-            || !lo.is_finite()
-            || !hi.is_finite()
-            || lo >= hi
-            || edge.fins.len() != 2
-            || uses.iter().any(|use_: &CapUse| use_.edge == fin.edge)
-        {
+        let oriented_as_face =
+            (orientation == PredicateOrientation::Positive) == face.sense.is_forward();
+        local_orientation_valid &= oriented_as_face == (loop_id == outer);
+    }
+    prepare_cap_loops(store, face_id, *plane, &face.loops, local_orientation_valid)
+}
+
+fn prepare_cap_loops(
+    store: &Store,
+    face_id: FaceId,
+    plane: kgeom::surface::Plane,
+    loop_ids: &[LoopId],
+    local_orientation_valid: bool,
+) -> Result<Option<Cap>> {
+    let face = store.get(face_id)?;
+    let capacity = loop_ids.iter().try_fold(0_usize, |count, &loop_id| {
+        count.checked_add(store.get(loop_id)?.fins.len()).ok_or(
+            kcore::error::Error::InvalidGeometry {
+                reason: "profile cap fin count overflow",
+            },
+        )
+    })?;
+    let mut vertices = Vec::with_capacity(capacity);
+    let mut uses = Vec::with_capacity(capacity);
+    for &loop_id in loop_ids {
+        let loop_ = store.get(loop_id)?;
+        if loop_.face != face_id || loop_.fins.len() < 2 {
             return Ok(None);
         }
-        let curve = store.get(curve_id)?;
-        let carrier = match (exact_line_carrier(curve), curve) {
-            (Some(line), _) => ProfileCarrier::Line(line),
-            (None, CurveGeom::Circle(circle))
-                if hi - lo < circle.param_range().width()
-                    && certified_parallel(circle.frame().z(), plane.frame().z()) =>
+        for &fin_id in &loop_.fins {
+            if certify_whole_fin_incidence(store, face_id, loop_id, fin_id, LINEAR_RESOLUTION)
+                != WholeFinIncidence::Certified
             {
-                ProfileCarrier::Circle(*circle)
+                return Ok(None);
             }
-            _ => return Ok(None),
-        };
-        if certify_edge_surface_incidence(store, fin.edge, face.surface, LINEAR_RESOLUTION)?
-            != IncidenceCertification::Certified
-            || vertices.contains(&tail)
-        {
-            return Ok(None);
+            let fin = store.get(fin_id)?;
+            let edge = store.get(fin.edge)?;
+            let (Some(curve_id), Some((lo, hi)), Some(tail), Some(head)) = (
+                edge.curve,
+                edge.bounds,
+                store.fin_tail(fin_id)?,
+                store.fin_head(fin_id)?,
+            ) else {
+                return Ok(None);
+            };
+            if edge.tolerance.is_some()
+                || !lo.is_finite()
+                || !hi.is_finite()
+                || lo >= hi
+                || edge.fins.len() != 2
+                || uses.iter().any(|use_: &CapUse| use_.edge == fin.edge)
+            {
+                return Ok(None);
+            }
+            let curve = store.get(curve_id)?;
+            let carrier = match (exact_line_carrier(curve), curve) {
+                (Some(line), _) => ProfileCarrier::Line(line),
+                (None, CurveGeom::Circle(circle))
+                    if hi - lo < circle.param_range().width()
+                        && certified_parallel(circle.frame().z(), plane.frame().z()) =>
+                {
+                    ProfileCarrier::Circle(*circle)
+                }
+                _ => return Ok(None),
+            };
+            if certify_edge_surface_incidence(store, fin.edge, face.surface, LINEAR_RESOLUTION)?
+                != IncidenceCertification::Certified
+                || vertices.contains(&tail)
+            {
+                return Ok(None);
+            }
+            vertices.push(tail);
+            uses.push(CapUse {
+                fin: fin_id,
+                edge: fin.edge,
+                tail,
+                head,
+                carrier,
+                range: ParamRange::new(lo, hi),
+            });
         }
-        vertices.push(tail);
-        uses.push(CapUse {
-            fin: fin_id,
-            edge: fin.edge,
-            tail,
-            head,
-            carrier,
-            range: ParamRange::new(lo, hi),
-        });
     }
     if uses.iter().any(|use_| !vertices.contains(&use_.head)) {
         return Ok(None);
     }
     Ok(Some(Cap {
         face: face_id,
-        plane: *plane,
+        plane,
         vertices,
         uses,
-        local_orientation_valid: (loop_orientation == PredicateOrientation::Positive)
-            == face.sense.is_forward(),
+        local_orientation_valid,
     }))
 }
 
@@ -159,13 +225,34 @@ pub(super) fn translated_vertices(
     first: &Cap,
     second: &Cap,
 ) -> Result<Option<Translation>> {
+    translated_vertices_impl(store, first, second, true)
+}
+
+/// Match the complete vertex sets of two profile caps by one nonzero
+/// translation. Unlike analytic ring transitions, an all-line profile may
+/// sweep obliquely so long as the cap pair later proves a transverse axis.
+pub(super) fn translated_profile_vertices(
+    store: &Store,
+    first: &Cap,
+    second: &Cap,
+) -> Result<Option<Translation>> {
+    translated_vertices_impl(store, first, second, false)
+}
+
+fn translated_vertices_impl(
+    store: &Store,
+    first: &Cap,
+    second: &Cap,
+    require_normal_translation: bool,
+) -> Result<Option<Translation>> {
     let anchor = store.vertex_position(first.vertices[0])?;
     let mut translations = Vec::new();
     for &candidate in &second.vertices {
         let vector = store.vertex_position(candidate)? - anchor;
         if !certified_nonzero(vector)
-            || !certified_parallel(vector, first.plane.frame().z())
-            || !certified_parallel(vector, second.plane.frame().z())
+            || require_normal_translation
+                && (!certified_parallel(vector, first.plane.frame().z())
+                    || !certified_parallel(vector, second.plane.frame().z()))
         {
             continue;
         }

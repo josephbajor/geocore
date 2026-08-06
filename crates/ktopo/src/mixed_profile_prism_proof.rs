@@ -1,20 +1,22 @@
-//! Full shell theorem for normal translation sweeps of analytic profiles.
+//! Full shell theorem for transverse translation sweeps of analytic profiles.
 //!
-//! R2 decomposition: a certified simple Plane loop bounds one Jordan domain
-//! `D`; a second cap must be its bijective nonzero normal translation; every
-//! remaining face must be exactly one four-edge product strip over one cap
-//! edge. Bounded Line edges require Plane strips and bounded Circle edges
-//! require Cylinder strips, while the two other strip edges must be complete
-//! translation rulings. Whole-fin incidence proves the authored pcurves over
-//! every complete edge range. These local witnesses identify the shell with
-//! `boundary(D x [0,1])`, so global embedding follows without convexity,
-//! layout tags, constructor provenance, or sampled sidedness. Any unsupported
-//! carrier, ambiguous correspondence, incomplete strip, or inconclusive
-//! interval comparison returns no theorem.
+//! R2 decomposition: certified simple Plane loops with certified strict hole
+//! containment bound one Jordan material region `D`; a second cap must be its
+//! bijective nonzero transverse translation; every remaining face must be
+//! exactly one four-edge product strip over one cap edge. Bounded Line edges
+//! require Plane strips and bounded Circle edges require Cylinder strips,
+//! while the two other strip edges must be complete translation rulings.
+//! Whole-fin incidence proves the authored pcurves over every complete edge range.
+//! These local witnesses identify the shell with `boundary(D x [0,1])`, so
+//! global embedding follows without convexity, layout tags, constructor
+//! provenance, or sampled sidedness. Any unsupported carrier, ambiguous
+//! correspondence, incomplete strip, or inconclusive interval comparison
+//! returns no theorem.
 
 use super::shell_lemmas::{
     certified_parallel, certify_sweep_support, edge_has_vertices, mapped_vertex, oriented_dot_sign,
-    peer_face, prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
+    peer_face, prepare_profile_cap, prepare_side, ruling_connects, translated_carrier,
+    translated_profile_vertices,
 };
 use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::shell_lemmas::{proof_work as quadratic_proof_work, shell_proof_size};
@@ -56,6 +58,7 @@ pub(super) fn certify_mixed_profile_prism(
         return Ok(None);
     }
     let mut planar_faces = Vec::new();
+    let mut planar_cap_candidates = Vec::new();
     let mut has_cylinder = false;
     for &face_id in &shell.faces {
         let face = store.get(face_id)?;
@@ -63,12 +66,30 @@ pub(super) fn certify_mixed_profile_prism(
             return Ok(None);
         }
         match store.get(face.surface)? {
-            SurfaceGeom::Plane(_) => planar_faces.push(face_id),
+            SurfaceGeom::Plane(_) => {
+                planar_faces.push(face_id);
+                let mut boundary_uses = 0_usize;
+                for &loop_id in &face.loops {
+                    let Some(total) = boundary_uses.checked_add(store.get(loop_id)?.fins.len())
+                    else {
+                        return Ok(None);
+                    };
+                    boundary_uses = total;
+                }
+                if boundary_uses.checked_add(2) == Some(shell.faces.len()) {
+                    planar_cap_candidates.push(face_id);
+                }
+            }
             SurfaceGeom::Cylinder(_) => has_cylinder = true,
             _ => return Ok(None),
         }
     }
-    if planar_faces.len() < 2 || !has_cylinder {
+    let cap_candidates = if has_cylinder {
+        &planar_faces
+    } else {
+        &planar_cap_candidates
+    };
+    if cap_candidates.len() < 2 {
         return Ok(None);
     }
 
@@ -78,14 +99,14 @@ pub(super) fn certify_mixed_profile_prism(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = mixed_profile_proof_work(store, shell_id, planar_faces.len())? else {
+        let Some(work) = mixed_profile_proof_work(store, shell_id, cap_candidates.len())? else {
             return Ok(Some(indeterminate()));
         };
         scope.ledger_mut().charge(MIXED_PROFILE_PRISM_WORK, work)?;
     }
 
-    for (index, &first) in planar_faces.iter().enumerate() {
-        for &second in &planar_faces[index + 1..] {
+    for (index, &first) in cap_candidates.iter().enumerate() {
+        for &second in &cap_candidates[index + 1..] {
             if let Some(candidate) = certify_cap_pair(store, shell_id, first, second)? {
                 // Existence of one complete D x [0,1] decomposition is the
                 // embedding witness. Highly symmetric all-planar prisms can
@@ -132,10 +153,10 @@ fn certify_cap_pair(
     first: FaceId,
     second: FaceId,
 ) -> Result<Option<ShellCertification>> {
-    let Some(first) = prepare_cap(store, first)? else {
+    let Some(first) = prepare_profile_cap(store, first)? else {
         return Ok(None);
     };
-    let Some(second) = prepare_cap(store, second)? else {
+    let Some(second) = prepare_profile_cap(store, second)? else {
         return Ok(None);
     };
     let shell = store.get(shell_id)?;
@@ -145,13 +166,10 @@ fn certify_cap_pair(
     {
         return Ok(None);
     }
-    let Some(translation) = translated_vertices(store, &first, &second)? else {
+    let Some(translation) = translated_profile_vertices(store, &first, &second)? else {
         return Ok(None);
     };
-    if !certified_parallel(translation.vector, first.plane.frame().z())
-        || !certified_parallel(translation.vector, second.plane.frame().z())
-        || !certified_parallel(first.plane.frame().z(), second.plane.frame().z())
-    {
+    if !certified_parallel(first.plane.frame().z(), second.plane.frame().z()) {
         return Ok(None);
     }
 
@@ -289,7 +307,9 @@ mod tests {
         AnalyticShellPcurve, AnalyticShellSurface, AnalyticShellVertex, AnalyticVertexKey,
     };
     use crate::check::{CheckLevel, CheckOutcome, check_body_report};
-    use crate::entity::FaceDomain;
+    use crate::entity::{BodyId, FaceDomain, RegionKind};
+    use crate::make::extrude_profile_along;
+    use crate::profile::PlanarProfile;
     use crate::transaction::FullCommitRequirement;
     use kgeom::curve::{Circle, Line};
     use kgeom::curve2d::{Circle2d, Line2d};
@@ -307,6 +327,42 @@ mod tests {
         let axis = Vec3::new(0.48, 0.64, 0.6);
         let x = Vec3::new(0.8, -0.6, 0.0);
         Frame::new(origin, axis, x).unwrap()
+    }
+
+    fn solid_shell(store: &Store, body: BodyId) -> ShellId {
+        let region = store
+            .get(body)
+            .unwrap()
+            .regions
+            .iter()
+            .copied()
+            .find(|&region| store.get(region).unwrap().kind == RegionKind::Solid)
+            .unwrap();
+        store.get(region).unwrap().shells[0]
+    }
+
+    fn concave_holed_profile(frame: Frame) -> PlanarProfile {
+        let outer = [
+            Point2::new(-3.0, -3.0),
+            Point2::new(3.0, -3.0),
+            Point2::new(3.0, 3.0),
+            Point2::new(0.5, 3.0),
+            Point2::new(0.5, 0.5),
+            Point2::new(-3.0, 0.5),
+        ];
+        let first_hole = [
+            Point2::new(-2.25, -2.25),
+            Point2::new(-1.25, -2.25),
+            Point2::new(-1.25, -1.25),
+            Point2::new(-2.25, -1.25),
+        ];
+        let second_hole = [
+            Point2::new(1.25, -1.75),
+            Point2::new(2.25, -1.75),
+            Point2::new(2.25, -0.75),
+            Point2::new(1.25, -0.75),
+        ];
+        PlanarProfile::from_polygon_with_holes(frame, &outer, &[&first_hole, &second_hole]).unwrap()
     }
 
     fn plane_line_use(
@@ -610,6 +666,46 @@ mod tests {
         transaction
             .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
             .unwrap();
+    }
+
+    #[test]
+    fn concave_multi_loop_planar_profiles_use_the_general_sweep_theorem() {
+        for translation in [Vec3::new(0.0, 0.0, 1.75), Vec3::new(0.375, -0.25, 1.75)] {
+            let profile = concave_holed_profile(Frame::world());
+            let mut store = Store::new();
+            let body = extrude_profile_along(&mut store, &profile, translation).unwrap();
+            let shell = solid_shell(&store, body);
+            let cap_faces = &store.get(shell).unwrap().faces[..2];
+            for &face in cap_faces {
+                assert_eq!(
+                    certify_loop_containment(&store, &store.get(face).unwrap().loops).unwrap(),
+                    LoopContainment::Certified
+                );
+            }
+            assert!(prepare_profile_cap(&store, cap_faces[0]).unwrap().is_some());
+            assert!(prepare_profile_cap(&store, cap_faces[1]).unwrap().is_some());
+            assert_eq!(
+                store
+                    .get(store.get(shell).unwrap().faces[0])
+                    .unwrap()
+                    .loops
+                    .len(),
+                3
+            );
+            assert_eq!(
+                certify_mixed_profile_prism(&store, shell, None).unwrap(),
+                Some(ShellCertification {
+                    embedding: ShellEmbedding::Certified,
+                    orientation: ShellOrientation::Positive,
+                })
+            );
+            assert_eq!(
+                check_body_report(&store, body, CheckLevel::Full)
+                    .unwrap()
+                    .outcome(),
+                CheckOutcome::Valid
+            );
+        }
     }
 
     #[test]

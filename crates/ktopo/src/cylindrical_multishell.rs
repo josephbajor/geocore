@@ -349,6 +349,14 @@ mod tests {
         ]
     }
 
+    fn assert_cavity_routing(
+        store: &Store,
+        output: &CylindricalCavitySolidOutput,
+        expected: crate::shell_proof::ShellOrientation,
+    ) {
+        crate::shell_proof::assert_cylinder_band_routing(store, output.cavity_shell(), expected);
+    }
+
     fn assemble_without_containment(
         transaction: &mut Transaction<'_>,
         input: &CylindricalCavitySolidInput,
@@ -362,9 +370,15 @@ mod tests {
             )
             .unwrap(),
         };
-        transaction
+        let output = transaction
             .allocate_prepared_cylindrical_cavity_solid(prepared)
-            .unwrap()
+            .unwrap();
+        assert_cavity_routing(
+            transaction.store(),
+            &output,
+            crate::shell_proof::ShellOrientation::Negative,
+        );
+        output
     }
 
     #[test]
@@ -374,6 +388,11 @@ mod tests {
         let output = transaction
             .assemble_cylindrical_cavity_solid(&input(0.75, Point3::new(0.0, 0.0, -0.5)))
             .unwrap();
+        assert_cavity_routing(
+            transaction.store(),
+            &output,
+            crate::shell_proof::ShellOrientation::Negative,
+        );
         assert_eq!(counts(transaction.store()), [1, 3, 2, 9, 10, 28, 14, 8]);
         let faces = transaction.store().faces_of_body(output.body()).unwrap();
         let mut loop_counts = faces
@@ -468,6 +487,11 @@ mod tests {
             .get_mut(output.side_face())
             .unwrap()
             .sense = Sense::Forward;
+        assert_cavity_routing(
+            transaction.store(),
+            &output,
+            crate::shell_proof::ShellOrientation::Invalid,
+        );
         let decision = transaction
             .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
             .unwrap();
@@ -552,6 +576,11 @@ mod tests {
         let output = transaction
             .assemble_cylindrical_cavity_solid(&input)
             .unwrap();
+        assert_cavity_routing(
+            transaction.store(),
+            &output,
+            crate::shell_proof::ShellOrientation::Negative,
+        );
         let decision = transaction
             .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
             .unwrap();
@@ -599,6 +628,11 @@ mod tests {
         let accepted_output = accepted
             .assemble_cylindrical_cavity_solid(&input(0.75, Point3::new(0.0, 0.0, -0.5)))
             .unwrap();
+        assert_cavity_routing(
+            accepted.store(),
+            &accepted_output,
+            crate::shell_proof::ShellOrientation::Negative,
+        );
         let accepted = accepted
             .commit_full_with_context(
                 &[accepted_output.body()],
@@ -626,6 +660,11 @@ mod tests {
         let denied_output = denied
             .assemble_cylindrical_cavity_solid(&input(0.75, Point3::new(0.0, 0.0, -0.5)))
             .unwrap();
+        assert_cavity_routing(
+            denied.store(),
+            &denied_output,
+            crate::shell_proof::ShellOrientation::Negative,
+        );
         let rolled_back_body = denied_output.body();
         let denied = denied
             .commit_full_with_context(
@@ -651,6 +690,11 @@ mod tests {
         let retried = retry
             .assemble_cylindrical_cavity_solid(&input(0.75, Point3::new(0.0, 0.0, -0.5)))
             .unwrap();
+        assert_cavity_routing(
+            retry.store(),
+            &retried,
+            crate::shell_proof::ShellOrientation::Negative,
+        );
         assert_eq!(retried.body(), rolled_back_body);
     }
 }

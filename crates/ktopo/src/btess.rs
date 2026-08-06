@@ -6337,6 +6337,11 @@ mod tests {
                 .into(),
         );
         add_ring_loop(store, cap, e, sphere_sense.flipped());
+        crate::shell_proof::assert_sphere_cap_routing(
+            store,
+            shell,
+            crate::shell_proof::ShellOrientation::Positive,
+        );
         body
     }
 

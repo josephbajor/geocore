@@ -160,6 +160,12 @@ fn shifted_endpoint_free_period_assembles_with_checked_fin_range_authority() {
         }
     }
 
+    crate::shell_proof::assert_cylinder_band_routing(
+        transaction.store(),
+        output.shell(),
+        crate::shell_proof::ShellOrientation::Positive,
+    );
+
     let decision = transaction
         .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
         .unwrap();
@@ -1134,6 +1140,13 @@ fn batch_face_split_and_closed_edge_merge_full_commit_and_replay_after_rollback(
         .iter()
         .map(|output| output.body())
         .collect::<Vec<_>>();
+    for output in &outputs {
+        crate::shell_proof::assert_cylinder_band_routing(
+            transaction.store(),
+            output.shell(),
+            crate::shell_proof::ShellOrientation::Positive,
+        );
+    }
     let decision = transaction
         .commit_full(&bodies, FullCommitRequirement::RequireValid)
         .unwrap();

@@ -195,8 +195,6 @@ fn certify_shell_impl(
         };
     }
     attempt!(certify_whole_closed_surface);
-    attempt!(certify_sphere_cap_shell);
-    attempt!(certify_cylinder_band_shell);
     attempt!(scoped cylindrical_host_proof::certify_cylindrical_host_shell);
     attempt!(scoped bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell);
     attempt!(scoped mixed_profile_prism_proof::certify_mixed_profile_prism);
@@ -205,7 +203,6 @@ fn certify_shell_impl(
     attempt!(scoped portal_cylinder_shell_proof::certify_portal_cylinder_shell);
     attempt!(scoped chord_portal_shell_proof::certify_chord_portal_shell);
     attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
-    attempt!(certify_planar_profile_prism);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
     if convex != indeterminate() {
         return Ok(convex);
@@ -249,131 +246,6 @@ fn certify_whole_closed_surface(
     }))
 }
 
-fn certify_sphere_cap_shell(
-    store: &Store,
-    shell_id: ShellId,
-) -> Result<Option<ShellCertification>> {
-    let shell = store.get(shell_id)?;
-    if shell.faces.len() != 2 {
-        return Ok(None);
-    }
-    let mut sphere_face = None;
-    let mut plane_face = None;
-    for &face_id in &shell.faces {
-        match store.get(store.get(face_id)?.surface)? {
-            SurfaceGeom::Sphere(_) => sphere_face = Some(face_id),
-            SurfaceGeom::Plane(_) => plane_face = Some(face_id),
-            _ => return Ok(None),
-        }
-    }
-    let (Some(sphere_face_id), Some(plane_face_id)) = (sphere_face, plane_face) else {
-        return Ok(None);
-    };
-    let sphere_face = store.get(sphere_face_id)?;
-    let plane_face = store.get(plane_face_id)?;
-    if sphere_face.loops.len() != 1 || plane_face.loops.len() != 1 {
-        return Ok(None);
-    }
-    let sphere_loop = store.get(sphere_face.loops[0])?;
-    let plane_loop = store.get(plane_face.loops[0])?;
-    if sphere_loop.fins.len() != 1
-        || plane_loop.fins.len() != 1
-        || certify_loop_simplicity(store, sphere_face.loops[0])? != LoopSimplicity::Certified
-        || certify_loop_simplicity(store, plane_face.loops[0])? != LoopSimplicity::Certified
-    {
-        return Ok(None);
-    }
-    let sphere_fin = store.get(sphere_loop.fins[0])?;
-    let plane_fin = store.get(plane_loop.fins[0])?;
-    if sphere_fin.edge != plane_fin.edge {
-        return Ok(None);
-    }
-    let edge = store.get(sphere_fin.edge)?;
-    if edge.tolerance.is_some() {
-        return Ok(None);
-    }
-    let Some(curve_id) = edge.curve else {
-        return Ok(None);
-    };
-    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
-        return Ok(None);
-    };
-    let SurfaceGeom::Sphere(sphere) = store.get(sphere_face.surface)? else {
-        unreachable!("classified above");
-    };
-    let SurfaceGeom::Plane(plane) = store.get(plane_face.surface)? else {
-        unreachable!("classified above");
-    };
-    if certify_edge_surface_incidence(
-        store,
-        sphere_fin.edge,
-        sphere_face.surface,
-        LINEAR_RESOLUTION,
-    )? != IncidenceCertification::Certified
-        || certify_edge_surface_incidence(
-            store,
-            plane_fin.edge,
-            plane_face.surface,
-            LINEAR_RESOLUTION,
-        )? != IncidenceCertification::Certified
-    {
-        return Ok(None);
-    }
-
-    let plane_normal = plane.frame().z();
-    if 1.0 - circle.frame().z().dot(plane_normal).abs() > ANGULAR_RESOLUTION {
-        return Ok(None);
-    }
-    let center_offset = sphere.frame().origin() - plane.frame().origin();
-    let signed_height = center_offset.dot(plane_normal);
-    if signed_height.abs() >= sphere.radius() {
-        return Ok(None);
-    }
-    let expected_center = sphere.frame().origin() - plane_normal * signed_height;
-    let expected_radius =
-        (sphere.radius() * sphere.radius() - signed_height * signed_height).sqrt();
-    if circle.frame().origin().dist(expected_center) > LINEAR_RESOLUTION
-        || (circle.radius() - expected_radius).abs() > LINEAR_RESOLUTION
-    {
-        return Ok(None);
-    }
-
-    let range = match edge.bounds {
-        Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => {
-            kgeom::param::ParamRange::new(lo, hi)
-        }
-        Some(_) => return Ok(None),
-        None => circle.param_range(),
-    };
-    let parameter = if sphere_fin.sense.is_forward() {
-        range.lo
-    } else {
-        range.hi
-    };
-    let point = circle.eval(parameter);
-    let mut tangent = circle.eval_derivs(parameter, 1).d[1];
-    if !sphere_fin.sense.is_forward() {
-        tangent = -tangent;
-    }
-    let sphere_normal =
-        (point - sphere.frame().origin()) / sphere.radius() * sense_factor(sphere_face.sense);
-    let cap_interior = sphere_normal.cross(tangent);
-    let plane_outward = plane_normal * sense_factor(plane_face.sense);
-    let alignment = cap_interior.dot(-plane_outward);
-    if alignment.abs() <= circle.radius() * ANGULAR_RESOLUTION {
-        return Ok(None);
-    }
-    let orientation_valid = sphere_face.sense == Sense::Forward && alignment > 0.0;
-    Ok(Some(ShellCertification {
-        embedding: ShellEmbedding::Certified,
-        orientation: if orientation_valid {
-            ShellOrientation::Positive
-        } else {
-            ShellOrientation::Invalid
-        },
-    }))
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CylinderBandShellProof {
     pub(crate) certification: ShellCertification,
@@ -382,25 +254,46 @@ pub(crate) struct CylinderBandShellProof {
     pub(crate) high_center: Point3,
 }
 
-/// Certify a finite full-period cylindrical band closed by two circular
-/// planar caps.
-///
-/// Admission is entirely topology and geometry driven: exactly one
-/// cylindrical face owns two single-fin ring loops, each ring edge is shared
-/// with exactly one single-fin planar cap, and whole-fin incidence proves all
-/// four lifts. The certified edge-to-pcurve correspondences then prove both
-/// axial levels and each cap chart's orientation relative to the cylinder
-/// chart. This establishes an embedded `S1 × [a, b]` band with two disks
-/// without relying on constructor order, rounded model-space frame equality,
-/// or sampled agreement.
-fn certify_cylinder_band_shell(
+#[cfg(test)]
+pub(crate) fn assert_sphere_cap_routing(
     store: &Store,
     shell_id: ShellId,
-) -> Result<Option<ShellCertification>> {
-    Ok(certify_cylinder_band_shell_proof(store, shell_id)?.map(|proof| proof.certification))
+    expected_orientation: ShellOrientation,
+) {
+    let generalized =
+        convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(store, shell_id, None)
+            .expect("generalized convex proof evaluates")
+            .expect("sphere-cap family is admitted by the generalized proof");
+    let expected = ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: expected_orientation,
+    };
+    assert_eq!(generalized, expected, "sphere-cap routing value changed");
 }
 
-pub(crate) fn certify_cylinder_band_shell_proof(
+#[cfg(test)]
+pub(crate) fn assert_cylinder_band_routing(
+    store: &Store,
+    shell_id: ShellId,
+    expected_orientation: ShellOrientation,
+) {
+    let generalized =
+        convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(store, shell_id, None)
+            .expect("generalized convex proof evaluates")
+            .expect("cylinder-band family is admitted by the generalized proof");
+    let expected = ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: expected_orientation,
+    };
+    assert_eq!(generalized, expected, "cylinder-band routing value changed");
+}
+
+/// Prove the topology and geometry of a finite full-period cylindrical band
+/// closed by two circular planar caps for region containment.
+///
+/// Shell certification is owned by the generalized convex cylindrical
+/// theorem; this structural proof remains shared by region containment.
+pub(crate) fn prove_cylinder_band_shell(
     store: &Store,
     shell_id: ShellId,
 ) -> Result<Option<CylinderBandShellProof>> {
@@ -568,339 +461,20 @@ fn sense_factor(sense: Sense) -> f64 {
     if sense.is_forward() { 1.0 } else { -1.0 }
 }
 
-#[derive(Debug)]
-struct PrismCap {
-    face: FaceId,
-    vertices: Vec<VertexId>,
-    uses: Vec<PrismBoundaryUse>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PrismBoundaryUse {
-    fin: crate::entity::FinId,
-    edge: crate::entity::EdgeId,
-    tail: VertexId,
-    head: VertexId,
-}
-
-#[derive(Debug)]
-struct PrismTranslation {
-    vector: Vec3,
-    vertices: Vec<(VertexId, VertexId)>,
-}
-
-/// Certify the exact topology product emitted by the polygonal-profile
-/// extrusion builder: two translated planar regions and one planar quad for
-/// every boundary segment. Profile loop simplicity/containment proves the
-/// planar material region; the one-to-one translated edge/quad closure and a
-/// nonzero translation component normal to the caps then prove that its affine
-/// sweep is embedded.
-fn certify_planar_profile_prism(
+#[cfg(test)]
+fn assert_planar_profile_prism_routing(
     store: &Store,
     shell_id: ShellId,
-) -> Result<Option<ShellCertification>> {
-    let shell = store.get(shell_id)?;
-    if shell.faces.len() < 5 || !shell.edges.is_empty() || shell.vertex.is_some() {
-        return Ok(None);
-    }
-    let Some(bottom) = planar_prism_cap(store, shell.faces[0])? else {
-        return Ok(None);
-    };
-    let Some(top) = planar_prism_cap(store, shell.faces[1])? else {
-        return Ok(None);
-    };
-    if bottom.vertices.len() != top.vertices.len()
-        || bottom.uses.len() != top.uses.len()
-        || shell.faces.len() != bottom.uses.len() + 2
-    {
-        return Ok(None);
-    }
-    let Some(translation) = translated_prism_vertices(store, &bottom, &top)? else {
-        return Ok(None);
-    };
-    let bottom_face = store.get(bottom.face)?;
-    let top_face = store.get(top.face)?;
-    let SurfaceGeom::Plane(bottom_plane) = store.get(bottom_face.surface)? else {
-        unreachable!("prism cap classification retains a plane");
-    };
-    let SurfaceGeom::Plane(top_plane) = store.get(top_face.surface)? else {
-        unreachable!("prism cap classification retains a plane");
-    };
-    let top_surface_axis = top_plane.frame().z();
-    if translation.vector.dot(top_surface_axis) == 0.0
-        || 1.0 - bottom_plane.frame().z().dot(top_surface_axis).abs() > ANGULAR_RESOLUTION
-    {
-        return Ok(None);
-    }
-    let axis = if translation.vector.dot(top_surface_axis) > 0.0 {
-        top_surface_axis
-    } else {
-        -top_surface_axis
-    };
-
-    let bottom_edges: Vec<_> = bottom.uses.iter().map(|use_| use_.edge).collect();
-    let top_edges: Vec<_> = top.uses.iter().map(|use_| use_.edge).collect();
-    let side_faces = &shell.faces[2..];
-    let mut used_sides = Vec::with_capacity(side_faces.len());
-    let mut used_top_edges = Vec::with_capacity(top_edges.len());
-    let mut orientation_invalid = false;
-    let expected_bottom_normal = -axis;
-    let bottom_normal = bottom_plane.frame().z() * sense_factor(bottom_face.sense);
-    let top_normal = top_plane.frame().z() * sense_factor(top_face.sense);
-    orientation_invalid |= bottom_normal.dot(expected_bottom_normal) <= 0.0;
-    orientation_invalid |= top_normal.dot(axis) <= 0.0;
-
-    for boundary in &bottom.uses {
-        let edge = store.get(boundary.edge)?;
-        if edge.fins.len() != 2 {
-            return Ok(None);
-        }
-        let Some(other_fin) = edge.fins.iter().copied().find(|&fin| fin != boundary.fin) else {
-            return Ok(None);
-        };
-        let other_loop = store.get(store.get(other_fin)?.parent)?;
-        let side_face_id = other_loop.face;
-        if !side_faces.contains(&side_face_id) || used_sides.contains(&side_face_id) {
-            return Ok(None);
-        }
-        let Some(side_edges) = planar_prism_side(store, side_face_id)? else {
-            return Ok(None);
-        };
-        if !side_edges.contains(&boundary.edge) {
-            return Ok(None);
-        }
-        let Some(mapped_tail) = mapped_prism_vertex(&translation.vertices, boundary.tail) else {
-            return Ok(None);
-        };
-        let Some(mapped_head) = mapped_prism_vertex(&translation.vertices, boundary.head) else {
-            return Ok(None);
-        };
-        let mut mapped_top_edge = None;
-        for edge in side_edges
-            .iter()
-            .copied()
-            .filter(|edge| top_edges.contains(edge))
-        {
-            if edge_has_vertices(store, edge, mapped_tail, mapped_head)?
-                && mapped_top_edge.replace(edge).is_some()
-            {
-                return Ok(None);
-            }
-        }
-        let Some(mapped_top_edge) = mapped_top_edge else {
-            return Ok(None);
-        };
-        let mut tail_vertical = false;
-        let mut head_vertical = false;
-        for edge in side_edges.iter().copied() {
-            tail_vertical |= edge_has_vertices(store, edge, boundary.tail, mapped_tail)?;
-            head_vertical |= edge_has_vertices(store, edge, boundary.head, mapped_head)?;
-        }
-        if used_top_edges.contains(&mapped_top_edge) || !tail_vertical || !head_vertical {
-            return Ok(None);
-        }
-        let allowed = [boundary.edge, mapped_top_edge];
-        if side_edges
-            .iter()
-            .filter(|edge| allowed.contains(edge))
-            .count()
-            != 2
-            || side_edges.len() != 4
-        {
-            return Ok(None);
-        }
-
-        let tangent =
-            store.vertex_position(boundary.head)? - store.vertex_position(boundary.tail)?;
-        let Some(expected_side_normal) = translation.vector.cross(tangent).normalized() else {
-            return Ok(None);
-        };
-        let side_face = store.get(side_face_id)?;
-        let SurfaceGeom::Plane(side_plane) = store.get(side_face.surface)? else {
-            unreachable!("prism side classification retains a plane");
-        };
-        let side_surface_normal = side_plane.frame().z();
-        if 1.0 - side_surface_normal.dot(expected_side_normal).abs() > ANGULAR_RESOLUTION {
-            return Ok(None);
-        }
-        let side_normal = side_surface_normal * sense_factor(side_face.sense);
-        orientation_invalid |= side_normal.dot(expected_side_normal) <= 0.0;
-        used_sides.push(side_face_id);
-        used_top_edges.push(mapped_top_edge);
-    }
-    if used_sides.len() != side_faces.len()
-        || used_top_edges.len() != top_edges.len()
-        || bottom_edges.len() != top_edges.len()
-    {
-        return Ok(None);
-    }
-
-    Ok(Some(ShellCertification {
+    expected_orientation: ShellOrientation,
+) {
+    let generalized = mixed_profile_prism_proof::certify_mixed_profile_prism(store, shell_id, None)
+        .expect("generalized profile-prism proof evaluates")
+        .expect("planar-prism family is admitted by the generalized proof");
+    let expected = ShellCertification {
         embedding: ShellEmbedding::Certified,
-        orientation: if orientation_invalid {
-            ShellOrientation::Invalid
-        } else {
-            ShellOrientation::Positive
-        },
-    }))
-}
-
-fn planar_prism_cap(store: &Store, face_id: FaceId) -> Result<Option<PrismCap>> {
-    let face = store.get(face_id)?;
-    if face.loops.is_empty() || !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
-        return Ok(None);
-    }
-    if certify_loop_containment(store, &face.loops)? != LoopContainment::Certified {
-        return Ok(None);
-    }
-    let mut vertices = Vec::new();
-    let mut uses = Vec::new();
-    for &loop_id in &face.loops {
-        if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
-            return Ok(None);
-        }
-        let loop_ = store.get(loop_id)?;
-        if loop_.fins.len() < 3 {
-            return Ok(None);
-        }
-        for &fin in &loop_.fins {
-            let fin_value = store.get(fin)?;
-            let edge = store.get(fin_value.edge)?;
-            let (Some(curve), Some(tail), Some(head)) =
-                (edge.curve, store.fin_tail(fin)?, store.fin_head(fin)?)
-            else {
-                return Ok(None);
-            };
-            if edge.tolerance.is_some()
-                || edge.bounds.is_none()
-                || exact_line_carrier(store.get(curve)?).is_none()
-                || certify_edge_surface_incidence(
-                    store,
-                    fin_value.edge,
-                    face.surface,
-                    LINEAR_RESOLUTION,
-                )? != IncidenceCertification::Certified
-                || uses
-                    .iter()
-                    .any(|use_: &PrismBoundaryUse| use_.edge == fin_value.edge)
-            {
-                return Ok(None);
-            }
-            if !vertices.contains(&tail) {
-                vertices.push(tail);
-            }
-            uses.push(PrismBoundaryUse {
-                fin,
-                edge: fin_value.edge,
-                tail,
-                head,
-            });
-        }
-    }
-    if vertices.len() != uses.len() {
-        return Ok(None);
-    }
-    Ok(Some(PrismCap {
-        face: face_id,
-        vertices,
-        uses,
-    }))
-}
-
-fn translated_prism_vertices(
-    store: &Store,
-    bottom: &PrismCap,
-    top: &PrismCap,
-) -> Result<Option<PrismTranslation>> {
-    let anchor = store.vertex_position(bottom.vertices[0])?;
-    for &candidate in &top.vertices {
-        let translation = store.vertex_position(candidate)? - anchor;
-        if translation.norm() <= LINEAR_RESOLUTION {
-            continue;
-        }
-        let mut map = Vec::with_capacity(bottom.vertices.len());
-        let mut used = Vec::with_capacity(top.vertices.len());
-        let mut valid = true;
-        for &source in &bottom.vertices {
-            let expected = store.vertex_position(source)? + translation;
-            let matches: Vec<_> = top
-                .vertices
-                .iter()
-                .copied()
-                .filter(|target| {
-                    !used.contains(target)
-                        && store
-                            .vertex_position(*target)
-                            .is_ok_and(|point| point.dist(expected) <= LINEAR_RESOLUTION)
-                })
-                .collect();
-            if matches.len() != 1 {
-                valid = false;
-                break;
-            }
-            used.push(matches[0]);
-            map.push((source, matches[0]));
-        }
-        if valid && used.len() == top.vertices.len() {
-            return Ok(Some(PrismTranslation {
-                vector: translation,
-                vertices: map,
-            }));
-        }
-    }
-    Ok(None)
-}
-
-fn mapped_prism_vertex(map: &[(VertexId, VertexId)], source: VertexId) -> Option<VertexId> {
-    map.iter()
-        .find_map(|&(candidate, target)| (candidate == source).then_some(target))
-}
-
-fn planar_prism_side(store: &Store, face_id: FaceId) -> Result<Option<Vec<crate::entity::EdgeId>>> {
-    let face = store.get(face_id)?;
-    if face.loops.len() != 1 || !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
-        return Ok(None);
-    }
-    let loop_id = face.loops[0];
-    if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
-        return Ok(None);
-    }
-    let loop_ = store.get(loop_id)?;
-    if loop_.fins.len() != 4 {
-        return Ok(None);
-    }
-    let mut edges = Vec::with_capacity(4);
-    for &fin in &loop_.fins {
-        let fin = store.get(fin)?;
-        let edge = store.get(fin.edge)?;
-        let Some(curve) = edge.curve else {
-            return Ok(None);
-        };
-        if edge.tolerance.is_some()
-            || edge.bounds.is_none()
-            || exact_line_carrier(store.get(curve)?).is_none()
-            || certify_edge_surface_incidence(store, fin.edge, face.surface, LINEAR_RESOLUTION)?
-                != IncidenceCertification::Certified
-            || edges.contains(&fin.edge)
-        {
-            return Ok(None);
-        }
-        edges.push(fin.edge);
-    }
-    Ok(Some(edges))
-}
-
-fn edge_has_vertices(
-    store: &Store,
-    edge: crate::entity::EdgeId,
-    first: VertexId,
-    second: VertexId,
-) -> Result<bool> {
-    let vertices = store.get(edge)?.vertices;
-    Ok(matches!(
-        vertices,
-        [Some(a), Some(b)] if (a == first && b == second) || (a == second && b == first)
-    ))
+        orientation: expected_orientation,
+    };
+    assert_eq!(generalized, expected, "planar-prism routing value changed");
 }
 
 type CoplanarFacet = (FaceId, Vec<VertexId>);
@@ -1674,6 +1248,7 @@ mod tests {
         let mut store = Store::new();
         let body = extrude_profile(&mut store, &profile, 2.0).unwrap();
         let shell = solid_shell(&store, body);
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Positive);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1684,6 +1259,7 @@ mod tests {
 
         let side = store.get(shell).unwrap().faces[2];
         store.get_mut(side).unwrap().sense = store.get(side).unwrap().sense.flipped();
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Invalid);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1705,6 +1281,7 @@ mod tests {
         let mut store = Store::new();
         let body = extrude_profile_along(&mut store, &profile, Vec3::new(0.75, -0.5, 2.0)).unwrap();
         let shell = solid_shell(&store, body);
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Positive);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1715,6 +1292,7 @@ mod tests {
 
         let side = store.get(shell).unwrap().faces[2];
         store.get_mut(side).unwrap().sense = store.get(side).unwrap().sense.flipped();
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Invalid);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid)
                 .unwrap()
@@ -1728,6 +1306,7 @@ mod tests {
         let mut store = Store::new();
         let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
         let shell = solid_shell(&store, body);
+        assert_cylinder_band_routing(&store, shell, ShellOrientation::Positive);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1750,6 +1329,7 @@ mod tests {
             })
             .unwrap();
         store.get_mut(side).unwrap().sense = Sense::Reversed;
+        assert_cylinder_band_routing(&store, shell, ShellOrientation::Invalid);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1781,6 +1361,7 @@ mod tests {
             let mut store = Store::new();
             let body = cylinder(&mut store, &frame, 1.5, 2.0).unwrap();
             let shell = solid_shell(&store, body);
+            assert_cylinder_band_routing(&store, shell, ShellOrientation::Positive);
             assert_eq!(
                 certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
                 ShellCertification {
@@ -1843,7 +1424,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            certify_cylinder_band_shell_proof(transaction.store(), shell)
+            prove_cylinder_band_shell(transaction.store(), shell)
                 .unwrap()
                 .is_none(),
             "a stale cap pcurve must not license the shifted chart frame"
