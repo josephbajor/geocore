@@ -65,6 +65,7 @@ struct CanonicalRingSupport {
     face: FaceId,
     origin: Point3,
     normal: Vec3,
+    axial_parameter: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -675,33 +676,45 @@ fn prepare_periodic_band_patch(
     let Some((second_u, second_v)) = periodic_ring_chart(store, *second_loop, cylinder)? else {
         return Ok(None);
     };
-    if !certify_parameter_join(first_u.lo, second_u.lo, cylinder.radius())
-        || !certify_parameter_join(first_u.hi, second_u.hi, cylinder.radius())
-        || !certify_parameter_join(first_v, first_boundary.axial_parameter, 1.0)
-        || !certify_parameter_join(second_v, second_boundary.axial_parameter, 1.0)
-    {
-        return Ok(None);
-    }
-    let (v_lo, v_hi) = (first_v.min(second_v), first_v.max(second_v));
-    let Ok(proof_domain) = FaceDomain::from_bounds(first_u.lo, first_u.hi, v_lo, v_hi) else {
-        return Ok(None);
-    };
-    if !declared_domain_contains(declared_domain, proof_domain) {
-        return Ok(None);
-    }
-    let (low, high) = if first_v < second_v {
-        (first_boundary, second_boundary)
-    } else {
-        (second_boundary, first_boundary)
-    };
-    let local_orientation_valid = low.side_traverses_positive_u == face.sense.is_forward()
-        && high.side_traverses_positive_u == (face.sense == Sense::Reversed);
     let Some(first_support) = canonical_ring_support(cylinder, first_boundary) else {
         return Ok(None);
     };
     let Some(second_support) = canonical_ring_support(cylinder, second_boundary) else {
         return Ok(None);
     };
+    let Some(first_level) =
+        parameter_in_declared_range(first_support.axial_parameter, declared_domain.v, 1.0)
+    else {
+        return Ok(None);
+    };
+    let Some(second_level) =
+        parameter_in_declared_range(second_support.axial_parameter, declared_domain.v, 1.0)
+    else {
+        return Ok(None);
+    };
+    if !certify_parameter_join(first_u.lo, second_u.lo, cylinder.radius())
+        || !certify_parameter_join(first_u.hi, second_u.hi, cylinder.radius())
+        || !certify_parameter_join(first_v, first_level, 1.0)
+        || !certify_parameter_join(second_v, second_level, 1.0)
+    {
+        return Ok(None);
+    }
+    let (v_lo, v_hi) = (first_level.min(second_level), first_level.max(second_level));
+    let Ok(proof_domain) = FaceDomain::from_bounds(first_u.lo, first_u.hi, v_lo, v_hi) else {
+        return Ok(None);
+    };
+    if !declared_domain_contains(declared_domain, proof_domain) {
+        return Ok(None);
+    }
+    let (low, high) = if first_level < second_level {
+        (first_boundary, second_boundary)
+    } else if second_level < first_level {
+        (second_boundary, first_boundary)
+    } else {
+        return Ok(None);
+    };
+    let local_orientation_valid = low.side_traverses_positive_u == face.sense.is_forward()
+        && high.side_traverses_positive_u == (face.sense == Sense::Reversed);
     Ok(Some(CylinderPatch {
         face: face_id,
         cylinder,
@@ -719,10 +732,11 @@ fn prepare_periodic_band_patch(
 /// Reconstruct the cap support licensed by a closure-winding ring.
 ///
 /// `cylinder_ring_boundary` has already certified whole-fin incidence on both
-/// the cylinder and planar cap. Its cylinder pcurve supplies the exact axial
+/// the cylinder and planar cap. The ring carrier supplies the shared axial
 /// level, while its paired planar pcurve supplies the chart-normal parity.
-/// Using that shared authority keeps sub-resolution authored cap-frame drift
-/// inside the same tolerance semantics without widening the interval guard.
+/// Using that common authority keeps sub-resolution drift in either authored
+/// chart inside the same tolerance semantics without widening the interval
+/// guard.
 fn canonical_ring_support(
     cylinder: Cylinder,
     boundary: CylinderRingBoundary,
@@ -733,11 +747,21 @@ fn canonical_ring_support(
         PredicateOrientation::Negative => -axis,
         PredicateOrientation::Zero => return None,
     };
-    let origin = cylinder.frame().origin() + axis * boundary.axial_parameter;
+    let offset = boundary.center - cylinder.frame().origin();
+    let axial_interval = dot_interval(axis, offset)?;
+    let axial_parameter = axis.dot(offset);
+    if !axial_parameter.is_finite()
+        || axial_parameter < axial_interval.lo()
+        || axial_parameter > axial_interval.hi()
+    {
+        return None;
+    }
+    let origin = boundary.center;
     (finite_point(origin) && finite_vec(normal)).then_some(CanonicalRingSupport {
         face: boundary.face,
         origin,
         normal,
+        axial_parameter,
     })
 }
 
@@ -1036,6 +1060,18 @@ fn parameter_in_certified_range(value: f64, range: ParamRange, metric_scale: f64
     range.contains(value)
         || (value < range.lo && certify_parameter_join(value, range.lo, metric_scale))
         || (value > range.hi && certify_parameter_join(value, range.hi, metric_scale))
+}
+
+fn parameter_in_declared_range(value: f64, range: ParamRange, metric_scale: f64) -> Option<f64> {
+    if range.contains(value) {
+        Some(value)
+    } else if value < range.lo && certify_parameter_join(value, range.lo, metric_scale) {
+        Some(range.lo)
+    } else if value > range.hi && certify_parameter_join(value, range.hi, metric_scale) {
+        Some(range.hi)
+    } else {
+        None
+    }
 }
 
 fn intervals_cover_with_certified_joins(
@@ -2247,6 +2283,44 @@ mod tests {
                     surface,
                     SurfaceGeom::Plane(kgeom::surface::Plane::new(perturbed)),
                 )
+                .unwrap();
+            crate::shell_proof::assert_cylinder_band_routing(
+                transaction.store(),
+                shell,
+                ShellOrientation::Positive,
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_band_uses_ring_carrier_when_side_chart_height_drifts() {
+        let oblique = Frame::new(
+            Point3::new(3.0, -2.0, 1.25),
+            Vec3::new(0.48, 0.64, 0.6),
+            Vec3::new(0.8, -0.6, 0.0),
+        )
+        .unwrap();
+        for cylinder_frame in [Frame::world(), oblique] {
+            let mut store = Store::new();
+            let body = cylinder(&mut store, &cylinder_frame, 1.25, 2.5).unwrap();
+            let shell = solid_shell(&store, body);
+            let side = cylinder_face(&store, shell);
+            let loop_id = store.get(side).unwrap().loops[0];
+            let fin_id = store.get(loop_id).unwrap().fins[0];
+            let pcurve = store.get(fin_id).unwrap().pcurve.unwrap();
+            let Curve2dGeom::Line(line) = *store.get(pcurve.curve()).unwrap() else {
+                unreachable!()
+            };
+            let origin = line.origin();
+            let shifted = Line2d::new(
+                Point2::new(origin.x, origin.y - LINEAR_RESOLUTION * 0.125),
+                line.dir(),
+            )
+            .unwrap();
+            let mut transaction = store.transaction().unwrap();
+            transaction
+                .assembly()
+                .replace_pcurve(pcurve.curve(), Curve2dGeom::Line(shifted))
                 .unwrap();
             crate::shell_proof::assert_cylinder_band_routing(
                 transaction.store(),
