@@ -17,8 +17,9 @@
 
 use super::shell_lemmas::{
     affine_value, circle_affine_range, dot_interval, finite_interval, finite_point, harmonic_range,
-    interval_abs_upper, union,
+    interval_abs_upper, peer_face_from_fin_unchecked, union,
 };
+use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
 use crate::entity::{FaceDomain, FinId};
 use kcore::math;
@@ -35,13 +36,11 @@ const DEFAULT_CONVEX_CYLINDRICAL_SHELL_WORK: u64 = 1_048_576;
 const FLOATING_PROOF_GUARD: f64 = 16_384.0 * f64::EPSILON;
 
 pub(super) fn convex_cylindrical_shell_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         CONVEX_CYLINDRICAL_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_CONVEX_CYLINDRICAL_SHELL_WORK,
-    )])
-    .expect("built-in convex cylindrical shell proof budget is valid")
+        "built-in convex cylindrical shell proof budget is valid",
+    )
 }
 
 #[derive(Debug)]
@@ -97,7 +96,12 @@ pub(super) fn certify_convex_cylindrical_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, planar_faces.len(), cylinder_faces.len())?
+        let Some(work) = convex_cylindrical_proof_work(
+            store,
+            shell_id,
+            planar_faces.len(),
+            cylinder_faces.len(),
+        )?
         else {
             return Ok(Some(indeterminate()));
         };
@@ -140,7 +144,7 @@ pub(super) fn certify_convex_cylindrical_shell(
     }))
 }
 
-fn proof_work(
+fn convex_cylindrical_proof_work(
     store: &Store,
     shell_id: ShellId,
     plane_count: usize,
@@ -651,7 +655,7 @@ fn prepare_planar_supports(
     let mut peer_faces = Vec::new();
     for patch in patches {
         for &fin_id in &patch.boundary_fins {
-            let Some(peer) = peer_face(store, fin_id)? else {
+            let Some(peer) = peer_face_from_fin_unchecked(store, fin_id)? else {
                 return Ok(None);
             };
             if peer == patch.face
@@ -711,22 +715,6 @@ fn prepare_planar_supports(
         });
     }
     Ok((!supports.is_empty()).then_some(supports))
-}
-
-fn peer_face(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
-    let fin = store.get(fin_id)?;
-    let edge = store.get(fin.edge)?;
-    let [first, second] = edge.fins.as_slice() else {
-        return Ok(None);
-    };
-    let peer = if *first == fin_id {
-        *second
-    } else if *second == fin_id {
-        *first
-    } else {
-        return Ok(None);
-    };
-    Ok(Some(store.get(store.get(peer)?.parent)?.face))
 }
 
 fn all_boundary_traces_satisfy_constraints(

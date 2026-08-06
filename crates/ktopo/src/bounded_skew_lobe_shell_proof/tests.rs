@@ -1,6 +1,7 @@
 use super::*;
 use crate::entity::{BodyId, RegionKind};
 use crate::make::block;
+use kcore::operation::LimitSpec;
 use kgeom::frame::Frame;
 use kgeom::surface::{Cylinder, Plane};
 

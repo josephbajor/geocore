@@ -28,13 +28,14 @@ use crate::incidence::{
     IncidenceCertification, certify_edge_surface_incidence, exact_line_carrier,
 };
 use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
+use crate::shell_proof::shell_lemmas::{indeterminate, proof_work_budget};
 use crate::shell_proof::{ShellCertification, ShellEmbedding, ShellOrientation};
 use crate::store::Store;
 use kcore::error::Result;
 use kcore::expansion;
-use kcore::operation::{
-    AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
-};
+#[cfg(test)]
+use kcore::operation::LimitSpec;
+use kcore::operation::{AccountingMode, BudgetPlan, OperationScope, ResourceKind, StageId};
 use kcore::predicates::{Orientation, orient2d, orient3d};
 use kcore::tolerance::LINEAR_RESOLUTION;
 
@@ -49,13 +50,11 @@ const DEFAULT_PLANAR_SHELL_PAIR_WORK: u64 = 200_000;
 
 /// Version-1 deterministic budget for general planar shell pair proofs.
 pub(crate) fn planar_shell_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         PLANAR_SHELL_PAIR_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_PLANAR_SHELL_PAIR_WORK,
-    )])
-    .expect("built-in planar shell proof budget is valid")
+        "built-in planar shell proof budget is valid",
+    )
 }
 
 /// Certify a general connected closed shell of convex exact planar facets.
@@ -105,13 +104,6 @@ pub(crate) fn certify_general_planar_shell_in_scope(
         embedding,
         orientation,
     })
-}
-
-fn indeterminate() -> ShellCertification {
-    ShellCertification {
-        embedding: ShellEmbedding::Indeterminate,
-        orientation: ShellOrientation::Indeterminate,
-    }
 }
 
 #[derive(Debug)]

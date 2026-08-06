@@ -228,14 +228,36 @@ def validate_facade_client(metadata: dict[str, Any]) -> None:
 
 
 def validate_spine_freeze(
-    shell_source: str, mixed_shell_source: str, paths: Iterable[str]
+    shell_source: str,
+    mixed_shell_source: str,
+    paths: Iterable[str],
+    *,
+    shell_lemmas_source: str | None = None,
+    ktopo_sources: Iterable[str] | None = None,
 ) -> None:
     """Reject growth of shell certification and mixed-shell planning spines."""
-    cascade = shell_source[
-        shell_source.index("if body_kind != BodyKind::Solid") :
-        shell_source.index("\nfn indeterminate()")
-    ]
+    cascade_start = shell_source.index("if body_kind != BodyKind::Solid")
+    cascade_tail = shell_source[cascade_start:]
+    cascade_end = re.search(r"\nfn\s+", cascade_tail)
+    if cascade_end is None:
+        raise ContractError("shell certification cascade has no closing function boundary")
+    cascade = cascade_tail[: cascade_end.start()]
     certifiers = set(re.findall(r"\bcertify_[a-z0-9_]+", cascade))
+    definition_sources = [shell_source] if ktopo_sources is None else ktopo_sources
+    indeterminate_definitions = sum(
+        len(re.findall(r"\bfn\s+indeterminate\s*\(", source))
+        for source in definition_sources
+    )
+    if shell_lemmas_source is None:
+        shared_indeterminate = bool(
+            re.search(r"\bfn\s+indeterminate\s*\(", shell_source)
+        )
+    else:
+        shared_indeterminate = bool(
+            re.search(
+                r"\bpub\(crate\)\s+fn\s+indeterminate\s*\(", shell_lemmas_source
+            )
+        )
     frozen = {
         path
         for path in paths
@@ -259,6 +281,8 @@ def validate_spine_freeze(
     if (
         new_certifiers
         or new_filenames
+        or indeterminate_definitions != 1
+        or not shared_indeterminate
         or planners != {"plan_mixed_shell"}
         or admission
         or callback
@@ -266,6 +290,8 @@ def validate_spine_freeze(
         raise ContractError(
             "spine freeze changed: "
             f"new_certifiers={new_certifiers}, new_filenames={new_filenames}, "
+            f"indeterminate_definitions={indeterminate_definitions}, "
+            f"shared_indeterminate={shared_indeterminate}, "
             f"mixed_shell_planners={sorted(planners)}, "
             f"section_planning_admission={admission}, plan_callback={callback}"
         )
@@ -296,6 +322,10 @@ def main() -> int:
             (repository / "crates/kernel/src/boolean/mixed_shell_plan").glob("*.rs")
         ),
     ]
+    ktopo_sources = [
+        path.read_text()
+        for path in sorted((repository / "crates/ktopo/src").glob("**/*.rs"))
+    ]
     validate_spine_freeze(
         (repository / "crates/ktopo/src/shell_proof.rs").read_text(),
         "\n".join(
@@ -303,6 +333,10 @@ def main() -> int:
             for path in mixed_shell_paths
         ),
         (str(path.relative_to(repository)) for path in repository.glob("crates/**/*.rs")),
+        shell_lemmas_source=(
+            repository / "crates/ktopo/src/shell_lemmas.rs"
+        ).read_text(),
+        ktopo_sources=ktopo_sources,
     )
     print("package, facade-client, and spine-freeze contracts are current")
     return 0

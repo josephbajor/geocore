@@ -20,7 +20,7 @@ pub(super) fn plane_from_witness(witness: OrientedPlanePoints) -> Option<Interva
     let u = sub(point(witness[1]), origin);
     let v = sub(point(witness[2]), origin);
     let normal = cross(u, v);
-    (finite_vec(origin) && finite_vec(normal) && certified_nonzero(normal))
+    (finite_vec(origin) && finite_vec(normal) && certified_interval_nonzero(normal))
         .then_some(IntervalPlane { origin, normal })
 }
 
@@ -64,7 +64,7 @@ pub(super) fn finite_vec(value: IntervalVec3) -> bool {
     value.into_iter().all(finite_interval)
 }
 
-pub(super) fn certified_nonzero(value: IntervalVec3) -> bool {
+pub(super) fn certified_interval_nonzero(value: IntervalVec3) -> bool {
     value
         .into_iter()
         .any(|coordinate| matches!(coordinate.sign(), Some(-1) | Some(1)))

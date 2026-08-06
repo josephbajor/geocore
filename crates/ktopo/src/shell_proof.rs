@@ -31,7 +31,10 @@ use kgeom::frame::Frame;
 use kgeom::surface::Cylinder;
 use kgeom::vec::{Point2, Point3, Vec3};
 
-use self::shell_lemmas::{CylinderRingBoundary, CylinderRingBoundaryMode, cylinder_ring_boundary};
+use self::shell_lemmas::{
+    CylinderRingBoundary, CylinderRingBoundaryMode, cylinder_ring_boundary, indeterminate,
+    proof_work_budget,
+};
 
 #[path = "bounded_skew_lobe_shell_proof.rs"]
 pub(crate) mod bounded_skew_lobe_shell_proof;
@@ -48,7 +51,7 @@ mod mixed_profile_prism_proof;
 #[path = "portal_cylinder_shell_proof.rs"]
 mod portal_cylinder_shell_proof;
 #[path = "shell_lemmas.rs"]
-mod shell_lemmas;
+pub(crate) mod shell_lemmas;
 #[path = "two_host_axial_chain_shell_proof.rs"]
 mod two_host_axial_chain_shell_proof;
 #[cfg(test)]
@@ -77,13 +80,11 @@ const DEFAULT_SHELL_FACET_PAIR_WORK: u64 = 100_000;
 
 /// Version-1 deterministic budget for planar shell partition proofs.
 pub(crate) fn shell_proof_budget() -> BudgetPlan {
-    let facet_pairs = BudgetPlan::new([LimitSpec::new(
+    let facet_pairs = proof_work_budget(
         SHELL_FACET_PAIR_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_SHELL_FACET_PAIR_WORK,
-    )])
-    .expect("built-in shell proof budget is valid");
+        "built-in shell proof budget is valid",
+    );
     facet_pairs
         .overlaid(&bounded_skew_lobe_shell_proof::bounded_skew_lobe_shell_proof_budget())
         .overlaid(&cylindrical_host_proof::cylindrical_host_proof_budget())
@@ -219,13 +220,6 @@ fn certify_shell_impl(
         return Ok(semantic);
     }
     crate::planar_shell_proof::certify_general_planar_shell_in_scope(store, shell_id, scope)
-}
-
-fn indeterminate() -> ShellCertification {
-    ShellCertification {
-        embedding: ShellEmbedding::Indeterminate,
-        orientation: ShellOrientation::Indeterminate,
-    }
 }
 
 fn certify_whole_closed_surface(

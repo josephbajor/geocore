@@ -14,14 +14,15 @@
 //! plus the same two mapped topology roots establish arc complementarity;
 //! parameter-span widths are deliberately irrelevant.
 
+use super::shell_lemmas::proof_work as quadratic_proof_work;
+use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
-use crate::entity::FinId;
 
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, RadialSide, Translation, axis_distance_squared, certified_close,
-    certified_nonzero, certified_parallel, circle_secant_span_side, mapped_vertex,
-    oriented_dot_sign, peer_face, prepare_cap, ruling_connects, translated_vertices,
-    two_host_circle_on_cylinder,
+    Cap, CapUse, ProfileCarrier, RadialSide, Translation, all_shell_faces_consumed,
+    axis_distance_squared, certified_close, certified_nonzero, certified_parallel,
+    circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face, peer_face_from_fin,
+    peer_fin, prepare_cap, ruling_connects, translated_vertices, two_host_circle_on_cylinder,
 };
 
 #[path = "two_host_axial_chain_shell_proof/internal_tangent.rs"]
@@ -41,13 +42,11 @@ pub(crate) const PARALLEL_CYLINDER_CONTACT_SHELL_WORK: StageId =
 const DEFAULT_PARALLEL_CYLINDER_CONTACT_SHELL_WORK: u64 = 4096;
 
 pub(super) fn axial_contact_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
-    )])
-    .expect("built-in parallel-cylinder contact shell proof budget is valid")
+        "built-in parallel-cylinder contact shell proof budget is valid",
+    )
 }
 
 /// Cumulative deterministic work for two-host axial-chain shell proofs.
@@ -60,13 +59,11 @@ pub(crate) const TWO_HOST_AXIAL_CHAIN_SHELL_WORK: StageId =
 const DEFAULT_TWO_HOST_AXIAL_CHAIN_SHELL_WORK: u64 = 1_048_576;
 
 pub(super) fn two_host_axial_chain_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
-    )])
-    .expect("built-in two-host axial-chain shell proof budget is valid")
+        "built-in two-host axial-chain shell proof budget is valid",
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,7 +161,7 @@ pub(super) fn certify_two_host_axial_chain_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, cylinder_count)? else {
+        let Some(work) = two_host_axial_chain_proof_work(store, shell_id, cylinder_count)? else {
             return Ok(Some(indeterminate()));
         };
         scope
@@ -267,7 +264,11 @@ fn contact_proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
 /// simplicity, and periodic fallback. It also dominates the two bounded-loop
 /// passes for every possible transition cap. This retains the full quadratic
 /// three-layer periodic-pair term instead of trying to absorb it in `N^2`.
-fn proof_work(store: &Store, shell_id: ShellId, cylinder_count: usize) -> Result<Option<u64>> {
+fn two_host_axial_chain_proof_work(
+    store: &Store,
+    shell_id: ShellId,
+    cylinder_count: usize,
+) -> Result<Option<u64>> {
     let shell = store.get(shell_id)?;
     let mut loops = 0_u64;
     let mut fins = 0_u64;
@@ -321,13 +322,14 @@ fn proof_work(store: &Store, shell_id: ShellId, cylinder_count: usize) -> Result
     else {
         return Ok(None);
     };
-    Ok(size
-        .checked_mul(size)
-        .and_then(|quadratic| quadratic.checked_add(size.checked_mul(48)?))
-        .and_then(|structural| structural.checked_add(loop_work.checked_mul(4)?))
-        .and_then(|per_candidate| per_candidate.checked_mul(candidates)))
+    let Some(additional) = loop_work.checked_mul(4) else {
+        return Ok(None);
+    };
+    Ok(quadratic_proof_work(size, 48, additional, candidates))
 }
 
+#[cfg(test)]
+use two_host_axial_chain_proof_work as proof_work;
 fn certify_host_pair(
     store: &Store,
     shell_id: ShellId,
@@ -1083,38 +1085,6 @@ fn same_unique_edges(first: &[EdgeId], second: &[EdgeId]) -> bool {
         && unique(second)
         && first.len() == second.len()
         && first.iter().all(|edge| second.contains(edge))
-}
-
-fn all_shell_faces_consumed(store: &Store, shell_id: ShellId, faces: &[FaceId]) -> Result<bool> {
-    let expected = &store.get(shell_id)?.faces;
-    let unique = !faces
-        .iter()
-        .enumerate()
-        .any(|(index, face)| faces[index + 1..].contains(face));
-    Ok(unique && faces.len() == expected.len() && faces.iter().all(|face| expected.contains(face)))
-}
-
-fn peer_fin(store: &Store, fin_id: FinId) -> Result<Option<FinId>> {
-    let fin = store.get(fin_id)?;
-    let edge = store.get(fin.edge)?;
-    let [first, second] = edge.fins.as_slice() else {
-        return Ok(None);
-    };
-    let peer = if *first == fin_id {
-        *second
-    } else if *second == fin_id {
-        *first
-    } else {
-        return Ok(None);
-    };
-    Ok((store.get(peer)?.sense != fin.sense).then_some(peer))
-}
-
-fn peer_face_from_fin(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
-    let Some(peer) = peer_fin(store, fin_id)? else {
-        return Ok(None);
-    };
-    Ok(Some(store.get(store.get(peer)?.parent)?.face))
 }
 
 fn circle_center(use_: CapUse) -> Result<Point3> {

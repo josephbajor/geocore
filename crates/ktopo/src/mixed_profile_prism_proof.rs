@@ -16,6 +16,8 @@ use super::shell_lemmas::{
     certified_parallel, certify_sweep_support, edge_has_vertices, mapped_vertex, oriented_dot_sign,
     peer_face, prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
 };
+use super::shell_lemmas::{indeterminate, proof_work_budget};
+use super::shell_lemmas::{proof_work as quadratic_proof_work, shell_proof_size};
 use super::*;
 
 /// Cumulative deterministic work for mixed analytic profile-prism proofs.
@@ -36,13 +38,11 @@ pub(crate) const MIXED_PROFILE_PRISM_WORK: StageId =
 const DEFAULT_MIXED_PROFILE_PRISM_WORK: u64 = 16_777_216;
 
 pub(super) fn mixed_profile_prism_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         MIXED_PROFILE_PRISM_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_MIXED_PROFILE_PRISM_WORK,
-    )])
-    .expect("built-in mixed profile-prism proof budget is valid")
+        "built-in mixed profile-prism proof budget is valid",
+    )
 }
 
 /// Attempt the representation-independent product-shell theorem.
@@ -78,7 +78,7 @@ pub(super) fn certify_mixed_profile_prism(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, planar_faces.len())? else {
+        let Some(work) = mixed_profile_proof_work(store, shell_id, planar_faces.len())? else {
             return Ok(Some(indeterminate()));
         };
         scope.ledger_mut().charge(MIXED_PROFILE_PRISM_WORK, work)?;
@@ -103,54 +103,15 @@ pub(super) fn certify_mixed_profile_prism(
 /// most `N^2 + 16N` visits/comparisons. Multiplying by the exact unordered
 /// planar-pair count bounds vertex matching, edge/side bijections, loop scans,
 /// and carrier checks before the search allocates any topology.
-fn proof_work(store: &Store, shell_id: ShellId, plane_count: usize) -> Result<Option<u64>> {
-    let shell = store.get(shell_id)?;
-    let mut loops = 0_u64;
-    let mut fins = 0_u64;
-    let mut edges = Vec::new();
-    let mut vertices = Vec::new();
-    for &face_id in &shell.faces {
-        for &loop_id in &store.get(face_id)?.loops {
-            loops = match loops.checked_add(1) {
-                Some(value) => value,
-                None => return Ok(None),
-            };
-            for &fin_id in &store.get(loop_id)?.fins {
-                fins = match fins.checked_add(1) {
-                    Some(value) => value,
-                    None => return Ok(None),
-                };
-                let edge_id = store.get(fin_id)?.edge;
-                if !edges.contains(&edge_id) {
-                    edges.push(edge_id);
-                    for vertex in store.get(edge_id)?.vertices.into_iter().flatten() {
-                        if !vertices.contains(&vertex) {
-                            vertices.push(vertex);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let Some(faces) = u64::try_from(shell.faces.len()).ok() else {
-        return Ok(None);
-    };
-    let Some(edges) = u64::try_from(edges.len()).ok() else {
-        return Ok(None);
-    };
-    let Some(vertices) = u64::try_from(vertices.len()).ok() else {
+fn mixed_profile_proof_work(
+    store: &Store,
+    shell_id: ShellId,
+    plane_count: usize,
+) -> Result<Option<u64>> {
+    let Some(size) = shell_proof_size(store, shell_id)? else {
         return Ok(None);
     };
     let Some(planes) = u64::try_from(plane_count).ok() else {
-        return Ok(None);
-    };
-    let Some(size) = 1_u64
-        .checked_add(faces)
-        .and_then(|value| value.checked_add(loops))
-        .and_then(|value| value.checked_add(fins))
-        .and_then(|value| value.checked_add(edges))
-        .and_then(|value| value.checked_add(vertices))
-    else {
         return Ok(None);
     };
     let Some(pair_count) = planes
@@ -160,12 +121,11 @@ fn proof_work(store: &Store, shell_id: ShellId, plane_count: usize) -> Result<Op
     else {
         return Ok(None);
     };
-    Ok(size
-        .checked_mul(size)
-        .and_then(|quadratic| quadratic.checked_add(size.checked_mul(16)?))
-        .and_then(|per_pair| per_pair.checked_mul(pair_count)))
+    Ok(quadratic_proof_work(size, 16, 0, pair_count))
 }
 
+#[cfg(test)]
+use mixed_profile_proof_work as proof_work;
 fn certify_cap_pair(
     store: &Store,
     shell_id: ShellId,

@@ -12,11 +12,13 @@
 //! tag, face ordering, coordinate axis, or numeric sample chooses between
 //! those consequences.
 
+use super::shell_lemmas::proof_work_budget;
 use super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, Side, certified_nonzero, certified_parallel,
-    certify_sweep_support, circle_affine_range, mapped_vertex, oriented_dot_sign, peer_face,
-    prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
+    certify_sweep_support, circle_affine_range, indeterminate, mapped_vertex, oriented_dot_sign,
+    peer_face, prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
 };
+use super::shell_lemmas::{proof_work as quadratic_proof_work, shell_proof_size};
 use super::*;
 use crate::entity::FinId;
 
@@ -30,13 +32,11 @@ pub(crate) const CHORD_PORTAL_SHELL_WORK: StageId =
 const DEFAULT_CHORD_PORTAL_SHELL_WORK: u64 = 1_048_576;
 
 pub(super) fn chord_portal_shell_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         CHORD_PORTAL_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_CHORD_PORTAL_SHELL_WORK,
-    )])
-    .expect("built-in chord-portal proof budget is valid")
+        "built-in chord-portal proof budget is valid",
+    )
 }
 
 #[derive(Debug)]
@@ -101,7 +101,7 @@ pub(super) fn certify_chord_portal_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id)? else {
+        let Some(work) = chord_portal_proof_work(store, shell_id)? else {
             return Ok(Some(indeterminate()));
         };
         scope.ledger_mut().charge(CHORD_PORTAL_SHELL_WORK, work)?;
@@ -167,56 +167,15 @@ pub(super) fn certify_chord_portal_shell(
 
 /// `N² + 32N` owns every structural scan, host-support/feature-edge pair,
 /// translated-use match, and stable deduplication performed by this theorem.
-fn proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
-    let shell = store.get(shell_id)?;
-    let mut loops = 0_u64;
-    let mut fins = 0_u64;
-    let mut edges = Vec::new();
-    let mut vertices = Vec::new();
-    for &face in &shell.faces {
-        for &loop_id in &store.get(face)?.loops {
-            loops = match loops.checked_add(1) {
-                Some(value) => value,
-                None => return Ok(None),
-            };
-            for &fin_id in &store.get(loop_id)?.fins {
-                fins = match fins.checked_add(1) {
-                    Some(value) => value,
-                    None => return Ok(None),
-                };
-                let edge = store.get(fin_id)?.edge;
-                if !edges.contains(&edge) {
-                    edges.push(edge);
-                    for vertex in store.get(edge)?.vertices.into_iter().flatten() {
-                        if !vertices.contains(&vertex) {
-                            vertices.push(vertex);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let (Some(faces), Some(edges), Some(vertices)) = (
-        u64::try_from(shell.faces.len()).ok(),
-        u64::try_from(edges.len()).ok(),
-        u64::try_from(vertices.len()).ok(),
-    ) else {
+fn chord_portal_proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
+    let Some(size) = shell_proof_size(store, shell_id)? else {
         return Ok(None);
     };
-    let Some(size) = 1_u64
-        .checked_add(faces)
-        .and_then(|value| value.checked_add(loops))
-        .and_then(|value| value.checked_add(fins))
-        .and_then(|value| value.checked_add(edges))
-        .and_then(|value| value.checked_add(vertices))
-    else {
-        return Ok(None);
-    };
-    Ok(size
-        .checked_mul(size)
-        .and_then(|value| value.checked_add(size.checked_mul(32)?)))
+    Ok(quadratic_proof_work(size, 32, 0, 1))
 }
 
+#[cfg(test)]
+use chord_portal_proof_work as proof_work;
 /// Recognized host facets plus every portal with its attached feature faces.
 type HostClassification = (Vec<HostFacet>, Vec<(Portal, Vec<FaceId>)>);
 
@@ -736,13 +695,6 @@ fn affine_interval(normal: Vec3, point: Point3, origin: Point3) -> Interval {
     Interval::point(normal.x) * Interval::point(offset.x)
         + Interval::point(normal.y) * Interval::point(offset.y)
         + Interval::point(normal.z) * Interval::point(offset.z)
-}
-
-fn indeterminate() -> ShellCertification {
-    ShellCertification {
-        embedding: ShellEmbedding::Indeterminate,
-        orientation: ShellOrientation::Indeterminate,
-    }
 }
 
 #[cfg(test)]

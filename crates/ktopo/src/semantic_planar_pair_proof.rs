@@ -6,7 +6,7 @@
 
 use crate::entity::{EdgeId, SurfaceId, VertexId};
 use crate::semantic_planar_math::{
-    IntervalPlane, IntervalVec3, certified_nonzero, cross, determinant, finite_interval,
+    IntervalPlane, IntervalVec3, certified_interval_nonzero, cross, determinant, finite_interval,
     plane_from_witness, plane_value, strictly_separated, sub,
 };
 use crate::semantic_planar_shell_proof::{
@@ -159,7 +159,7 @@ fn certify_prepared_facet_pair(
             }
         } else if left_edge.sources.contains(&left.support)
             && left_edge.sources.contains(&right.support)
-            && certified_nonzero(cross(left.normal, right.normal))
+            && certified_interval_nonzero(cross(left.normal, right.normal))
         {
             // The two exact, distinct support planes meet in the verified
             // common edge line. Strict facet halfspaces established during
@@ -278,7 +278,7 @@ impl ProofFacet {
             }
             let carrier_plane = plane_from_witness(shell.plane_witness(carrier)?)?;
             let direction = cross(facet.normal(), carrier_plane.normal);
-            if !certified_nonzero(direction) {
+            if !certified_interval_nonzero(direction) {
                 return None;
             }
             edges.push(ProofEdge {

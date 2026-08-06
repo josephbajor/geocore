@@ -1072,3 +1072,128 @@ pub(super) fn axis_distance_squared(point: Point3, origin: Point3, axis: Vec3) -
     let cross = interval_cross(displacement, axis);
     interval_dot(cross, cross).checked_div(interval_dot(axis, axis))
 }
+
+pub(crate) fn all_shell_faces_consumed(
+    store: &Store,
+    shell_id: ShellId,
+    faces: &[FaceId],
+) -> Result<bool> {
+    let expected = &store.get(shell_id)?.faces;
+    let unique = !faces
+        .iter()
+        .enumerate()
+        .any(|(index, face)| faces[index + 1..].contains(face));
+    Ok(unique && faces.len() == expected.len() && faces.iter().all(|face| expected.contains(face)))
+}
+
+pub(crate) fn peer_fin(store: &Store, fin_id: FinId) -> Result<Option<FinId>> {
+    let fin = store.get(fin_id)?;
+    let edge = store.get(fin.edge)?;
+    let [first, second] = edge.fins.as_slice() else {
+        return Ok(None);
+    };
+    let peer = if *first == fin_id {
+        *second
+    } else if *second == fin_id {
+        *first
+    } else {
+        return Ok(None);
+    };
+    Ok((store.get(peer)?.sense != fin.sense).then_some(peer))
+}
+
+pub(crate) fn peer_face_from_fin(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
+    let Some(peer) = peer_fin(store, fin_id)? else {
+        return Ok(None);
+    };
+    Ok(Some(store.get(store.get(peer)?.parent)?.face))
+}
+
+pub(crate) fn peer_face_from_fin_unchecked(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
+    let fin = store.get(fin_id)?;
+    let edge = store.get(fin.edge)?;
+    let [first, second] = edge.fins.as_slice() else {
+        return Ok(None);
+    };
+    let peer = if *first == fin_id {
+        *second
+    } else if *second == fin_id {
+        *first
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(store.get(store.get(peer)?.parent)?.face))
+}
+
+pub(crate) fn indeterminate() -> ShellCertification {
+    ShellCertification {
+        embedding: ShellEmbedding::Indeterminate,
+        orientation: ShellOrientation::Indeterminate,
+    }
+}
+
+pub(crate) fn proof_work_budget(stage: StageId, default: u64, message: &'static str) -> BudgetPlan {
+    BudgetPlan::new([LimitSpec::new(
+        stage,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        default,
+    )])
+    .expect(message)
+}
+
+pub(crate) fn shell_proof_size(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
+    let shell = store.get(shell_id)?;
+    let mut loops = 0_u64;
+    let mut fins = 0_u64;
+    let mut edges = Vec::new();
+    let mut vertices = Vec::new();
+    for &face_id in &shell.faces {
+        for &loop_id in &store.get(face_id)?.loops {
+            loops = match loops.checked_add(1) {
+                Some(value) => value,
+                None => return Ok(None),
+            };
+            for &fin_id in &store.get(loop_id)?.fins {
+                fins = match fins.checked_add(1) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                };
+                let edge_id = store.get(fin_id)?.edge;
+                if !edges.contains(&edge_id) {
+                    edges.push(edge_id);
+                    for vertex in store.get(edge_id)?.vertices.into_iter().flatten() {
+                        if !vertices.contains(&vertex) {
+                            vertices.push(vertex);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let (Some(faces), Some(edges), Some(vertices)) = (
+        u64::try_from(shell.faces.len()).ok(),
+        u64::try_from(edges.len()).ok(),
+        u64::try_from(vertices.len()).ok(),
+    ) else {
+        return Ok(None);
+    };
+    Ok(1_u64
+        .checked_add(faces)
+        .and_then(|value| value.checked_add(loops))
+        .and_then(|value| value.checked_add(fins))
+        .and_then(|value| value.checked_add(edges))
+        .and_then(|value| value.checked_add(vertices)))
+}
+
+pub(crate) fn proof_work(
+    size: u64,
+    linear_factor: u64,
+    additional: u64,
+    multiplier: u64,
+) -> Option<u64> {
+    size.checked_mul(size)
+        .and_then(|quadratic| quadratic.checked_add(size.checked_mul(linear_factor)?))
+        .and_then(|structural| structural.checked_add(additional))
+        .and_then(|per_candidate| per_candidate.checked_mul(multiplier))
+}

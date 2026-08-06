@@ -14,14 +14,17 @@
 //! `boundary((D x I) ∪ (N x J))` for any authored frame and either axial
 //! direction; other decompositions fail closed.
 
+use super::shell_lemmas::indeterminate;
+use super::shell_lemmas::proof_work as quadratic_proof_work;
+use super::shell_lemmas::proof_work_budget;
 use super::*;
-use crate::entity::FinId;
 
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, RadialSide, Side, Translation, cap_reaching_circle_on_cylinder,
-    certified_close, certified_nonzero, certified_parallel, certify_sweep_support,
-    circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face, prepare_cap,
-    ruling_connects, translated_carrier, translated_vertices,
+    Cap, CapUse, ProfileCarrier, RadialSide, Side, Translation, all_shell_faces_consumed,
+    cap_reaching_circle_on_cylinder, certified_close, certified_nonzero, certified_parallel,
+    certify_sweep_support, circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face,
+    peer_face_from_fin, peer_fin, prepare_cap, ruling_connects, translated_carrier,
+    translated_vertices,
 };
 
 #[cfg(test)]
@@ -38,13 +41,11 @@ pub(crate) const CAP_REACHING_CYLINDER_SHELL_WORK: StageId =
 const DEFAULT_CAP_REACHING_CYLINDER_SHELL_WORK: u64 = 1_048_576;
 
 pub(super) fn cap_reaching_cylinder_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         CAP_REACHING_CYLINDER_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_CAP_REACHING_CYLINDER_SHELL_WORK,
-    )])
-    .expect("built-in cap-reaching cylinder-shell proof budget is valid")
+        "built-in cap-reaching cylinder-shell proof budget is valid",
+    )
 }
 
 #[derive(Debug)]
@@ -127,7 +128,7 @@ pub(super) fn certify_cap_reaching_cylinder_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, cylinder_count)? else {
+        let Some(work) = cap_reaching_proof_work(store, shell_id, cylinder_count)? else {
             return Ok(Some(indeterminate()));
         };
         scope
@@ -152,7 +153,11 @@ pub(super) fn certify_cap_reaching_cylinder_shell(
 /// No-scratch structural upper bound for every candidate scan and pairwise
 /// comparison. Unique edges are at most the fin count and unique vertices at
 /// most twice it, so `1 + F + L + 4U` dominates theorem scratch size.
-fn proof_work(store: &Store, shell_id: ShellId, cylinder_count: usize) -> Result<Option<u64>> {
+fn cap_reaching_proof_work(
+    store: &Store,
+    shell_id: ShellId,
+    cylinder_count: usize,
+) -> Result<Option<u64>> {
     let shell = store.get(shell_id)?;
     let mut loops = 0_u64;
     let mut fins = 0_u64;
@@ -190,12 +195,11 @@ fn proof_work(store: &Store, shell_id: ShellId, cylinder_count: usize) -> Result
     else {
         return Ok(None);
     };
-    Ok(size
-        .checked_mul(size)
-        .and_then(|quadratic| quadratic.checked_add(size.checked_mul(32)?))
-        .and_then(|per_candidate| per_candidate.checked_mul(candidates)))
+    Ok(quadratic_proof_work(size, 32, 0, candidates))
 }
 
+#[cfg(test)]
+use cap_reaching_proof_work as proof_work;
 fn certify_host(
     store: &Store,
     shell_id: ShellId,
@@ -751,38 +755,6 @@ fn certification_from_orientation(
             ShellOrientation::Invalid
         },
     })
-}
-
-fn all_shell_faces_consumed(store: &Store, shell_id: ShellId, faces: &[FaceId]) -> Result<bool> {
-    let expected = &store.get(shell_id)?.faces;
-    let unique = !faces
-        .iter()
-        .enumerate()
-        .any(|(index, face)| faces[index + 1..].contains(face));
-    Ok(unique && faces.len() == expected.len() && faces.iter().all(|face| expected.contains(face)))
-}
-
-fn peer_fin(store: &Store, fin_id: FinId) -> Result<Option<FinId>> {
-    let fin = store.get(fin_id)?;
-    let edge = store.get(fin.edge)?;
-    let [first, second] = edge.fins.as_slice() else {
-        return Ok(None);
-    };
-    let peer = if *first == fin_id {
-        *second
-    } else if *second == fin_id {
-        *first
-    } else {
-        return Ok(None);
-    };
-    Ok((store.get(peer)?.sense != fin.sense).then_some(peer))
-}
-
-fn peer_face_from_fin(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
-    let Some(peer) = peer_fin(store, fin_id)? else {
-        return Ok(None);
-    };
-    Ok(Some(store.get(store.get(peer)?.parent)?.face))
 }
 
 fn circle_use_on_cylinder(use_: CapUse, cylinder: Cylinder) -> bool {

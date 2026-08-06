@@ -12,6 +12,7 @@ use super::shell_lemmas::{
     CylinderRingBoundary, CylinderRingBoundaryMode, cylinder_ring_boundary, interval_vector_dot,
     support_incident_within_resolution,
 };
+use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
 use kcore::error::Error;
 
@@ -26,13 +27,11 @@ pub(crate) const CYLINDRICAL_HOST_SHELL_WORK: StageId =
 const DEFAULT_CYLINDRICAL_HOST_SHELL_WORK: u64 = 1_048_576;
 
 pub(super) fn cylindrical_host_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         CYLINDRICAL_HOST_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_CYLINDRICAL_HOST_SHELL_WORK,
-    )])
-    .expect("built-in cylindrical host shell proof budget is valid")
+        "built-in cylindrical host shell proof budget is valid",
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +85,7 @@ pub(super) fn certify_cylindrical_host_shell(
     if classes.cylinders.is_empty() {
         return Ok(None);
     }
-    let Some(proof_work) = proof_work(&classes) else {
+    let Some(proof_work) = cylindrical_host_proof_work(&classes) else {
         return Ok(Some(indeterminate()));
     };
     if let Some(scope) = scope.as_deref_mut() {
@@ -189,7 +188,7 @@ fn classify_shell(
 /// Input-size-exact conservative bound for the quadratic scans below:
 /// loop/layout and vertex deduplication, face/vertex support decisions,
 /// whole-fin ownership scans, endpoint support decisions, and band pairs.
-fn proof_work(classes: &ShellClasses) -> Option<u64> {
+fn cylindrical_host_proof_work(classes: &ShellClasses) -> Option<u64> {
     let face_count = classes
         .cylinders
         .len()
