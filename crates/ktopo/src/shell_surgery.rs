@@ -30,6 +30,10 @@ mod cylindrical_host;
 #[cfg(test)]
 #[path = "shell_surgery/cylindrical_host_tests.rs"]
 mod cylindrical_host_tests;
+#[path = "shell_surgery/periodic_host_sweep.rs"]
+mod periodic_host_sweep;
+#[path = "shell_surgery/portal_cylinder.rs"]
+mod portal_cylinder;
 #[path = "shell_surgery/profile_sweep.rs"]
 mod profile_sweep;
 
@@ -169,6 +173,14 @@ struct ChordPortalSurgeryEvidence {
     features: Vec<ChordPortalFeatureEvidence>,
 }
 
+#[derive(Debug, Clone)]
+struct PeriodicHostSurgeryEvidence {
+    shell: ShellId,
+    host_face: FaceId,
+    cylinder: Cylinder,
+    planar_faces: Vec<FaceId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct VerifiedSweep {
     evidence: ProductSweepEvidenceSummary,
@@ -192,7 +204,11 @@ pub(super) fn certify_shell_surgery(
 ) -> Result<Option<ShellCertification>> {
     let circular_proposals = cylindrical_host::discover(store, shell_id)?;
     let chord_proposals = chord_portal::discover(store, shell_id)?;
-    if circular_proposals.is_empty() && chord_proposals.is_empty() {
+    let periodic_host_proposals = portal_cylinder::discover(store, shell_id)?;
+    if circular_proposals.is_empty()
+        && chord_proposals.is_empty()
+        && periodic_host_proposals.is_empty()
+    {
         return Ok(None);
     }
     if let Some(scope) = scope {
@@ -225,6 +241,15 @@ pub(super) fn certify_shell_surgery(
             };
             work = next;
         }
+        if !periodic_host_proposals.is_empty() {
+            let Some(periodic_work) = periodic_host_sweep::proof_work(store, shell_id)? else {
+                return Ok(Some(indeterminate()));
+            };
+            let Some(next) = work.checked_add(periodic_work) else {
+                return Ok(Some(indeterminate()));
+            };
+            work = next;
+        }
         scope.ledger_mut().charge(SHELL_SURGERY_WORK, work)?;
     }
     for evidence in &circular_proposals {
@@ -235,6 +260,13 @@ pub(super) fn certify_shell_surgery(
     for evidence in &chord_proposals {
         if let Some(certification) =
             profile_sweep::certify_chord_portal_evidence(store, shell_id, evidence)?
+        {
+            return Ok(Some(certification));
+        }
+    }
+    for evidence in &periodic_host_proposals {
+        if let Some(certification) =
+            periodic_host_sweep::certify_periodic_host_sweep_evidence(store, shell_id, evidence)?
         {
             return Ok(Some(certification));
         }
@@ -870,6 +902,57 @@ pub(super) fn assert_chord_portal_evidence_claims_are_rechecked(store: &Store, s
         profile_sweep::certify_chord_portal_evidence(store, shell, &wrong_feature).unwrap(),
         None
     );
+}
+
+#[cfg(test)]
+pub(super) fn assert_periodic_host_evidence_claims_are_rechecked(store: &Store, shell: ShellId) {
+    let evidence = portal_cylinder::discover(store, shell)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("real portal-cylinder topology produces evidence");
+    assert!(
+        periodic_host_sweep::certify_periodic_host_sweep_evidence(store, shell, &evidence)
+            .unwrap()
+            .is_some()
+    );
+
+    let mut wrong_host = evidence.clone();
+    wrong_host.host_face = wrong_host.planar_faces[0];
+    assert_eq!(
+        periodic_host_sweep::certify_periodic_host_sweep_evidence(store, shell, &wrong_host)
+            .unwrap(),
+        None
+    );
+
+    let mut wrong_cylinder = evidence.clone();
+    wrong_cylinder.cylinder = Cylinder::new(
+        *wrong_cylinder.cylinder.frame(),
+        wrong_cylinder.cylinder.radius() + 0.25,
+    )
+    .unwrap();
+    assert_eq!(
+        periodic_host_sweep::certify_periodic_host_sweep_evidence(store, shell, &wrong_cylinder)
+            .unwrap(),
+        None
+    );
+
+    let mut wrong_planar_faces = evidence;
+    wrong_planar_faces.planar_faces.pop();
+    assert_eq!(
+        periodic_host_sweep::certify_periodic_host_sweep_evidence(
+            store,
+            shell,
+            &wrong_planar_faces,
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[cfg(test)]
+pub(super) fn periodic_host_proof_work(store: &Store, shell: ShellId) -> Result<Option<u64>> {
+    periodic_host_sweep::proof_work(store, shell)
 }
 
 #[cfg(test)]

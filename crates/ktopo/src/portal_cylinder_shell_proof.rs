@@ -83,6 +83,23 @@ pub(super) fn certify_portal_cylinder_shell(
     shell_id: ShellId,
     scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
+    if scope.is_some() {
+        return certify_portal_cylinder_shell_legacy(store, shell_id, scope);
+    }
+    let legacy = certify_portal_cylinder_shell_legacy(store, shell_id, None)?;
+    #[cfg(test)]
+    {
+        let shared = super::shell_surgery::certify_shell_surgery(store, shell_id, None)?;
+        assert_eq!(shared, legacy, "portal-cylinder routing value changed");
+    }
+    Ok(legacy)
+}
+
+fn certify_portal_cylinder_shell_legacy(
+    store: &Store,
+    shell_id: ShellId,
+    scope: Option<&mut OperationScope<'_, '_>>,
+) -> Result<Option<ShellCertification>> {
     let shell = store.get(shell_id)?;
     if shell.faces.len() < 6 || !shell.edges.is_empty() || shell.vertex.is_some() {
         return Ok(None);
