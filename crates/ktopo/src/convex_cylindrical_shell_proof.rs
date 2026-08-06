@@ -21,7 +21,7 @@
 
 use super::shell_lemmas::{
     affine_value, certified_parallel, circle_affine_range, dot_interval, finite_interval,
-    finite_point, harmonic_range, interval_abs_upper, oriented_dot_sign,
+    finite_point, finite_vec, harmonic_range, interval_abs_upper, oriented_dot_sign,
     peer_face_from_fin_unchecked, support_incident_within_resolution, union,
 };
 use super::shell_lemmas::{indeterminate, proof_work_budget};
@@ -57,6 +57,14 @@ struct CylinderPatch {
     boundary_fins: Vec<FinId>,
     local_orientation_valid: bool,
     allows_self_seam: bool,
+    canonical_ring_supports: Vec<CanonicalRingSupport>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CanonicalRingSupport {
+    face: FaceId,
+    origin: Point3,
+    normal: Vec3,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -614,6 +622,7 @@ fn prepare_rectangular_patch(
         boundary_fins: loop_.fins.clone(),
         local_orientation_valid,
         allows_self_seam: seam_closed_full_period_chart,
+        canonical_ring_supports: Vec::new(),
     }))
 }
 
@@ -687,6 +696,12 @@ fn prepare_periodic_band_patch(
     };
     let local_orientation_valid = low.side_traverses_positive_u == face.sense.is_forward()
         && high.side_traverses_positive_u == (face.sense == Sense::Reversed);
+    let Some(first_support) = canonical_ring_support(cylinder, first_boundary) else {
+        return Ok(None);
+    };
+    let Some(second_support) = canonical_ring_support(cylinder, second_boundary) else {
+        return Ok(None);
+    };
     Ok(Some(CylinderPatch {
         face: face_id,
         cylinder,
@@ -697,7 +712,33 @@ fn prepare_periodic_band_patch(
         ],
         local_orientation_valid,
         allows_self_seam: false,
+        canonical_ring_supports: vec![first_support, second_support],
     }))
+}
+
+/// Reconstruct the cap support licensed by a closure-winding ring.
+///
+/// `cylinder_ring_boundary` has already certified whole-fin incidence on both
+/// the cylinder and planar cap. Its cylinder pcurve supplies the exact axial
+/// level, while its paired planar pcurve supplies the chart-normal parity.
+/// Using that shared authority keeps sub-resolution authored cap-frame drift
+/// inside the same tolerance semantics without widening the interval guard.
+fn canonical_ring_support(
+    cylinder: Cylinder,
+    boundary: CylinderRingBoundary,
+) -> Option<CanonicalRingSupport> {
+    let axis = cylinder.frame().z();
+    let normal = match boundary.axis_alignment {
+        PredicateOrientation::Positive => axis,
+        PredicateOrientation::Negative => -axis,
+        PredicateOrientation::Zero => return None,
+    };
+    let origin = cylinder.frame().origin() + axis * boundary.axial_parameter;
+    (finite_point(origin) && finite_vec(normal)).then_some(CanonicalRingSupport {
+        face: boundary.face,
+        origin,
+        normal,
+    })
 }
 
 fn periodic_ring_chart(
@@ -1188,8 +1229,17 @@ fn prepare_planar_supports(
         let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
             return Ok(None);
         };
-        let raw = plane.frame().z();
-        let origin = plane.frame().origin();
+        let mut ring_supports = patches
+            .iter()
+            .flat_map(|patch| patch.canonical_ring_supports.iter())
+            .filter(|support| support.face == face_id);
+        let first_ring_support = ring_supports.next().copied();
+        if ring_supports.next().is_some() {
+            return Ok(None);
+        }
+        let (raw, origin) = first_ring_support
+            .map(|support| (support.normal, support.origin))
+            .unwrap_or_else(|| (plane.frame().z(), plane.frame().origin()));
         let (Some(raw_patches), Some(raw_witness)) = (
             cylinder_patches_affine_range(patches, raw, origin),
             affine_value(raw, witness, origin),
@@ -2148,6 +2198,65 @@ mod tests {
     }
 
     #[test]
+    fn periodic_band_uses_incidence_bound_canonical_cap_supports() {
+        let oblique = Frame::new(
+            Point3::new(3.0, -2.0, 1.25),
+            Vec3::new(0.48, 0.64, 0.6),
+            Vec3::new(0.8, -0.6, 0.0),
+        )
+        .unwrap();
+        for (cylinder_frame, tilt) in [Frame::world(), oblique]
+            .into_iter()
+            .flat_map(|frame| [false, true].map(|tilt| (frame, tilt)))
+        {
+            let mut store = Store::new();
+            let body = cylinder(&mut store, &cylinder_frame, 1.25, 2.5).unwrap();
+            let shell = solid_shell(&store, body);
+            let cap = store
+                .get(shell)
+                .unwrap()
+                .faces
+                .iter()
+                .copied()
+                .find(|face| {
+                    matches!(
+                        store.get(store.get(*face).unwrap().surface).unwrap(),
+                        SurfaceGeom::Plane(_)
+                    )
+                })
+                .unwrap();
+            let surface = store.get(cap).unwrap().surface;
+            let SurfaceGeom::Plane(plane) = *store.get(surface).unwrap() else {
+                unreachable!()
+            };
+            let frame = *plane.frame();
+            let perturbed = if tilt {
+                Frame::new(
+                    frame.origin(),
+                    frame.z() + frame.x() * (LINEAR_RESOLUTION * 0.0625),
+                    frame.x(),
+                )
+                .unwrap()
+            } else {
+                frame.with_origin(frame.origin() + frame.z() * (LINEAR_RESOLUTION * 0.125))
+            };
+            let mut transaction = store.transaction().unwrap();
+            transaction
+                .assembly()
+                .replace_surface(
+                    surface,
+                    SurfaceGeom::Plane(kgeom::surface::Plane::new(perturbed)),
+                )
+                .unwrap();
+            crate::shell_proof::assert_cylinder_band_routing(
+                transaction.store(),
+                shell,
+                ShellOrientation::Positive,
+            );
+        }
+    }
+
+    #[test]
     fn endpoint_free_ring_chart_uses_the_authored_shifted_logical_period() {
         let mut store = Store::new();
         let input = shifted_full_cylinder_input();
@@ -2252,6 +2361,7 @@ mod tests {
             boundary_fins: Vec::new(),
             local_orientation_valid: true,
             allows_self_seam: false,
+            canonical_ring_supports: Vec::new(),
         };
         let first = patch(0.0, core::f64::consts::TAU, 0.0, 1.0);
         let phase_shifted = patch(
@@ -2282,6 +2392,7 @@ mod tests {
             boundary_fins: Vec::new(),
             local_orientation_valid: true,
             allows_self_seam: false,
+            canonical_ring_supports: Vec::new(),
         };
         let contained = cylinder_patch_affine_range(
             &patch,
