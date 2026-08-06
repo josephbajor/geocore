@@ -731,7 +731,20 @@ fn periodic_ring_chart(
     {
         return Ok(None);
     }
-    let edge_range = circle.param_range();
+    let active = pcurve.range();
+    let map = pcurve.edge_to_pcurve();
+    let mapped = [map.inverse(active.lo), map.inverse(active.hi)];
+    if mapped.iter().any(|value| !value.is_finite()) {
+        return Ok(None);
+    }
+    let edge_range = ParamRange::new(mapped[0].min(mapped[1]), mapped[0].max(mapped[1]));
+    if !certify_parameter_join(
+        edge_range.width(),
+        circle.param_range().width(),
+        cylinder.radius(),
+    ) {
+        return Ok(None);
+    }
     let start = pcurve.evaluate_uv(line, edge_range.lo, [Some(core::f64::consts::TAU), None])?;
     let end = pcurve.evaluate_uv(line, edge_range.hi, [Some(core::f64::consts::TAU), None])?;
     let expected_delta = f64::from(winding) * core::f64::consts::TAU;
@@ -1487,7 +1500,7 @@ fn same_vec_bits(first: Vec3, second: Vec3) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analytic_shell::tests::half_cylinder_input;
+    use crate::analytic_shell::tests::{half_cylinder_input, shifted_full_cylinder_input};
     use crate::analytic_shell::{
         AnalyticEdgeKey, AnalyticFaceKey, AnalyticPcurveUse, AnalyticShellCurve, AnalyticShellEdge,
         AnalyticShellFace, AnalyticShellFin, AnalyticShellInput, AnalyticShellLoop,
@@ -2125,6 +2138,57 @@ mod tests {
         assert!(patch.local_orientation_valid);
         assert_eq!(
             certify_convex_cylindrical_shell(&store, shell, None)
+                .unwrap()
+                .unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Positive,
+            }
+        );
+    }
+
+    #[test]
+    fn endpoint_free_ring_chart_uses_the_authored_shifted_logical_period() {
+        let mut store = Store::new();
+        let input = shifted_full_cylinder_input();
+        let expected = input.faces()[0].domain();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_analytic_shell(&input, 1.0e-12)
+            .unwrap();
+        let shell = output.shell();
+        let side = cylinder_face(transaction.store(), shell);
+        let SurfaceGeom::Cylinder(cylinder) = *transaction
+            .store()
+            .get(transaction.store().get(side).unwrap().surface)
+            .unwrap()
+        else {
+            panic!("selected face has cylinder support")
+        };
+        let planar_faces = transaction
+            .store()
+            .get(shell)
+            .unwrap()
+            .faces
+            .iter()
+            .copied()
+            .filter(|face| {
+                matches!(
+                    transaction
+                        .store()
+                        .get(transaction.store().get(*face).unwrap().surface)
+                        .unwrap(),
+                    SurfaceGeom::Plane(_)
+                )
+            })
+            .collect::<Vec<_>>();
+        let patch =
+            prepare_periodic_band_patch(transaction.store(), shell, side, cylinder, &planar_faces)
+                .unwrap()
+                .expect("the shifted logical period proves one annular patch");
+        assert_eq!(patch.domain.u, expected.u);
+        assert_eq!(
+            certify_convex_cylindrical_shell(transaction.store(), shell, None)
                 .unwrap()
                 .unwrap(),
             ShellCertification {
