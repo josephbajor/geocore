@@ -31,6 +31,8 @@ use kgeom::frame::Frame;
 use kgeom::surface::Cylinder;
 use kgeom::vec::{Point2, Point3, Vec3};
 
+use self::shell_lemmas::{CylinderRingBoundary, CylinderRingBoundaryMode, cylinder_ring_boundary};
+
 #[path = "bounded_skew_lobe_shell_proof.rs"]
 pub(crate) mod bounded_skew_lobe_shell_proof;
 #[path = "cap_reaching_cylinder_shell_proof.rs"]
@@ -379,16 +381,6 @@ fn certify_sphere_cap_shell(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CylinderBandBoundary {
-    cap_face: FaceId,
-    edge: EdgeId,
-    center: Point3,
-    axial_parameter: f64,
-    cap_axis_alignment: PredicateOrientation,
-    side_traverses_positive_u: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub(crate) struct CylinderBandShellProof {
     pub(crate) certification: ShellCertification,
     pub(crate) cylinder: Cylinder,
@@ -446,13 +438,19 @@ pub(crate) fn certify_cylinder_band_shell_proof(
 
     let mut boundaries = Vec::with_capacity(2);
     for &loop_id in &side_face.loops {
-        let Some(boundary) =
-            cylinder_band_boundary(store, shell_id, side_face_id, cylinder, loop_id, &cap_faces)?
+        let Some(boundary) = cylinder_ring_boundary(
+            store,
+            shell_id,
+            side_face_id,
+            cylinder,
+            loop_id,
+            CylinderRingBoundaryMode::Band(&cap_faces),
+        )?
         else {
             return Ok(None);
         };
-        if boundaries.iter().any(|prior: &CylinderBandBoundary| {
-            prior.edge == boundary.edge || prior.cap_face == boundary.cap_face
+        if boundaries.iter().any(|prior: &CylinderRingBoundary| {
+            prior.edge == boundary.edge || prior.face == boundary.face
         }) {
             return Ok(None);
         }
@@ -461,7 +459,7 @@ pub(crate) fn certify_cylinder_band_shell_proof(
     if boundaries.len() != 2
         || cap_faces
             .iter()
-            .any(|cap| !boundaries.iter().any(|boundary| boundary.cap_face == *cap))
+            .any(|cap| !boundaries.iter().any(|boundary| boundary.face == *cap))
     {
         return Ok(None);
     }
@@ -490,10 +488,8 @@ pub(crate) fn certify_cylinder_band_shell_proof(
         }));
     }
 
-    let low_outward =
-        oriented_axis_alignment(low.cap_axis_alignment, store.get(low.cap_face)?.sense);
-    let high_outward =
-        oriented_axis_alignment(high.cap_axis_alignment, store.get(high.cap_face)?.sense);
+    let low_outward = oriented_axis_alignment(low.axis_alignment, store.get(low.face)?.sense);
+    let high_outward = oriented_axis_alignment(high.axis_alignment, store.get(high.face)?.sense);
     let orientation = match (side_face.sense, low_outward, high_outward) {
         (Sense::Forward, Some(-1), Some(1)) => ShellOrientation::Positive,
         (Sense::Reversed, Some(1), Some(-1)) => ShellOrientation::Negative,
@@ -507,151 +503,6 @@ pub(crate) fn certify_cylinder_band_shell_proof(
         cylinder,
         low_center: low.center,
         high_center: high.center,
-    }))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn cylinder_band_boundary(
-    store: &Store,
-    shell_id: ShellId,
-    side_face_id: FaceId,
-    cylinder: Cylinder,
-    side_loop_id: LoopId,
-    cap_faces: &[FaceId; 2],
-) -> Result<Option<CylinderBandBoundary>> {
-    let side_loop = store.get(side_loop_id)?;
-    let [side_fin_id] = side_loop.fins.as_slice() else {
-        return Ok(None);
-    };
-    if side_loop.face != side_face_id
-        || certify_loop_simplicity(store, side_loop_id)? != LoopSimplicity::Certified
-    {
-        return Ok(None);
-    }
-    let side_fin = store.get(*side_fin_id)?;
-    if side_fin.parent != side_loop_id {
-        return Ok(None);
-    }
-    let edge = store.get(side_fin.edge)?;
-    let [first_fin, second_fin] = edge.fins.as_slice() else {
-        return Ok(None);
-    };
-    if edge.tolerance.is_some()
-        || edge.bounds.is_some()
-        || edge.vertices != [None, None]
-        || !edge.fins.contains(side_fin_id)
-    {
-        return Ok(None);
-    }
-    let cap_fin_id = if first_fin == side_fin_id {
-        *second_fin
-    } else if second_fin == side_fin_id {
-        *first_fin
-    } else {
-        return Ok(None);
-    };
-    let cap_fin = store.get(cap_fin_id)?;
-    if cap_fin.edge != side_fin.edge || cap_fin.sense == side_fin.sense {
-        return Ok(None);
-    }
-    let cap_loop_id = cap_fin.parent;
-    let cap_loop = store.get(cap_loop_id)?;
-    let cap_face_id = cap_loop.face;
-    if !cap_faces.contains(&cap_face_id)
-        || cap_loop.fins.as_slice() != [cap_fin_id]
-        || certify_loop_simplicity(store, cap_loop_id)? != LoopSimplicity::Certified
-    {
-        return Ok(None);
-    }
-    let cap_face = store.get(cap_face_id)?;
-    if cap_face.shell != shell_id || cap_face.loops.as_slice() != [cap_loop_id] {
-        return Ok(None);
-    }
-
-    if certify_whole_fin_incidence(
-        store,
-        side_face_id,
-        side_loop_id,
-        *side_fin_id,
-        LINEAR_RESOLUTION,
-    ) != WholeFinIncidence::Certified
-        || certify_whole_fin_incidence(
-            store,
-            cap_face_id,
-            cap_loop_id,
-            cap_fin_id,
-            LINEAR_RESOLUTION,
-        ) != WholeFinIncidence::Certified
-    {
-        return Ok(None);
-    }
-
-    let Some(curve_id) = edge.curve else {
-        return Ok(None);
-    };
-    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
-        return Ok(None);
-    };
-    let SurfaceGeom::Plane(_) = store.get(cap_face.surface)? else {
-        return Ok(None);
-    };
-    if circle.radius() != cylinder.radius() {
-        return Ok(None);
-    }
-
-    let Some(side_use) = side_fin.pcurve else {
-        return Ok(None);
-    };
-    let Curve2dGeom::Line(side_line) = store.get(side_use.curve())? else {
-        return Ok(None);
-    };
-    if side_line.dir().y != 0.0 || side_line.dir().x == 0.0 {
-        return Ok(None);
-    }
-    let Some(edge_traverses_positive_u) = traversal_is_positive(
-        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
-        Sense::Forward,
-    ) else {
-        return Ok(None);
-    };
-    let Some(side_traverses_positive_u) = traversal_is_positive(
-        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
-        side_fin.sense,
-    ) else {
-        return Ok(None);
-    };
-
-    let Some(cap_use) = cap_fin.pcurve else {
-        return Ok(None);
-    };
-    let Curve2dGeom::Circle(cap_circle) = store.get(cap_use.curve())? else {
-        return Ok(None);
-    };
-    if cap_circle.radius() != cylinder.radius()
-        || cap_use.closure_winding() != Some([0, 0])
-        || traversal_is_positive([cap_use.edge_to_pcurve().scale(), 1.0], cap_fin.sense)
-            != Some(cap_face.sense == Sense::Forward)
-    {
-        return Ok(None);
-    }
-    let Some(edge_traverses_positive_cap) =
-        traversal_is_positive([cap_use.edge_to_pcurve().scale()], Sense::Forward)
-    else {
-        return Ok(None);
-    };
-    let cap_axis_alignment = if edge_traverses_positive_u == edge_traverses_positive_cap {
-        PredicateOrientation::Positive
-    } else {
-        PredicateOrientation::Negative
-    };
-
-    Ok(Some(CylinderBandBoundary {
-        cap_face: cap_face_id,
-        edge: side_fin.edge,
-        center: circle.frame().origin(),
-        axial_parameter: side_line.origin().y,
-        cap_axis_alignment,
-        side_traverses_positive_u,
     }))
 }
 

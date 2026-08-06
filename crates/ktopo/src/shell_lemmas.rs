@@ -776,3 +776,240 @@ pub(super) fn finite_point(point: Point3) -> bool {
 pub(super) fn finite_vec(vector: Vec3) -> bool {
     vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite()
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CylinderRingBoundary {
+    pub(super) face: FaceId,
+    pub(super) loop_id: LoopId,
+    pub(super) edge: EdgeId,
+    pub(super) center: Point3,
+    pub(super) axial_parameter: f64,
+    pub(super) axis_alignment: PredicateOrientation,
+    pub(super) side_traverses_positive_u: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum CylinderRingBoundaryMode<'a> {
+    Band(&'a [FaceId; 2]),
+    CylindricalHost,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn cylinder_ring_boundary(
+    store: &Store,
+    shell_id: ShellId,
+    side_face_id: FaceId,
+    cylinder: Cylinder,
+    side_loop_id: LoopId,
+    mode: CylinderRingBoundaryMode<'_>,
+) -> Result<Option<CylinderRingBoundary>> {
+    let cap_faces = match mode {
+        CylinderRingBoundaryMode::Band(cap_faces) => Some(cap_faces),
+        CylinderRingBoundaryMode::CylindricalHost => None,
+    };
+    let side_loop = store.get(side_loop_id)?;
+    let [side_fin_id] = side_loop.fins.as_slice() else {
+        return Ok(None);
+    };
+    if side_loop.face != side_face_id
+        || certify_loop_simplicity(store, side_loop_id)? != LoopSimplicity::Certified
+    {
+        return Ok(None);
+    }
+    let side_fin = store.get(*side_fin_id)?;
+    if cap_faces.is_some() && side_fin.parent != side_loop_id {
+        return Ok(None);
+    }
+    let edge = store.get(side_fin.edge)?;
+    let [first_fin, second_fin] = edge.fins.as_slice() else {
+        return Ok(None);
+    };
+    if (cap_faces.is_none() && side_fin.parent != side_loop_id)
+        || edge.tolerance.is_some()
+        || edge.bounds.is_some()
+        || edge.vertices != [None, None]
+        || !edge.fins.contains(side_fin_id)
+    {
+        return Ok(None);
+    }
+    let planar_fin_id = if first_fin == side_fin_id {
+        *second_fin
+    } else if second_fin == side_fin_id {
+        *first_fin
+    } else {
+        return Ok(None);
+    };
+    let planar_fin = store.get(planar_fin_id)?;
+    if planar_fin.edge != side_fin.edge || planar_fin.sense == side_fin.sense {
+        return Ok(None);
+    }
+    let planar_loop_id = planar_fin.parent;
+    let planar_loop = store.get(planar_loop_id)?;
+    let planar_face_id = planar_loop.face;
+    if let Some(cap_faces) = cap_faces {
+        if !cap_faces.contains(&planar_face_id)
+            || planar_loop.fins.as_slice() != [planar_fin_id]
+            || certify_loop_simplicity(store, planar_loop_id)? != LoopSimplicity::Certified
+        {
+            return Ok(None);
+        }
+        let planar_face = store.get(planar_face_id)?;
+        if planar_face.shell != shell_id || planar_face.loops.as_slice() != [planar_loop_id] {
+            return Ok(None);
+        }
+    } else {
+        let planar_face = store.get(planar_face_id)?;
+        if planar_face.shell != shell_id
+            || planar_loop.fins.as_slice() != [planar_fin_id]
+            || !planar_face.loops.contains(&planar_loop_id)
+            || certify_loop_simplicity(store, planar_loop_id)? != LoopSimplicity::Certified
+            || !matches!(store.get(planar_face.surface)?, SurfaceGeom::Plane(_))
+        {
+            return Ok(None);
+        }
+    }
+
+    if certify_whole_fin_incidence(
+        store,
+        side_face_id,
+        side_loop_id,
+        *side_fin_id,
+        LINEAR_RESOLUTION,
+    ) != WholeFinIncidence::Certified
+        || certify_whole_fin_incidence(
+            store,
+            planar_face_id,
+            planar_loop_id,
+            planar_fin_id,
+            LINEAR_RESOLUTION,
+        ) != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+
+    let Some(curve_id) = edge.curve else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(None);
+    };
+    let host_axis_alignment = if cap_faces.is_some() {
+        let planar_face = store.get(planar_face_id)?;
+        let SurfaceGeom::Plane(_) = store.get(planar_face.surface)? else {
+            return Ok(None);
+        };
+        if circle.radius() != cylinder.radius() {
+            return Ok(None);
+        }
+        None
+    } else {
+        let planar_face = store.get(planar_face_id)?;
+        let SurfaceGeom::Plane(plane) = store.get(planar_face.surface)? else {
+            unreachable!("host ring classification retains a plane");
+        };
+        if circle.radius() != cylinder.radius()
+            || super::exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
+            || !super::certified_point_on_axis(cylinder.frame(), circle.frame().origin())
+            || !support_incident_within_resolution(
+                plane.frame().z(),
+                circle.frame().origin(),
+                plane.frame().origin(),
+            )
+        {
+            return Ok(None);
+        }
+        let Some(axis_alignment) = super::exact_axis_alignment(cylinder.frame(), plane.frame().z())
+        else {
+            return Ok(None);
+        };
+        Some(axis_alignment)
+    };
+
+    let Some(side_use) = side_fin.pcurve else {
+        return Ok(None);
+    };
+    let Curve2dGeom::Line(side_line) = store.get(side_use.curve())? else {
+        return Ok(None);
+    };
+    if side_line.dir().y != 0.0 || side_line.dir().x == 0.0 {
+        return Ok(None);
+    }
+    let edge_traverses_positive_u = if cap_faces.is_some() {
+        let Some(traverses_positive) = super::traversal_is_positive(
+            [side_line.dir().x, side_use.edge_to_pcurve().scale()],
+            Sense::Forward,
+        ) else {
+            return Ok(None);
+        };
+        Some(traverses_positive)
+    } else {
+        None
+    };
+    let Some(side_traverses_positive_u) = super::traversal_is_positive(
+        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
+        side_fin.sense,
+    ) else {
+        return Ok(None);
+    };
+
+    let Some(planar_use) = planar_fin.pcurve else {
+        return Ok(None);
+    };
+    let axis_alignment = if let Some(edge_traverses_positive_u) = edge_traverses_positive_u {
+        let Curve2dGeom::Circle(planar_circle) = store.get(planar_use.curve())? else {
+            return Ok(None);
+        };
+        let planar_face = store.get(planar_face_id)?;
+        if planar_circle.radius() != cylinder.radius()
+            || planar_use.closure_winding() != Some([0, 0])
+            || super::traversal_is_positive(
+                [planar_use.edge_to_pcurve().scale(), 1.0],
+                planar_fin.sense,
+            ) != Some(planar_face.sense == Sense::Forward)
+        {
+            return Ok(None);
+        }
+        let Some(edge_traverses_positive_planar) =
+            super::traversal_is_positive([planar_use.edge_to_pcurve().scale()], Sense::Forward)
+        else {
+            return Ok(None);
+        };
+        if edge_traverses_positive_u == edge_traverses_positive_planar {
+            PredicateOrientation::Positive
+        } else {
+            PredicateOrientation::Negative
+        }
+    } else {
+        if !matches!(store.get(planar_use.curve())?, Curve2dGeom::Circle(_))
+            || planar_use.closure_winding() != Some([0, 0])
+        {
+            return Ok(None);
+        }
+        host_axis_alignment.expect("cylindrical host ring has a geometric axis alignment")
+    };
+
+    Ok(Some(CylinderRingBoundary {
+        face: planar_face_id,
+        loop_id: planar_loop_id,
+        edge: side_fin.edge,
+        center: circle.frame().origin(),
+        axial_parameter: side_line.origin().y,
+        axis_alignment,
+        side_traverses_positive_u,
+    }))
+}
+
+pub(super) fn interval_vector_dot(left: Vec3, right: Vec3) -> Interval {
+    Interval::point(left.x) * Interval::point(right.x)
+        + Interval::point(left.y) * Interval::point(right.y)
+        + Interval::point(left.z) * Interval::point(right.z)
+}
+
+pub(super) fn support_incident_within_resolution(
+    normal: Vec3,
+    point: Point3,
+    origin: Point3,
+) -> bool {
+    let projection = interval_vector_dot(normal, point - origin);
+    projection.lo() >= -LINEAR_RESOLUTION && projection.hi() <= LINEAR_RESOLUTION
+}
