@@ -72,6 +72,22 @@ fn two_host_axial_chain_is_full_valid_across_frames_and_permutations() {
 }
 
 #[test]
+fn two_host_discovery_claims_have_no_proof_authority() {
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(
+            &two_host_axial_chain_union_input(Frame::world(), false),
+            TOLERANCE,
+        )
+        .unwrap();
+    super::super::shell_surgery::assert_two_host_evidence_claims_are_rechecked(
+        transaction.store(),
+        output.shell(),
+    );
+}
+
+#[test]
 fn two_host_axial_chain_accepts_asymmetric_outer_tails() {
     let frame = Frame::world();
     let mut store = Store::new();

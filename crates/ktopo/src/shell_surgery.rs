@@ -46,6 +46,10 @@ mod portal_cylinder;
 mod portal_cylinder_tests;
 #[path = "shell_surgery/profile_sweep.rs"]
 mod profile_sweep;
+#[path = "shell_surgery/two_host.rs"]
+mod two_host;
+#[path = "shell_surgery/two_host_sweep.rs"]
+mod two_host_sweep;
 
 /// Cumulative work for the one shared shell-surgery theorem.
 pub(crate) const SHELL_SURGERY_WORK: StageId = match StageId::new("ktopo.check.shell-surgery-work")
@@ -200,6 +204,13 @@ struct CapReachingSurgeryEvidence {
     planar_faces: Vec<FaceId>,
 }
 
+#[derive(Debug, Clone)]
+struct TwoHostSurgeryEvidence {
+    shell: ShellId,
+    cylinders: Vec<(FaceId, Cylinder)>,
+    planar_faces: Vec<FaceId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct VerifiedSweep {
     evidence: ProductSweepEvidenceSummary,
@@ -219,20 +230,22 @@ struct ProductSweepEvidenceSummary {
 pub(super) fn certify_shell_surgery(
     store: &Store,
     shell_id: ShellId,
-    scope: Option<&mut OperationScope<'_, '_>>,
+    mut scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<Option<ShellCertification>> {
     let circular_proposals = cylindrical_host::discover(store, shell_id)?;
     let chord_proposals = chord_portal::discover(store, shell_id)?;
     let periodic_host_proposals = portal_cylinder::discover(store, shell_id)?;
     let cap_reaching_proposals = cap_reaching::discover(store, shell_id)?;
+    let two_host_proposals = two_host::discover(store, shell_id)?;
     if circular_proposals.is_empty()
         && chord_proposals.is_empty()
         && periodic_host_proposals.is_empty()
         && cap_reaching_proposals.is_empty()
+        && two_host_proposals.is_empty()
     {
         return Ok(None);
     }
-    if let Some(scope) = scope {
+    if let Some(scope) = scope.as_deref_mut() {
         scope.ledger().require_limit(
             SHELL_SURGERY_WORK,
             ResourceKind::Work,
@@ -285,6 +298,17 @@ pub(super) fn certify_shell_surgery(
             };
             work = next;
         }
+        if !two_host_proposals.is_empty() {
+            let Some(two_host_work) =
+                two_host_sweep::proof_work(store, shell_id, two_host_proposals[0].cylinders.len())?
+            else {
+                return Ok(Some(indeterminate()));
+            };
+            let Some(next) = work.checked_add(two_host_work) else {
+                return Ok(Some(indeterminate()));
+            };
+            work = next;
+        }
         scope.ledger_mut().charge(SHELL_SURGERY_WORK, work)?;
     }
     for evidence in &circular_proposals {
@@ -311,6 +335,23 @@ pub(super) fn certify_shell_surgery(
             cap_reaching_sweep::certify_cap_reaching_evidence(store, shell_id, evidence)?
         {
             return Ok(Some(certification));
+        }
+    }
+    for evidence in &two_host_proposals {
+        if let Some(verified) =
+            two_host_sweep::certify_two_host_evidence(store, shell_id, evidence)?
+        {
+            if verified.contact {
+                let Some(contact_work) = two_host_sweep::contact_work(store, shell_id)? else {
+                    return Ok(Some(indeterminate()));
+                };
+                if let Some(scope) = scope.as_deref_mut() {
+                    scope
+                        .ledger_mut()
+                        .charge(SHELL_SURGERY_WORK, contact_work)?;
+                }
+            }
+            return Ok(Some(verified.certification));
         }
     }
     Ok(None)
@@ -359,6 +400,75 @@ pub(super) fn assert_cap_reaching_evidence_claims_are_rechecked(store: &Store, s
     assert_eq!(
         cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &missing_plane).unwrap(),
         None
+    );
+}
+
+/// Transitional legacy bridge used while two-host routing equality is pinned.
+pub(super) fn certify_two_host_candidate(
+    store: &Store,
+    shell_id: ShellId,
+    cylinders: Vec<(FaceId, Cylinder)>,
+    planar_faces: Vec<FaceId>,
+) -> Result<Option<(ShellCertification, bool)>> {
+    Ok(two_host_sweep::certify_two_host_evidence(
+        store,
+        shell_id,
+        &TwoHostSurgeryEvidence {
+            shell: shell_id,
+            cylinders,
+            planar_faces,
+        },
+    )?
+    .map(|verified| (verified.certification, verified.contact)))
+}
+
+pub(super) fn two_host_proof_work(
+    store: &Store,
+    shell_id: ShellId,
+    cylinder_count: usize,
+) -> Result<Option<u64>> {
+    two_host_sweep::proof_work(store, shell_id, cylinder_count)
+}
+
+pub(super) fn two_host_contact_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
+    two_host_sweep::contact_work(store, shell_id)
+}
+
+#[cfg(test)]
+pub(super) fn assert_two_host_evidence_claims_are_rechecked(store: &Store, shell: ShellId) {
+    let evidence = two_host::discover(store, shell)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("real two-host topology produces raw evidence");
+    assert!(
+        two_host_sweep::certify_two_host_evidence(store, shell, &evidence)
+            .unwrap()
+            .is_some()
+    );
+
+    let mut wrong_order = evidence.clone();
+    wrong_order.cylinders.swap(0, 1);
+    assert!(
+        two_host_sweep::certify_two_host_evidence(store, shell, &wrong_order)
+            .unwrap()
+            .is_none()
+    );
+
+    let mut missing_cylinder = evidence.clone();
+    missing_cylinder.cylinders.pop();
+    assert!(
+        two_host_sweep::certify_two_host_evidence(store, shell, &missing_cylinder)
+            .unwrap()
+            .is_none()
+    );
+
+    let mut missing_plane = evidence;
+    missing_plane.planar_faces.pop();
+    assert!(
+        two_host_sweep::certify_two_host_evidence(store, shell, &missing_plane)
+            .unwrap()
+            .is_none()
     );
 }
 
