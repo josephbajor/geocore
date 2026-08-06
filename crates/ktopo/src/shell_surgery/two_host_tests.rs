@@ -9,6 +9,10 @@ use crate::transaction::FullCommitRequirement;
 
 const TOLERANCE: f64 = 1.0e-12;
 
+fn proof_work(store: &Store, shell: ShellId, cylinder_count: usize) -> Result<Option<u64>> {
+    two_host_sweep::proof_work(store, shell, cylinder_count)
+}
+
 fn oblique_frame() -> Frame {
     Frame::new(
         Point3::new(2.5, -1.75, 0.625),
@@ -57,8 +61,7 @@ fn two_host_axial_chain_is_full_valid_across_frames_and_permutations() {
             assert_eq!(output.edges().len(), 8);
             assert_eq!(output.vertices().len(), 4);
             assert_eq!(
-                certify_two_host_axial_chain_shell(transaction.store(), output.shell(), None,)
-                    .unwrap(),
+                certify_shell_surgery(transaction.store(), output.shell(), None,).unwrap(),
                 expected_positive(),
             );
             let report =
@@ -81,10 +84,7 @@ fn two_host_discovery_claims_have_no_proof_authority() {
             TOLERANCE,
         )
         .unwrap();
-    super::super::shell_surgery::assert_two_host_evidence_claims_are_rechecked(
-        transaction.store(),
-        output.shell(),
-    );
+    assert_two_host_evidence_claims_are_rechecked(transaction.store(), output.shell());
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn two_host_axial_chain_accepts_asymmetric_outer_tails() {
     assert_eq!(second_tail.to_bits(), 1.5_f64.to_bits());
     assert_ne!(first_tail.abs().to_bits(), second_tail.to_bits());
     assert_eq!(
-        certify_two_host_axial_chain_shell(transaction.store(), output.shell(), None).unwrap(),
+        certify_shell_surgery(transaction.store(), output.shell(), None).unwrap(),
         expected_positive(),
     );
 }
@@ -126,7 +126,7 @@ fn two_host_axial_chain_accepts_unequal_strict_secant_radii() {
             )
             .unwrap();
         assert_eq!(
-            certify_two_host_axial_chain_shell(transaction.store(), output.shell(), None).unwrap(),
+            certify_shell_surgery(transaction.store(), output.shell(), None).unwrap(),
             expected_positive(),
         );
         let report =
@@ -181,8 +181,7 @@ fn two_host_antiparallel_chain_is_full_valid_across_frames_and_permutations() {
                 assert!(first * second < 0.0);
             }
             assert_eq!(
-                certify_two_host_axial_chain_shell(transaction.store(), output.shell(), None,)
-                    .unwrap(),
+                certify_shell_surgery(transaction.store(), output.shell(), None,).unwrap(),
                 expected_positive(),
             );
             let report =
@@ -210,7 +209,7 @@ fn two_host_antiparallel_orientation_and_incidence_tampers_fail_closed() {
     let mut wrong_sense = transaction.store().clone();
     wrong_sense.get_mut(second_host).unwrap().sense = Sense::Reversed;
     assert_eq!(
-        certify_two_host_axial_chain_shell(&wrong_sense, output.shell(), None).unwrap(),
+        certify_shell_surgery(&wrong_sense, output.shell(), None).unwrap(),
         Some(ShellCertification {
             embedding: ShellEmbedding::Certified,
             orientation: ShellOrientation::Invalid,
@@ -233,7 +232,7 @@ fn two_host_antiparallel_orientation_and_incidence_tampers_fail_closed() {
     let original_sense = wrong_incidence.get(host_fin).unwrap().sense;
     wrong_incidence.get_mut(host_fin).unwrap().sense = original_sense.flipped();
     assert_eq!(
-        certify_two_host_axial_chain_shell(&wrong_incidence, output.shell(), None).unwrap(),
+        certify_shell_surgery(&wrong_incidence, output.shell(), None).unwrap(),
         None,
     );
 }
@@ -253,7 +252,7 @@ fn two_host_axial_chain_tampers_fail_closed() {
     let mut wrong_sense = transaction.store().clone();
     wrong_sense.get_mut(second_host).unwrap().sense = Sense::Reversed;
     assert_eq!(
-        certify_two_host_axial_chain_shell(&wrong_sense, output.shell(), None).unwrap(),
+        certify_shell_surgery(&wrong_sense, output.shell(), None).unwrap(),
         Some(ShellCertification {
             embedding: ShellEmbedding::Certified,
             orientation: ShellOrientation::Invalid,
@@ -275,7 +274,7 @@ fn two_host_axial_chain_tampers_fail_closed() {
         .unwrap();
     wrong_incidence.get_mut(host_fin).unwrap().sense = Sense::Reversed;
     assert_eq!(
-        certify_two_host_axial_chain_shell(&wrong_incidence, output.shell(), None).unwrap(),
+        certify_shell_surgery(&wrong_incidence, output.shell(), None).unwrap(),
         None,
     );
 
@@ -287,7 +286,7 @@ fn two_host_axial_chain_tampers_fail_closed() {
         .vertices
         .swap(0, 1);
     assert_eq!(
-        certify_two_host_axial_chain_shell(&wrong_endpoints, output.shell(), None).unwrap(),
+        certify_shell_surgery(&wrong_endpoints, output.shell(), None).unwrap(),
         None,
     );
 
@@ -296,14 +295,14 @@ fn two_host_axial_chain_tampers_fail_closed() {
     let mut wrong_carrier = transaction.store().clone();
     wrong_carrier.get_mut(upper_second_arc).unwrap().curve = replacement_curve;
     assert_eq!(
-        certify_two_host_axial_chain_shell(&wrong_carrier, output.shell(), None).unwrap(),
+        certify_shell_surgery(&wrong_carrier, output.shell(), None).unwrap(),
         None,
     );
 }
 
 fn session_with_work(allowed: u64) -> kcore::operation::SessionPolicy {
     let budget = BudgetPlan::new([LimitSpec::new(
-        TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
+        SHELL_SURGERY_WORK,
         ResourceKind::Work,
         AccountingMode::Cumulative,
         allowed,
@@ -337,12 +336,8 @@ fn assert_exact_work_contract(input: AnalyticShellInput) {
     .unwrap();
     let mut exact_scope = OperationScope::new(&exact_context);
     assert_eq!(
-        certify_two_host_axial_chain_shell(
-            transaction.store(),
-            output.shell(),
-            Some(&mut exact_scope),
-        )
-        .unwrap(),
+        certify_shell_surgery(transaction.store(), output.shell(), Some(&mut exact_scope),)
+            .unwrap(),
         expected_positive(),
     );
 
@@ -353,15 +348,11 @@ fn assert_exact_work_contract(input: AnalyticShellInput) {
     )
     .unwrap();
     let mut denied_scope = OperationScope::new(&denied_context);
-    let error = certify_two_host_axial_chain_shell(
-        transaction.store(),
-        output.shell(),
-        Some(&mut denied_scope),
-    )
-    .unwrap_err();
+    let error = certify_shell_surgery(transaction.store(), output.shell(), Some(&mut denied_scope))
+        .unwrap_err();
     assert_eq!(
         error.limit().map(|limit| limit.stage),
-        Some(TWO_HOST_AXIAL_CHAIN_SHELL_WORK),
+        Some(SHELL_SURGERY_WORK),
     );
 }
 
@@ -395,8 +386,7 @@ fn two_host_axial_chain_work_is_exact_and_inapplicable_path_is_free() {
     .unwrap();
     let mut zero_scope = OperationScope::new(&zero_context);
     assert_eq!(
-        certify_two_host_axial_chain_shell(&inapplicable, output.shell(), Some(&mut zero_scope),)
-            .unwrap(),
+        certify_shell_surgery(&inapplicable, output.shell(), Some(&mut zero_scope),).unwrap(),
         None,
     );
 }

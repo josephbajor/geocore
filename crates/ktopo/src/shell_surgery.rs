@@ -50,6 +50,9 @@ mod profile_sweep;
 mod two_host;
 #[path = "shell_surgery/two_host_sweep.rs"]
 mod two_host_sweep;
+#[cfg(test)]
+#[path = "shell_surgery/two_host_tests.rs"]
+mod two_host_tests;
 
 /// Cumulative work for the one shared shell-surgery theorem.
 pub(crate) const SHELL_SURGERY_WORK: StageId = match StageId::new("ktopo.check.shell-surgery-work")
@@ -401,37 +404,6 @@ pub(super) fn assert_cap_reaching_evidence_claims_are_rechecked(store: &Store, s
         cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &missing_plane).unwrap(),
         None
     );
-}
-
-/// Transitional legacy bridge used while two-host routing equality is pinned.
-pub(super) fn certify_two_host_candidate(
-    store: &Store,
-    shell_id: ShellId,
-    cylinders: Vec<(FaceId, Cylinder)>,
-    planar_faces: Vec<FaceId>,
-) -> Result<Option<(ShellCertification, bool)>> {
-    Ok(two_host_sweep::certify_two_host_evidence(
-        store,
-        shell_id,
-        &TwoHostSurgeryEvidence {
-            shell: shell_id,
-            cylinders,
-            planar_faces,
-        },
-    )?
-    .map(|verified| (verified.certification, verified.contact)))
-}
-
-pub(super) fn two_host_proof_work(
-    store: &Store,
-    shell_id: ShellId,
-    cylinder_count: usize,
-) -> Result<Option<u64>> {
-    two_host_sweep::proof_work(store, shell_id, cylinder_count)
-}
-
-pub(super) fn two_host_contact_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
-    two_host_sweep::contact_work(store, shell_id)
 }
 
 #[cfg(test)]

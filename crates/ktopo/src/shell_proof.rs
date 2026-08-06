@@ -46,8 +46,6 @@ mod mixed_profile_prism_proof;
 pub(crate) mod shell_lemmas;
 #[path = "shell_surgery.rs"]
 mod shell_surgery;
-#[path = "two_host_axial_chain_shell_proof.rs"]
-mod two_host_axial_chain_shell_proof;
 #[cfg(test)]
 pub(crate) use bounded_skew_lobe_shell_proof::BOUNDED_SKEW_LOBE_SHELL_WORK;
 #[cfg(test)]
@@ -56,8 +54,6 @@ pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 pub(crate) use mixed_profile_prism_proof::MIXED_PROFILE_PRISM_WORK;
 #[cfg(test)]
 pub(crate) use shell_surgery::SHELL_SURGERY_WORK;
-#[cfg(test)]
-pub(crate) use two_host_axial_chain_shell_proof::PARALLEL_CYLINDER_CONTACT_SHELL_WORK;
 
 /// Cumulative exact contact work for coplanar shell-facet partitions.
 pub(crate) const SHELL_FACET_PAIR_WORK: StageId =
@@ -78,8 +74,6 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
     facet_pairs
         .overlaid(&bounded_skew_lobe_shell_proof::bounded_skew_lobe_shell_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
-        .overlaid(&two_host_axial_chain_shell_proof::axial_contact_proof_budget())
-        .overlaid(&two_host_axial_chain_shell_proof::two_host_axial_chain_proof_budget())
         .overlaid(&shell_surgery::shell_surgery_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
@@ -185,7 +179,6 @@ fn certify_shell_impl(
     attempt!(scoped shell_surgery::certify_shell_surgery);
     attempt!(scoped bounded_skew_lobe_shell_proof::certify_bounded_skew_lobe_shell);
     attempt!(scoped mixed_profile_prism_proof::certify_mixed_profile_prism);
-    attempt!(scoped two_host_axial_chain_shell_proof::certify_two_host_axial_chain_shell);
     attempt!(scoped convex_cylindrical_shell_proof::certify_convex_cylindrical_shell);
     let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
     if convex != indeterminate() {

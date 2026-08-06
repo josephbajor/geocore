@@ -32,19 +32,22 @@ pub(super) fn discover(
         return Ok(Vec::new());
     }
 
-    let mut proposals = Vec::new();
+    let mut hosts = Vec::new();
     for &(host_face, cylinder) in &cylinders {
         if raw_host_shape(store, host_face)? {
-            proposals.push(CapReachingSurgeryEvidence {
-                shell: shell_id,
-                host_face,
-                cylinder,
-                cylinders: cylinders.clone(),
-                planar_faces: planar_faces.clone(),
-            });
+            hosts.push((host_face, cylinder));
         }
     }
-    Ok(proposals)
+    let [(host_face, cylinder)] = hosts.as_slice() else {
+        return Ok(Vec::new());
+    };
+    Ok(vec![CapReachingSurgeryEvidence {
+        shell: shell_id,
+        host_face: *host_face,
+        cylinder: *cylinder,
+        cylinders,
+        planar_faces,
+    }])
 }
 
 fn raw_host_shape(store: &Store, host_face: FaceId) -> Result<bool> {
