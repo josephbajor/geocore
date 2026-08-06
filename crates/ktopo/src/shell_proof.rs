@@ -639,6 +639,26 @@ fn certify_planar_profile_prism(
     }))
 }
 
+#[cfg(test)]
+fn assert_planar_profile_prism_routing(
+    store: &Store,
+    shell_id: ShellId,
+    expected_orientation: ShellOrientation,
+) {
+    let legacy = certify_planar_profile_prism(store, shell_id)
+        .expect("legacy planar-prism proof evaluates")
+        .expect("planar-prism family is admitted by its legacy proof");
+    let generalized = mixed_profile_prism_proof::certify_mixed_profile_prism(store, shell_id, None)
+        .expect("generalized profile-prism proof evaluates")
+        .expect("planar-prism family is admitted by the generalized proof");
+    let expected = ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: expected_orientation,
+    };
+    assert_eq!(legacy, expected, "legacy planar-prism value changed");
+    assert_eq!(generalized, legacy, "planar-prism routing value differs");
+}
+
 fn planar_prism_cap(store: &Store, face_id: FaceId) -> Result<Option<PrismCap>> {
     let face = store.get(face_id)?;
     if face.loops.is_empty() || !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
@@ -1568,6 +1588,7 @@ mod tests {
         let mut store = Store::new();
         let body = extrude_profile(&mut store, &profile, 2.0).unwrap();
         let shell = solid_shell(&store, body);
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Positive);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1578,6 +1599,7 @@ mod tests {
 
         let side = store.get(shell).unwrap().faces[2];
         store.get_mut(side).unwrap().sense = store.get(side).unwrap().sense.flipped();
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Invalid);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1599,6 +1621,7 @@ mod tests {
         let mut store = Store::new();
         let body = extrude_profile_along(&mut store, &profile, Vec3::new(0.75, -0.5, 2.0)).unwrap();
         let shell = solid_shell(&store, body);
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Positive);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
@@ -1609,6 +1632,7 @@ mod tests {
 
         let side = store.get(shell).unwrap().faces[2];
         store.get_mut(side).unwrap().sense = store.get(side).unwrap().sense.flipped();
+        assert_planar_profile_prism_routing(&store, shell, ShellOrientation::Invalid);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid)
                 .unwrap()
