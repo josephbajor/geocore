@@ -20,6 +20,10 @@ use crate::analytic_tangency::{
 };
 use kgeom::curve::Circle;
 
+#[path = "shell_surgery/cap_reaching.rs"]
+mod cap_reaching;
+#[path = "shell_surgery/cap_reaching_sweep.rs"]
+mod cap_reaching_sweep;
 #[path = "shell_surgery/chord_portal.rs"]
 mod chord_portal;
 #[cfg(test)]
@@ -184,6 +188,15 @@ struct PeriodicHostSurgeryEvidence {
     planar_faces: Vec<FaceId>,
 }
 
+#[derive(Debug, Clone)]
+struct CapReachingSurgeryEvidence {
+    shell: ShellId,
+    host_face: FaceId,
+    cylinder: Cylinder,
+    cylinders: Vec<(FaceId, Cylinder)>,
+    planar_faces: Vec<FaceId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct VerifiedSweep {
     evidence: ProductSweepEvidenceSummary,
@@ -208,9 +221,11 @@ pub(super) fn certify_shell_surgery(
     let circular_proposals = cylindrical_host::discover(store, shell_id)?;
     let chord_proposals = chord_portal::discover(store, shell_id)?;
     let periodic_host_proposals = portal_cylinder::discover(store, shell_id)?;
+    let cap_reaching_proposals = cap_reaching::discover(store, shell_id)?;
     if circular_proposals.is_empty()
         && chord_proposals.is_empty()
         && periodic_host_proposals.is_empty()
+        && cap_reaching_proposals.is_empty()
     {
         return Ok(None);
     }
@@ -253,6 +268,20 @@ pub(super) fn certify_shell_surgery(
             };
             work = next;
         }
+        if !cap_reaching_proposals.is_empty() {
+            let Some(cap_reaching_work) = cap_reaching_sweep::proof_work(
+                store,
+                shell_id,
+                cap_reaching_proposals[0].cylinders.len(),
+            )?
+            else {
+                return Ok(Some(indeterminate()));
+            };
+            let Some(next) = work.checked_add(cap_reaching_work) else {
+                return Ok(Some(indeterminate()));
+            };
+            work = next;
+        }
         scope.ledger_mut().charge(SHELL_SURGERY_WORK, work)?;
     }
     for evidence in &circular_proposals {
@@ -274,7 +303,92 @@ pub(super) fn certify_shell_surgery(
             return Ok(Some(certification));
         }
     }
+    for evidence in &cap_reaching_proposals {
+        if let Some(certification) =
+            cap_reaching_sweep::certify_cap_reaching_evidence(store, shell_id, evidence)?
+        {
+            return Ok(Some(certification));
+        }
+    }
     Ok(None)
+}
+
+/// Transitional legacy entry used only while cap-reaching routing equality is
+/// pinned.  The family wrapper supplies independently scanned raw evidence;
+/// every proof predicate still runs here in the shared theorem verifier.
+pub(super) fn certify_cap_reaching_candidate(
+    store: &Store,
+    shell_id: ShellId,
+    host_face: FaceId,
+    cylinder: Cylinder,
+    cylinders: Vec<(FaceId, Cylinder)>,
+    planar_faces: Vec<FaceId>,
+) -> Result<Option<ShellCertification>> {
+    cap_reaching_sweep::certify_cap_reaching_evidence(
+        store,
+        shell_id,
+        &CapReachingSurgeryEvidence {
+            shell: shell_id,
+            host_face,
+            cylinder,
+            cylinders,
+            planar_faces,
+        },
+    )
+}
+
+pub(super) fn cap_reaching_proof_work(
+    store: &Store,
+    shell_id: ShellId,
+    cylinder_count: usize,
+) -> Result<Option<u64>> {
+    cap_reaching_sweep::proof_work(store, shell_id, cylinder_count)
+}
+
+#[cfg(test)]
+pub(super) fn assert_cap_reaching_evidence_claims_are_rechecked(store: &Store, shell: ShellId) {
+    let evidence = cap_reaching::discover(store, shell)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("real cap-reaching topology produces raw evidence");
+    assert!(
+        cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &evidence)
+            .unwrap()
+            .is_some()
+    );
+
+    let mut wrong_host = evidence.clone();
+    wrong_host.host_face = wrong_host.planar_faces[0];
+    assert_eq!(
+        cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &wrong_host).unwrap(),
+        None
+    );
+
+    let mut wrong_cylinder = evidence.clone();
+    wrong_cylinder.cylinder = Cylinder::new(
+        *wrong_cylinder.cylinder.frame(),
+        wrong_cylinder.cylinder.radius() + 0.25,
+    )
+    .unwrap();
+    assert_eq!(
+        cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &wrong_cylinder).unwrap(),
+        None
+    );
+
+    let mut missing_cylinder = evidence.clone();
+    missing_cylinder.cylinders.pop();
+    assert_eq!(
+        cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &missing_cylinder).unwrap(),
+        None
+    );
+
+    let mut missing_plane = evidence;
+    missing_plane.planar_faces.pop();
+    assert_eq!(
+        cap_reaching_sweep::certify_cap_reaching_evidence(store, shell, &missing_plane).unwrap(),
+        None
+    );
 }
 
 /// Exact structural ceiling retained from the cylindrical-host family while

@@ -11,7 +11,7 @@ fn mixed_profile_shell_stage() -> kernel::StageId {
 }
 
 fn cap_reaching_shell_stage() -> kernel::StageId {
-    kernel::StageId::new("ktopo.check.cap-reaching-cylinder-shell-work").unwrap()
+    kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap()
 }
 
 #[derive(Debug, Clone, Copy)]

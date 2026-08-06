@@ -94,6 +94,22 @@ fn cap_reaching_feature_table_is_full_valid_across_frames_and_permutations() {
 }
 
 #[test]
+fn cap_reaching_discovery_claims_have_no_proof_authority() {
+    let mut store = Store::new();
+    let mut transaction = store.transaction().unwrap();
+    let output = transaction
+        .assemble_analytic_shell(
+            &cap_reaching_cylinder_notch_input(Frame::world(), false),
+            TOLERANCE,
+        )
+        .unwrap();
+    super::super::shell_surgery::assert_cap_reaching_evidence_claims_are_rechecked(
+        transaction.store(),
+        output.shell(),
+    );
+}
+
+#[test]
 fn cap_reaching_orientation_and_endpoint_tampers_fail_closed() {
     for case in TERMINAL_CASES {
         let mut store = Store::new();
