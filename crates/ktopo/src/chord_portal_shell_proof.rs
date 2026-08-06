@@ -12,11 +12,10 @@
 //! tag, face ordering, coordinate axis, or numeric sample chooses between
 //! those consequences.
 
-use super::convex_cylindrical_shell_proof::circle_affine_range;
 use super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, Side, certified_nonzero, certified_parallel,
-    certify_sweep_support, mapped_vertex, oriented_dot_sign, peer_face, prepare_cap, prepare_side,
-    ruling_connects, translated_carrier, translated_vertices,
+    certify_sweep_support, circle_affine_range, mapped_vertex, oriented_dot_sign, peer_face,
+    prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
 };
 use super::*;
 use crate::entity::FinId;

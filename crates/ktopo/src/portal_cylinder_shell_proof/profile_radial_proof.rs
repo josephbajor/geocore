@@ -8,7 +8,9 @@
 //! open interior stays wholly on one side of the host cylinder. Tangency,
 //! coincidence, a missing endpoint match, or interval ambiguity fails closed.
 
-use super::super::convex_cylindrical_shell_proof::circle_affine_range;
+use super::super::shell_lemmas::{
+    IntervalBounds2, RadialSide, circle_affine_range, circle_secant_span_side, radial_coordinates,
+};
 use super::*;
 
 pub(super) fn profile_radial_side(
@@ -80,95 +82,6 @@ fn circle_radial_side(cylinder: Cylinder, use_: CapUse, portal: CapUse) -> Optio
         portal_circle,
         use_.tail != use_.head,
     )
-}
-
-pub(in crate::shell_proof) fn circle_secant_span_side(
-    cylinder: Cylinder,
-    circle: kgeom::curve::Circle,
-    range: ParamRange,
-    portal_circle: kgeom::curve::Circle,
-    endpoints_distinct: bool,
-) -> Option<RadialSide> {
-    if !endpoints_distinct
-        || !certified_parallel(circle.frame().z(), cylinder.frame().z())
-        || !certified_parallel(portal_circle.frame().z(), cylinder.frame().z())
-        || portal_circle.radius().to_bits() != cylinder.radius().to_bits()
-    {
-        return None;
-    }
-
-    let portal_center = radial_coordinates(cylinder.frame(), portal_circle.frame().origin());
-    let portal_center_sq = portal_center.x.square() + portal_center.y.square();
-    if portal_center_sq.hi() > LINEAR_RESOLUTION * LINEAR_RESOLUTION {
-        return None;
-    }
-
-    // For transverse center distance d and radii R,r, strict secancy is
-    // |R-r| < d < R+r. Squared outward intervals prove both inequalities.
-    let center = radial_coordinates(cylinder.frame(), circle.frame().origin());
-    let center_sq = center.x.square() + center.y.square();
-    let host_radius = Interval::point(cylinder.radius());
-    let profile_radius = Interval::point(circle.radius());
-    let radius_difference_sq = (host_radius - profile_radius).square();
-    let radius_sum_sq = (host_radius + profile_radius).square();
-    if center_sq.lo() <= radius_difference_sq.hi() || center_sq.hi() >= radius_sum_sq.lo() {
-        return None;
-    }
-
-    let midpoint = range.lo / 2.0 + range.hi / 2.0;
-    if !midpoint.is_finite() || midpoint <= range.lo || midpoint >= range.hi {
-        return None;
-    }
-    let radial = circle_radial_coordinates(cylinder, circle, midpoint)?;
-    let radial_sq = radial.x.square() + radial.y.square();
-    let host_radius_sq = host_radius.square();
-    if radial_sq.hi() < host_radius_sq.lo() {
-        Some(RadialSide::Inside)
-    } else if radial_sq.lo() > host_radius_sq.hi() {
-        Some(RadialSide::Outside)
-    } else {
-        None
-    }
-}
-
-/// Outward radial-coordinate enclosure at one exact `f64` parameter.
-///
-/// `Circle::eval` would round the center-plus-harmonic point before interval
-/// arithmetic sees it, losing the construction error precisely when a radial
-/// comparison cancels near the host boundary. Deterministic `sincos` has a
-/// documented error below one ulp; two adjacent representable values on each
-/// side cover that bound across binade boundaries. All subsequent center
-/// subtraction, frame projection, scaling, and addition remain interval
-/// operations, so the decision never treats a rounded `Point3` as exact.
-fn circle_radial_coordinates(
-    cylinder: Cylinder,
-    circle: kgeom::curve::Circle,
-    parameter: f64,
-) -> Option<IntervalBounds2> {
-    let (sine, cosine) = kcore::math::sincos(parameter);
-    if !sine.is_finite() || !cosine.is_finite() {
-        return None;
-    }
-    let sine = Interval::new(sine.next_down().next_down(), sine.next_up().next_up());
-    let cosine = Interval::new(cosine.next_down().next_down(), cosine.next_up().next_up());
-    let radius = Interval::point(circle.radius());
-    let coordinate = |axis| {
-        let center = coordinate_interval(cylinder.frame(), axis, circle.frame().origin());
-        let x = vector_dot_interval(axis, circle.frame().x());
-        let y = vector_dot_interval(axis, circle.frame().y());
-        let value = center + radius * (x * cosine + y * sine);
-        (value.lo().is_finite() && value.hi().is_finite()).then_some(value)
-    };
-    Some(IntervalBounds2 {
-        x: coordinate(cylinder.frame().x())?,
-        y: coordinate(cylinder.frame().y())?,
-    })
-}
-
-fn vector_dot_interval(first: Vec3, second: Vec3) -> Interval {
-    Interval::point(first.x) * Interval::point(second.x)
-        + Interval::point(first.y) * Interval::point(second.y)
-        + Interval::point(first.z) * Interval::point(second.z)
 }
 
 fn line_radial_side(
@@ -249,13 +162,6 @@ pub(super) fn profile_radial_bounds(
         bounds = Some(union_bounds(bounds, next));
     }
     Ok(bounds)
-}
-
-fn radial_coordinates(frame: &Frame, point: Point3) -> IntervalBounds2 {
-    IntervalBounds2 {
-        x: coordinate_interval(frame, frame.x(), point),
-        y: coordinate_interval(frame, frame.y(), point),
-    }
 }
 
 fn union_bounds(current: Option<IntervalBounds2>, next: IntervalBounds2) -> IntervalBounds2 {

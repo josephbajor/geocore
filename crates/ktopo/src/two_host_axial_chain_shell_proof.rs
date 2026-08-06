@@ -17,11 +17,10 @@
 use super::*;
 use crate::entity::FinId;
 
-use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, Translation, certified_close, certified_nonzero,
-    certified_parallel, mapped_vertex, oriented_dot_sign, peer_face, prepare_cap, ruling_connects,
-    translated_vertices,
+    Cap, CapUse, ProfileCarrier, RadialSide, Translation, certified_close, certified_nonzero,
+    certified_parallel, circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face,
+    prepare_cap, ruling_connects, translated_vertices,
 };
 use crate::semantic_planar_math::{
     IntervalVec3, cross as interval_cross, dot as interval_dot, point as interval_point,

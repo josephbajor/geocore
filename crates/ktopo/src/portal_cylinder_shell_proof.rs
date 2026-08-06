@@ -18,14 +18,14 @@ use kgeom::param::ParamRange;
 use kgeom::vec::Vec2;
 
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, Side, certified_nonzero, certified_parallel,
-    certify_sweep_support, edge_has_vertices, mapped_vertex, oriented_dot_sign, peer_face,
-    prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
+    Cap, CapUse, IntervalBounds2, ProfileCarrier, RadialSide, Side, certified_nonzero,
+    certified_parallel, certify_sweep_support, coordinate_interval, edge_has_vertices,
+    mapped_vertex, oriented_dot_sign, peer_face, prepare_cap, prepare_side, ruling_connects,
+    translated_carrier, translated_vertices,
 };
 
 #[path = "portal_cylinder_shell_proof/profile_radial_proof.rs"]
 mod profile_radial_proof;
-pub(super) use profile_radial_proof::circle_secant_span_side;
 use profile_radial_proof::{profile_radial_bounds, profile_radial_side};
 
 /// Cumulative deterministic work for portal-cylinder shell proofs.
@@ -67,21 +67,6 @@ struct OuterBoundary {
     side_traverses_positive_u: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RadialSide {
-    Inside,
-    Outside,
-}
-
-impl RadialSide {
-    const fn orientation_factor(self) -> i8 {
-        match self {
-            Self::Inside => -1,
-            Self::Outside => 1,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct Attachment {
     faces: Vec<FaceId>,
@@ -90,12 +75,6 @@ struct Attachment {
     side: RadialSide,
     radial_bounds: IntervalBounds2,
     axial: Interval,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct IntervalBounds2 {
-    x: Interval,
-    y: Interval,
 }
 
 /// Attempt the representation-independent disjoint portal-surgery theorem.
@@ -924,17 +903,6 @@ fn attachments_separated(first: &Attachment, second: &Attachment) -> bool {
         || second.radial_bounds.x.hi() < first.radial_bounds.x.lo()
         || first.radial_bounds.y.hi() < second.radial_bounds.y.lo()
         || second.radial_bounds.y.hi() < first.radial_bounds.y.lo()
-}
-
-fn coordinate_interval(frame: &Frame, axis: Vec3, point: Point3) -> Interval {
-    let offset = [
-        Interval::point(point.x) - Interval::point(frame.origin().x),
-        Interval::point(point.y) - Interval::point(frame.origin().y),
-        Interval::point(point.z) - Interval::point(frame.origin().z),
-    ];
-    Interval::point(axis.x) * offset[0]
-        + Interval::point(axis.y) * offset[1]
-        + Interval::point(axis.z) * offset[2]
 }
 
 fn certified_point_on_plane(frame: &Frame, point: Point3) -> bool {

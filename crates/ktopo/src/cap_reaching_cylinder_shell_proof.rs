@@ -17,11 +17,11 @@
 use super::*;
 use crate::entity::FinId;
 
-use super::portal_cylinder_shell_proof::{RadialSide, circle_secant_span_side};
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, Side, Translation, certified_close, certified_nonzero,
-    certified_parallel, certify_sweep_support, mapped_vertex, oriented_dot_sign, peer_face,
-    prepare_cap, ruling_connects, translated_carrier, translated_vertices,
+    Cap, CapUse, ProfileCarrier, RadialSide, Side, Translation, certified_close, certified_nonzero,
+    certified_parallel, certify_sweep_support, circle_secant_span_side, mapped_vertex,
+    oriented_dot_sign, peer_face, prepare_cap, ruling_connects, translated_carrier,
+    translated_vertices,
 };
 
 #[cfg(test)]
