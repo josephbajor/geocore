@@ -61,7 +61,7 @@ class SpineFreezeTests(unittest.TestCase):
     SOURCE = """fn certify_shell_impl() {
     if body_kind != BodyKind::Solid {}
     certify_whole_closed_surface();
-    certify_cylindrical_host_shell();
+    certify_shell_surgery();
 }
 fn indeterminate() {}
 """
