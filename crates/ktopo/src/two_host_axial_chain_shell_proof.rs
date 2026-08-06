@@ -18,13 +18,10 @@ use super::*;
 use crate::entity::FinId;
 
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, RadialSide, Translation, certified_close, certified_nonzero,
-    certified_parallel, circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face,
-    prepare_cap, ruling_connects, translated_vertices,
-};
-use crate::semantic_planar_math::{
-    IntervalVec3, cross as interval_cross, dot as interval_dot, point as interval_point,
-    sub as interval_sub,
+    Cap, CapUse, ProfileCarrier, RadialSide, Translation, axis_distance_squared, certified_close,
+    certified_nonzero, certified_parallel, circle_secant_span_side, mapped_vertex,
+    oriented_dot_sign, peer_face, prepare_cap, ruling_connects, translated_vertices,
+    two_host_circle_on_cylinder,
 };
 
 #[path = "two_host_axial_chain_shell_proof/internal_tangent.rs"]
@@ -692,7 +689,7 @@ fn prepare_whole_end(
     let CurveGeom::Circle(circle) = store.get(curve_id)? else {
         return Ok(None);
     };
-    if !circle_on_cylinder(*circle, cylinder)
+    if !two_host_circle_on_cylinder(*circle, cylinder)
         || !certified_parallel(plane.frame().z(), cylinder.frame().z())
     {
         return Ok(None);
@@ -794,7 +791,7 @@ fn prepare_boundary(
         }
         match store.get(curve_id)? {
             CurveGeom::Circle(circle)
-                if circle_on_cylinder(*circle, cylinder)
+                if two_host_circle_on_cylinder(*circle, cylinder)
                     && matches!(store.get(store.get(peer)?.surface)?, SurfaceGeom::Plane(_)) =>
             {
                 if arcs
@@ -1149,19 +1146,6 @@ fn axis_parameter_identity_is_exact(point: Point3, frame: Frame, parameter: f64)
     })
 }
 
-fn circle_on_cylinder(circle: kgeom::curve::Circle, cylinder: Cylinder) -> bool {
-    circle.radius().to_bits() == cylinder.radius().to_bits()
-        && certified_parallel(circle.frame().z(), cylinder.frame().z())
-        && point_on_axis(cylinder.frame(), circle.frame().origin())
-}
-
-fn point_on_axis(frame: &Frame, point: Point3) -> bool {
-    let Some(radial) = axis_distance_squared(point, frame.origin(), frame.z()) else {
-        return false;
-    };
-    radial.hi().is_finite() && radial.hi() <= Interval::point(LINEAR_RESOLUTION).square().lo()
-}
-
 fn strictly_contains_cylinder_support(outer: Cylinder, inner: Cylinder) -> bool {
     if outer.radius() <= inner.radius() || !certified_parallel(outer.frame().z(), inner.frame().z())
     {
@@ -1182,14 +1166,4 @@ fn strictly_contains_cylinder_support(outer: Cylinder, inner: Cylinder) -> bool 
         && clearance.lo().is_finite()
         && clearance.lo() > 0.0
         && radial.hi() < clearance.square().lo()
-}
-
-fn axis_distance_squared(point: Point3, origin: Point3, axis: Vec3) -> Option<Interval> {
-    let displacement = interval_sub(
-        interval_point(point.to_array()),
-        interval_point(origin.to_array()),
-    );
-    let axis: IntervalVec3 = interval_point(axis.to_array());
-    let cross = interval_cross(displacement, axis);
-    interval_dot(cross, cross).checked_div(interval_dot(axis, axis))
 }

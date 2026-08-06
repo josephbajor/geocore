@@ -6,6 +6,11 @@ use kcore::math;
 use kgeom::curve::{Circle, Line};
 use kgeom::param::ParamRange;
 
+use crate::semantic_planar_math::{
+    IntervalVec3, cross as interval_cross, dot as interval_dot, point as interval_point,
+    sub as interval_sub,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RadialSide {
     Inside,
@@ -1012,4 +1017,58 @@ pub(super) fn support_incident_within_resolution(
 ) -> bool {
     let projection = interval_vector_dot(normal, point - origin);
     projection.lo() >= -LINEAR_RESOLUTION && projection.hi() <= LINEAR_RESOLUTION
+}
+
+// These predicates intentionally remain distinct. Cap-reaching intervals an
+// already-rounded model-space offset, while two-host intervals subtraction
+// before a normalized cross-product distance. Their fail-closed rounding
+// frontiers are not interchangeable, so each certifier retains its original
+// arithmetic.
+pub(super) fn cap_reaching_circle_on_cylinder(
+    circle: kgeom::curve::Circle,
+    cylinder: Cylinder,
+) -> bool {
+    circle.radius().to_bits() == cylinder.radius().to_bits()
+        && certified_parallel(circle.frame().z(), cylinder.frame().z())
+        && cap_reaching_point_on_axis(cylinder.frame(), circle.frame().origin())
+}
+
+fn cap_reaching_point_on_axis(frame: &Frame, point: Point3) -> bool {
+    let offset = point - frame.origin();
+    let radial = [frame.x(), frame.y()]
+        .into_iter()
+        .map(|axis| {
+            (Interval::point(axis.x) * Interval::point(offset.x)
+                + Interval::point(axis.y) * Interval::point(offset.y)
+                + Interval::point(axis.z) * Interval::point(offset.z))
+            .square()
+        })
+        .fold(Interval::point(0.0), |sum, value| sum + value);
+    radial.hi().is_finite() && radial.hi() <= Interval::point(LINEAR_RESOLUTION).square().lo()
+}
+
+pub(super) fn two_host_circle_on_cylinder(
+    circle: kgeom::curve::Circle,
+    cylinder: Cylinder,
+) -> bool {
+    circle.radius().to_bits() == cylinder.radius().to_bits()
+        && certified_parallel(circle.frame().z(), cylinder.frame().z())
+        && two_host_point_on_axis(cylinder.frame(), circle.frame().origin())
+}
+
+fn two_host_point_on_axis(frame: &Frame, point: Point3) -> bool {
+    let Some(radial) = axis_distance_squared(point, frame.origin(), frame.z()) else {
+        return false;
+    };
+    radial.hi().is_finite() && radial.hi() <= Interval::point(LINEAR_RESOLUTION).square().lo()
+}
+
+pub(super) fn axis_distance_squared(point: Point3, origin: Point3, axis: Vec3) -> Option<Interval> {
+    let displacement = interval_sub(
+        interval_point(point.to_array()),
+        interval_point(origin.to_array()),
+    );
+    let axis: IntervalVec3 = interval_point(axis.to_array());
+    let cross = interval_cross(displacement, axis);
+    interval_dot(cross, cross).checked_div(interval_dot(axis, axis))
 }

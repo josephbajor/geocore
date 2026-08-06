@@ -18,10 +18,10 @@ use super::*;
 use crate::entity::FinId;
 
 use super::shell_lemmas::{
-    Cap, CapUse, ProfileCarrier, RadialSide, Side, Translation, certified_close, certified_nonzero,
-    certified_parallel, certify_sweep_support, circle_secant_span_side, mapped_vertex,
-    oriented_dot_sign, peer_face, prepare_cap, ruling_connects, translated_carrier,
-    translated_vertices,
+    Cap, CapUse, ProfileCarrier, RadialSide, Side, Translation, cap_reaching_circle_on_cylinder,
+    certified_close, certified_nonzero, certified_parallel, certify_sweep_support,
+    circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face, prepare_cap,
+    ruling_connects, translated_carrier, translated_vertices,
 };
 
 #[cfg(test)]
@@ -350,7 +350,7 @@ fn prepare_whole_cap(
     let CurveGeom::Circle(circle) = store.get(curve_id)? else {
         return Ok(None);
     };
-    if !circle_on_cylinder(*circle, cylinder) {
+    if !cap_reaching_circle_on_cylinder(*circle, cylinder) {
         return Ok(None);
     }
     let (Some(host_orientation), Some(cap_orientation)) = (
@@ -407,7 +407,7 @@ fn prepare_host_boundary(
         }
         match store.get(curve_id)? {
             CurveGeom::Circle(circle)
-                if circle_on_cylinder(*circle, cylinder)
+                if cap_reaching_circle_on_cylinder(*circle, cylinder)
                     && matches!(store.get(store.get(peer)?.surface)?, SurfaceGeom::Plane(_)) =>
             {
                 if arcs
@@ -786,27 +786,7 @@ fn peer_face_from_fin(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
 }
 
 fn circle_use_on_cylinder(use_: CapUse, cylinder: Cylinder) -> bool {
-    matches!(use_.carrier, ProfileCarrier::Circle(circle) if circle_on_cylinder(circle, cylinder))
-}
-
-fn circle_on_cylinder(circle: kgeom::curve::Circle, cylinder: Cylinder) -> bool {
-    circle.radius().to_bits() == cylinder.radius().to_bits()
-        && certified_parallel(circle.frame().z(), cylinder.frame().z())
-        && point_on_axis(cylinder.frame(), circle.frame().origin())
-}
-
-fn point_on_axis(frame: &Frame, point: Point3) -> bool {
-    let offset = point - frame.origin();
-    let radial = [frame.x(), frame.y()]
-        .into_iter()
-        .map(|axis| {
-            (Interval::point(axis.x) * Interval::point(offset.x)
-                + Interval::point(axis.y) * Interval::point(offset.y)
-                + Interval::point(axis.z) * Interval::point(offset.z))
-            .square()
-        })
-        .fold(Interval::point(0.0), |sum, value| sum + value);
-    radial.hi().is_finite() && radial.hi() <= Interval::point(LINEAR_RESOLUTION).square().lo()
+    matches!(use_.carrier, ProfileCarrier::Circle(circle) if cap_reaching_circle_on_cylinder(circle, cylinder))
 }
 
 fn axial_coordinate(frame: &Frame, point: Point3) -> Interval {
