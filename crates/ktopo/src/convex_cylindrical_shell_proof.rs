@@ -15,6 +15,11 @@
 //! boundary. Unsupported charts, curves, arithmetic, or constraint systems
 //! fail closed.
 
+use super::shell_lemmas::{
+    affine_value, circle_affine_range, dot_interval, finite_interval, finite_point, harmonic_range,
+    interval_abs_upper, peer_face_from_fin_unchecked, union,
+};
+use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
 use crate::entity::{FaceDomain, FinId};
 use kcore::math;
@@ -31,13 +36,11 @@ const DEFAULT_CONVEX_CYLINDRICAL_SHELL_WORK: u64 = 1_048_576;
 const FLOATING_PROOF_GUARD: f64 = 16_384.0 * f64::EPSILON;
 
 pub(super) fn convex_cylindrical_shell_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         CONVEX_CYLINDRICAL_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_CONVEX_CYLINDRICAL_SHELL_WORK,
-    )])
-    .expect("built-in convex cylindrical shell proof budget is valid")
+        "built-in convex cylindrical shell proof budget is valid",
+    )
 }
 
 #[derive(Debug)]
@@ -93,7 +96,12 @@ pub(super) fn certify_convex_cylindrical_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, planar_faces.len(), cylinder_faces.len())?
+        let Some(work) = convex_cylindrical_proof_work(
+            store,
+            shell_id,
+            planar_faces.len(),
+            cylinder_faces.len(),
+        )?
         else {
             return Ok(Some(indeterminate()));
         };
@@ -136,7 +144,7 @@ pub(super) fn certify_convex_cylindrical_shell(
     }))
 }
 
-fn proof_work(
+fn convex_cylindrical_proof_work(
     store: &Store,
     shell_id: ShellId,
     plane_count: usize,
@@ -647,7 +655,7 @@ fn prepare_planar_supports(
     let mut peer_faces = Vec::new();
     for patch in patches {
         for &fin_id in &patch.boundary_fins {
-            let Some(peer) = peer_face(store, fin_id)? else {
+            let Some(peer) = peer_face_from_fin_unchecked(store, fin_id)? else {
                 return Ok(None);
             };
             if peer == patch.face
@@ -707,22 +715,6 @@ fn prepare_planar_supports(
         });
     }
     Ok((!supports.is_empty()).then_some(supports))
-}
-
-fn peer_face(store: &Store, fin_id: FinId) -> Result<Option<FaceId>> {
-    let fin = store.get(fin_id)?;
-    let edge = store.get(fin.edge)?;
-    let [first, second] = edge.fins.as_slice() else {
-        return Ok(None);
-    };
-    let peer = if *first == fin_id {
-        *second
-    } else if *second == fin_id {
-        *first
-    } else {
-        return Ok(None);
-    };
-    Ok(Some(store.get(store.get(peer)?.parent)?.face))
 }
 
 fn all_boundary_traces_satisfy_constraints(
@@ -905,135 +897,6 @@ fn cylinder_patches_affine_range(
     Some(range)
 }
 
-pub(super) fn circle_affine_range(
-    circle: kgeom::curve::Circle,
-    lo: f64,
-    hi: f64,
-    normal: Vec3,
-    plane_origin: Point3,
-) -> Option<Interval> {
-    if !lo.is_finite() || !hi.is_finite() || lo >= hi {
-        return None;
-    }
-    let frame = circle.frame();
-    let constant = affine_value(normal, frame.origin(), plane_origin)?;
-    let x = dot_interval(normal, frame.x())? * Interval::point(circle.radius());
-    let y = dot_interval(normal, frame.y())? * Interval::point(circle.radius());
-    finite_interval(constant + harmonic_range(x, y, lo, hi)?)
-}
-
-/// Outward range of `a*cos(u) + b*sin(u)` over one finite interval.
-///
-/// Ranging sine and cosine independently loses their unit-circle correlation
-/// and can place a clipped cylinder patch outside a sloped support that owns
-/// both of its exact endpoints.  Here endpoint values are evaluated together.
-/// The only possible interior extrema are the coefficient direction and its
-/// antipode.  An outward phase enclosure includes coefficient-dot rounding;
-/// an uncertain direction therefore inserts the full amplitude and fails
-/// loose rather than omitting an extremum.
-fn harmonic_range(a: Interval, b: Interval, lo: f64, hi: f64) -> Option<Interval> {
-    if finite_interval(a).is_none()
-        || finite_interval(b).is_none()
-        || !lo.is_finite()
-        || !hi.is_finite()
-        || lo > hi
-    {
-        return None;
-    }
-    let amplitude = (Interval::point(interval_abs_upper(a)).square()
-        + Interval::point(interval_abs_upper(b)).square())
-    .sqrt()?
-    .hi();
-    if !amplitude.is_finite() {
-        return None;
-    }
-    if amplitude == 0.0 {
-        return Some(Interval::point(0.0));
-    }
-    let first = harmonic_value(a, b, lo)?;
-    let second = harmonic_value(a, b, hi)?;
-    let mut range = union(first, second);
-    let Some(phase) = harmonic_maximum_phase(a, b) else {
-        return Some(Interval::new(-amplitude, amplitude));
-    };
-    if periodic_phase_intersects(lo, hi, phase)? {
-        range = Interval::new(range.lo(), range.hi().max(amplitude));
-    }
-    let minimum_phase = phase
-        + Interval::new(
-            core::f64::consts::PI.next_down(),
-            core::f64::consts::PI.next_up(),
-        );
-    if periodic_phase_intersects(lo, hi, minimum_phase)? {
-        range = Interval::new(range.lo().min(-amplitude), range.hi());
-    }
-    finite_interval(range)
-}
-
-fn harmonic_value(a: Interval, b: Interval, parameter: f64) -> Option<Interval> {
-    let (sine, cosine) = math::sincos(parameter);
-    if !sine.is_finite() || !cosine.is_finite() {
-        return None;
-    }
-    let sine = Interval::new(sine.next_down(), sine.next_up());
-    let cosine = Interval::new(cosine.next_down(), cosine.next_up());
-    finite_interval(a * cosine + b * sine)
-}
-
-/// Enclose the phase of every coefficient vector represented by `a × b`.
-fn harmonic_maximum_phase(a: Interval, b: Interval) -> Option<Interval> {
-    let a_center = 0.5 * a.lo() + 0.5 * a.hi();
-    let b_center = 0.5 * b.lo() + 0.5 * b.hi();
-    if !a_center.is_finite()
-        || !b_center.is_finite()
-        || !a.contains(a_center)
-        || !b.contains(b_center)
-    {
-        return None;
-    }
-    let a_error = interval_abs_upper(a - Interval::point(a_center));
-    let b_error = interval_abs_upper(b - Interval::point(b_center));
-    let error = (Interval::point(a_error).square() + Interval::point(b_error).square())
-        .sqrt()?
-        .hi();
-    let center_norm =
-        (Interval::point(a_center).square() + Interval::point(b_center).square()).sqrt()?;
-    let parallel_lower = (center_norm.lo() - error).next_down();
-    if !error.is_finite() || !parallel_lower.is_finite() || parallel_lower <= 0.0 {
-        return None;
-    }
-    let phase = math::atan2(b_center, a_center);
-    let uncertainty = math::atan2(error, parallel_lower).next_up().next_up();
-    if !phase.is_finite() || !uncertainty.is_finite() {
-        return None;
-    }
-    Some(Interval::new(
-        (phase - uncertainty).next_down().next_down(),
-        (phase + uncertainty).next_up().next_up(),
-    ))
-}
-
-fn periodic_phase_intersects(lo: f64, hi: f64, phase: Interval) -> Option<bool> {
-    if !lo.is_finite()
-        || !hi.is_finite()
-        || lo > hi
-        || !phase.lo().is_finite()
-        || !phase.hi().is_finite()
-    {
-        return None;
-    }
-    let period = Interval::new(
-        core::f64::consts::TAU.next_down(),
-        core::f64::consts::TAU.next_up(),
-    );
-    let turns = (Interval::new(lo, hi) - phase).checked_div(period)?;
-    const EXACT_INTEGER_LIMIT: f64 = (1_u64 << 52) as f64;
-    if turns.lo().abs() > EXACT_INTEGER_LIMIT || turns.hi().abs() > EXACT_INTEGER_LIMIT {
-        return None;
-    }
-    Some(turns.lo().ceil() <= turns.hi().floor())
-}
-
 fn circle_matches_cylinder(circle: kgeom::curve::Circle, cylinder: Cylinder) -> bool {
     if circle.radius().to_bits() != cylinder.radius().to_bits() {
         return false;
@@ -1089,49 +952,11 @@ fn point_scale(point: Point3) -> f64 {
     point.x.abs().max(point.y.abs()).max(point.z.abs())
 }
 
-fn interval_abs_upper(interval: Interval) -> f64 {
-    interval.lo().abs().max(interval.hi().abs())
-}
-
 fn radial_squared_interval(cylinder: Cylinder, point: Point3) -> Option<Interval> {
     let offset = point - cylinder.frame().origin();
     let x = dot_interval(cylinder.frame().x(), offset)?;
     let y = dot_interval(cylinder.frame().y(), offset)?;
     finite_interval(x.square() + y.square())
-}
-
-fn affine_value(normal: Vec3, point: Point3, origin: Point3) -> Option<Interval> {
-    if !finite_vec(normal) || !finite_point(point) || !finite_point(origin) {
-        return None;
-    }
-    dot_interval(normal, point - origin)
-}
-
-fn dot_interval(left: Vec3, right: Vec3) -> Option<Interval> {
-    if !finite_vec(left) || !finite_vec(right) {
-        return None;
-    }
-    finite_interval(
-        Interval::point(left.x) * Interval::point(right.x)
-            + Interval::point(left.y) * Interval::point(right.y)
-            + Interval::point(left.z) * Interval::point(right.z),
-    )
-}
-
-fn union(first: Interval, second: Interval) -> Interval {
-    Interval::new(first.lo().min(second.lo()), first.hi().max(second.hi()))
-}
-
-fn finite_interval(interval: Interval) -> Option<Interval> {
-    (interval.lo().is_finite() && interval.hi().is_finite()).then_some(interval)
-}
-
-fn finite_point(point: Point3) -> bool {
-    point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
-}
-
-fn finite_vec(vector: Vec3) -> bool {
-    vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite()
 }
 
 fn same_point_bits(first: Point3, second: Point3) -> bool {

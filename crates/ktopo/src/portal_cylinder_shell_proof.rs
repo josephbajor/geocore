@@ -11,21 +11,23 @@
 //! provenance, face ordering, portal count, or Boolean-operation tag enters
 //! the proof.
 
+use super::shell_lemmas::{indeterminate, proof_work_budget};
+use super::shell_lemmas::{proof_work as quadratic_proof_work, shell_proof_size};
 use super::*;
 use crate::entity::FinId;
 use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::Vec2;
 
-use super::mixed_profile_prism_proof::{
-    Cap, CapUse, ProfileCarrier, Side, certified_nonzero, certified_parallel,
-    certify_sweep_support, edge_has_vertices, mapped_vertex, oriented_dot_sign, peer_face,
-    prepare_cap, prepare_side, ruling_connects, translated_carrier, translated_vertices,
+use super::shell_lemmas::{
+    Cap, CapUse, IntervalBounds2, ProfileCarrier, RadialSide, Side, certified_nonzero,
+    certified_parallel, certify_sweep_support, coordinate_interval, edge_has_vertices,
+    mapped_vertex, oriented_dot_sign, peer_face, prepare_cap, prepare_side, ruling_connects,
+    translated_carrier, translated_vertices,
 };
 
 #[path = "portal_cylinder_shell_proof/profile_radial_proof.rs"]
 mod profile_radial_proof;
-pub(super) use profile_radial_proof::circle_secant_span_side;
 use profile_radial_proof::{profile_radial_bounds, profile_radial_side};
 
 /// Cumulative deterministic work for portal-cylinder shell proofs.
@@ -42,13 +44,11 @@ pub(crate) const PORTAL_CYLINDER_SHELL_WORK: StageId =
 const DEFAULT_PORTAL_CYLINDER_SHELL_WORK: u64 = 16_777_216;
 
 pub(super) fn portal_cylinder_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         PORTAL_CYLINDER_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_PORTAL_CYLINDER_SHELL_WORK,
-    )])
-    .expect("built-in portal-cylinder proof budget is valid")
+        "built-in portal-cylinder proof budget is valid",
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -67,21 +67,6 @@ struct OuterBoundary {
     side_traverses_positive_u: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RadialSide {
-    Inside,
-    Outside,
-}
-
-impl RadialSide {
-    const fn orientation_factor(self) -> i8 {
-        match self {
-            Self::Inside => -1,
-            Self::Outside => 1,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct Attachment {
     faces: Vec<FaceId>,
@@ -90,12 +75,6 @@ struct Attachment {
     side: RadialSide,
     radial_bounds: IntervalBounds2,
     axial: Interval,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct IntervalBounds2 {
-    x: Interval,
-    y: Interval,
 }
 
 /// Attempt the representation-independent disjoint portal-surgery theorem.
@@ -132,7 +111,8 @@ pub(super) fn certify_portal_cylinder_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = proof_work(store, shell_id, hosts.len(), planar.len())? else {
+        let Some(work) = portal_cylinder_proof_work(store, shell_id, hosts.len(), planar.len())?
+        else {
             return Ok(Some(indeterminate()));
         };
         scope
@@ -288,56 +268,19 @@ fn certify_host_candidate(
     }))
 }
 
-fn proof_work(
+fn portal_cylinder_proof_work(
     store: &Store,
     shell_id: ShellId,
     host_count: usize,
     plane_count: usize,
 ) -> Result<Option<u64>> {
-    let shell = store.get(shell_id)?;
-    let mut loops = 0_u64;
-    let mut fins = 0_u64;
-    let mut edges = Vec::new();
-    let mut vertices = Vec::new();
-    for &face_id in &shell.faces {
-        for &loop_id in &store.get(face_id)?.loops {
-            let Some(next_loops) = loops.checked_add(1) else {
-                return Ok(None);
-            };
-            loops = next_loops;
-            for &fin_id in &store.get(loop_id)?.fins {
-                let Some(next_fins) = fins.checked_add(1) else {
-                    return Ok(None);
-                };
-                fins = next_fins;
-                let edge_id = store.get(fin_id)?.edge;
-                if !edges.contains(&edge_id) {
-                    edges.push(edge_id);
-                    for vertex in store.get(edge_id)?.vertices.into_iter().flatten() {
-                        if !vertices.contains(&vertex) {
-                            vertices.push(vertex);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let (Some(faces), Some(edges), Some(vertices), Some(hosts), Some(planes)) = (
-        u64::try_from(shell.faces.len()).ok(),
-        u64::try_from(edges.len()).ok(),
-        u64::try_from(vertices.len()).ok(),
+    let Some(size) = shell_proof_size(store, shell_id)? else {
+        return Ok(None);
+    };
+    let (Some(hosts), Some(planes)) = (
         u64::try_from(host_count).ok(),
         u64::try_from(plane_count).ok(),
     ) else {
-        return Ok(None);
-    };
-    let Some(size) = 1_u64
-        .checked_add(faces)
-        .and_then(|value| value.checked_add(loops))
-        .and_then(|value| value.checked_add(fins))
-        .and_then(|value| value.checked_add(edges))
-        .and_then(|value| value.checked_add(vertices))
-    else {
         return Ok(None);
     };
     let Some(pairs) = planes
@@ -346,13 +289,15 @@ fn proof_work(
     else {
         return Ok(None);
     };
-    Ok(size
-        .checked_mul(size)
-        .and_then(|quadratic| quadratic.checked_add(size.checked_mul(64)?))
-        .and_then(|per_pair| per_pair.checked_mul(pairs.checked_add(1)?))
+    let Some(pair_groups) = pairs.checked_add(1) else {
+        return Ok(None);
+    };
+    Ok(quadratic_proof_work(size, 64, 0, pair_groups)
         .and_then(|per_host| per_host.checked_mul(hosts)))
 }
 
+#[cfg(test)]
+use portal_cylinder_proof_work as proof_work;
 fn single_fin_peer_face(store: &Store, loop_id: LoopId) -> Result<Option<FaceId>> {
     let loop_ = store.get(loop_id)?;
     let [fin_id] = loop_.fins.as_slice() else {
@@ -924,17 +869,6 @@ fn attachments_separated(first: &Attachment, second: &Attachment) -> bool {
         || second.radial_bounds.x.hi() < first.radial_bounds.x.lo()
         || first.radial_bounds.y.hi() < second.radial_bounds.y.lo()
         || second.radial_bounds.y.hi() < first.radial_bounds.y.lo()
-}
-
-fn coordinate_interval(frame: &Frame, axis: Vec3, point: Point3) -> Interval {
-    let offset = [
-        Interval::point(point.x) - Interval::point(frame.origin().x),
-        Interval::point(point.y) - Interval::point(frame.origin().y),
-        Interval::point(point.z) - Interval::point(frame.origin().z),
-    ];
-    Interval::point(axis.x) * offset[0]
-        + Interval::point(axis.y) * offset[1]
-        + Interval::point(axis.z) * offset[2]
 }
 
 fn certified_point_on_plane(frame: &Frame, point: Point3) -> bool {

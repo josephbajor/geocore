@@ -8,6 +8,7 @@
 //! the three-band/two-shoulder chain without relying on face storage order,
 //! cylinder order, or authored axis direction.
 
+use super::super::shell_lemmas::two_host_circle_on_cylinder;
 use super::*;
 use crate::analytic_tangency::{
     circles_are_exactly_internal_tangent, point_is_within_circle_endpoint_envelope,
@@ -612,7 +613,7 @@ fn prepare_tangent_boundary(
     let SurfaceGeom::Plane(cap_plane) = store.get(cap_face.surface)? else {
         return Ok(None);
     };
-    if !circle_on_cylinder(*circle, cylinder)
+    if !two_host_circle_on_cylinder(*circle, cylinder)
         || !certified_parallel(cap_plane.frame().z(), cylinder.frame().z())
         || !point_is_within_plane_envelope(
             circle.frame().origin(),

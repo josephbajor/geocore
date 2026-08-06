@@ -8,9 +8,12 @@
 //! complete finite-window family and every other member is certified outside
 //! both Cylinder face interiors.
 
-use super::mixed_profile_prism_proof::{
-    Cap, ProfileCarrier, certified_parallel, oriented_dot_sign, peer_face, prepare_cap,
+use super::shell_lemmas::proof_work_budget;
+use super::shell_lemmas::{
+    Cap, ProfileCarrier, certified_parallel, indeterminate, oriented_dot_sign, peer_face,
+    prepare_cap,
 };
+use super::shell_lemmas::{proof_work as quadratic_proof_work, shell_proof_size};
 use super::{ShellCertification, ShellEmbedding, ShellOrientation};
 use crate::entity::{EdgeId, FaceId, FinId, LoopId, ParamMap1d, Sense, ShellId, VertexId};
 use crate::geom::SurfaceGeom;
@@ -22,9 +25,7 @@ use crate::loop_proof::{certify_periodic_aabb2_separation, certify_periodic_rang
 use crate::store::Store;
 use kcore::error::Result;
 use kcore::interval::Interval;
-use kcore::operation::{
-    AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
-};
+use kcore::operation::{AccountingMode, BudgetPlan, OperationScope, ResourceKind, StageId};
 use kcore::predicates::{Orientation as PredicateOrientation, affine_dot3};
 use kcore::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION};
 use kgeom::aabb::Aabb2;
@@ -61,13 +62,11 @@ pub(crate) const BOUNDED_SKEW_LOBE_SHELL_WORK: StageId =
 const DEFAULT_BOUNDED_SKEW_LOBE_SHELL_WORK: u64 = 4_096;
 
 pub(crate) fn bounded_skew_lobe_shell_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         BOUNDED_SKEW_LOBE_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_BOUNDED_SKEW_LOBE_SHELL_WORK,
-    )])
-    .expect("built-in bounded-skew lobe proof budget is valid")
+        "built-in bounded-skew lobe proof budget is valid",
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +114,7 @@ pub(super) fn certify_bounded_skew_lobe_shell(
         return Ok(None);
     };
     if let Some(scope) = scope {
-        let Some(work) = proof_work(store, shell_id)? else {
+        let Some(work) = bounded_skew_lobe_proof_work(store, shell_id)? else {
             return Ok(Some(indeterminate()));
         };
         charge_proof_work(scope, work)?;
@@ -1354,57 +1353,15 @@ fn sense_factor(sense: Sense) -> f64 {
 /// `N² + 16N`, with `N = 1 + F + L + U + E + V`, owns every bounded scan
 /// and role/adjacency comparison in this theorem. The already-paid family
 /// and persistent-span work is never recharged here.
-fn proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
-    let shell = store.get(shell_id)?;
-    let mut loops = 0_u64;
-    let mut fins = 0_u64;
-    let mut edges = Vec::new();
-    let mut vertices = Vec::new();
-    for &face_id in &shell.faces {
-        for &loop_id in &store.get(face_id)?.loops {
-            loops = match loops.checked_add(1) {
-                Some(value) => value,
-                None => return Ok(None),
-            };
-            for &fin_id in &store.get(loop_id)?.fins {
-                fins = match fins.checked_add(1) {
-                    Some(value) => value,
-                    None => return Ok(None),
-                };
-                let edge_id = store.get(fin_id)?.edge;
-                if !edges.contains(&edge_id) {
-                    edges.push(edge_id);
-                    for vertex in store.get(edge_id)?.vertices.into_iter().flatten() {
-                        if !vertices.contains(&vertex) {
-                            vertices.push(vertex);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let (Some(faces), Some(edges), Some(vertices)) = (
-        u64::try_from(shell.faces.len()).ok(),
-        u64::try_from(edges.len()).ok(),
-        u64::try_from(vertices.len()).ok(),
-    ) else {
+fn bounded_skew_lobe_proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
+    let Some(size) = shell_proof_size(store, shell_id)? else {
         return Ok(None);
     };
-    let Some(size) = 1_u64
-        .checked_add(faces)
-        .and_then(|value| value.checked_add(loops))
-        .and_then(|value| value.checked_add(fins))
-        .and_then(|value| value.checked_add(edges))
-        .and_then(|value| value.checked_add(vertices))
-    else {
-        return Ok(None);
-    };
-    Ok(proof_work_for_size(size))
+    Ok(quadratic_proof_work(size, 16, 0, 1))
 }
-
+#[cfg(test)]
 fn proof_work_for_size(size: u64) -> Option<u64> {
-    size.checked_mul(size)
-        .and_then(|value| value.checked_add(size.checked_mul(16)?))
+    quadratic_proof_work(size, 16, 0, 1)
 }
 
 fn charge_proof_work(scope: &mut OperationScope<'_, '_>, work: u64) -> Result<()> {
@@ -1494,13 +1451,6 @@ fn periodic_member_box_outside_face(member: Aabb2, face: Aabb2) -> bool {
 
 fn finite_uv(value: Vec2) -> bool {
     value.x.is_finite() && value.y.is_finite()
-}
-
-fn indeterminate() -> ShellCertification {
-    ShellCertification {
-        embedding: ShellEmbedding::Indeterminate,
-        orientation: ShellOrientation::Indeterminate,
-    }
 }
 
 #[cfg(test)]

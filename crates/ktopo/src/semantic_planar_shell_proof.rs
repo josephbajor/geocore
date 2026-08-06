@@ -23,13 +23,14 @@ pub(crate) use crate::semantic_planar_region_proof::SEMANTIC_PLANAR_REGION_WORK;
 pub(crate) use crate::semantic_planar_region_proof::{
     SemanticPlanarRegionCertification, certify_semantic_planar_region_in_scope,
 };
+use crate::shell_proof::shell_lemmas::proof_work_budget;
 use crate::shell_proof::{ShellCertification, ShellEmbedding, ShellOrientation};
 use crate::store::Store;
 use kcore::error::Result;
 use kcore::interval::Interval;
-use kcore::operation::{
-    AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
-};
+#[cfg(test)]
+use kcore::operation::LimitSpec;
+use kcore::operation::{AccountingMode, BudgetPlan, OperationScope, ResourceKind, StageId};
 use kcore::plane_triple::enclose_plane_triple_intersection;
 use kcore::predicates::{
     Orientation, OrientedPlanePoints, oriented_plane_triple_intersection_side,
@@ -45,13 +46,11 @@ const DEFAULT_SEMANTIC_PLANAR_SHELL_WORK: u64 = 1_048_576;
 
 /// Version-1 deterministic budget for semantic planar shell preparation.
 pub(crate) fn semantic_planar_shell_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         SEMANTIC_PLANAR_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_SEMANTIC_PLANAR_SHELL_WORK,
-    )])
-    .expect("built-in semantic planar shell proof budget is valid")
+        "built-in semantic planar shell proof budget is valid",
+    )
     .overlaid(&crate::semantic_planar_region_proof::semantic_planar_region_proof_budget())
 }
 

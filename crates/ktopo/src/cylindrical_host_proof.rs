@@ -8,6 +8,11 @@
 //! roles and resolution-bounded support incidence then derive through-hole,
 //! outward-boss, and inward-pocket winding without operation/layout tags.
 
+use super::shell_lemmas::{
+    CylinderRingBoundary, CylinderRingBoundaryMode, cylinder_ring_boundary, interval_vector_dot,
+    support_incident_within_resolution,
+};
+use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
 use kcore::error::Error;
 
@@ -22,23 +27,11 @@ pub(crate) const CYLINDRICAL_HOST_SHELL_WORK: StageId =
 const DEFAULT_CYLINDRICAL_HOST_SHELL_WORK: u64 = 1_048_576;
 
 pub(super) fn cylindrical_host_proof_budget() -> BudgetPlan {
-    BudgetPlan::new([LimitSpec::new(
+    proof_work_budget(
         CYLINDRICAL_HOST_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
         DEFAULT_CYLINDRICAL_HOST_SHELL_WORK,
-    )])
-    .expect("built-in cylindrical host shell proof budget is valid")
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RingBoundary {
-    planar_face: FaceId,
-    planar_loop: LoopId,
-    edge: EdgeId,
-    center: Point3,
-    planar_axis_alignment: PredicateOrientation,
-    side_traverses_positive_u: bool,
+        "built-in cylindrical host shell proof budget is valid",
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,8 +44,8 @@ enum EndpointRole {
 struct BandEvidence {
     side_face: FaceId,
     cylinder: Cylinder,
-    low: RingBoundary,
-    high: RingBoundary,
+    low: CylinderRingBoundary,
+    high: CylinderRingBoundary,
     roles: [Option<EndpointRole>; 2],
 }
 
@@ -92,7 +85,7 @@ pub(super) fn certify_cylindrical_host_shell(
     if classes.cylinders.is_empty() {
         return Ok(None);
     }
-    let Some(proof_work) = proof_work(&classes) else {
+    let Some(proof_work) = cylindrical_host_proof_work(&classes) else {
         return Ok(Some(indeterminate()));
     };
     if let Some(scope) = scope.as_deref_mut() {
@@ -195,7 +188,7 @@ fn classify_shell(
 /// Input-size-exact conservative bound for the quadratic scans below:
 /// loop/layout and vertex deduplication, face/vertex support decisions,
 /// whole-fin ownership scans, endpoint support decisions, and band pairs.
-fn proof_work(classes: &ShellClasses) -> Option<u64> {
+fn cylindrical_host_proof_work(classes: &ShellClasses) -> Option<u64> {
     let face_count = classes
         .cylinders
         .len()
@@ -237,29 +230,41 @@ fn prepare_bands(
         let [first_loop, second_loop] = face.loops.as_slice() else {
             return Ok(None);
         };
-        let Some(first) =
-            host_cylinder_ring_boundary(store, shell_id, side_face, cylinder, *first_loop)?
+        let Some(first) = cylinder_ring_boundary(
+            store,
+            shell_id,
+            side_face,
+            cylinder,
+            *first_loop,
+            CylinderRingBoundaryMode::CylindricalHost,
+        )?
         else {
             return Ok(None);
         };
-        let Some(second) =
-            host_cylinder_ring_boundary(store, shell_id, side_face, cylinder, *second_loop)?
+        let Some(second) = cylinder_ring_boundary(
+            store,
+            shell_id,
+            side_face,
+            cylinder,
+            *second_loop,
+            CylinderRingBoundaryMode::CylindricalHost,
+        )?
         else {
             return Ok(None);
         };
         if first.edge == second.edge
-            || first.planar_face == second.planar_face
+            || first.face == second.face
             || [first.edge, second.edge]
                 .iter()
                 .any(|edge| used_edges.contains(edge))
-            || [first.planar_loop, second.planar_loop]
+            || [first.loop_id, second.loop_id]
                 .iter()
                 .any(|loop_id| used_planar_loops.contains(loop_id))
         {
             return Ok(None);
         }
         used_edges.extend([first.edge, second.edge]);
-        used_planar_loops.extend([first.planar_loop, second.planar_loop]);
+        used_planar_loops.extend([first.loop_id, second.loop_id]);
         let (low, high) = match exact_affine_sign(cylinder.frame().z(), second.center, first.center)
         {
             Some(PredicateOrientation::Positive) => (first, second),
@@ -342,8 +347,8 @@ fn boundary_references(face: FaceId, bands: &[BandEvidence]) -> Vec<(usize, usiz
     let mut references = Vec::new();
     for (band_index, band) in bands.iter().enumerate() {
         for (endpoint, boundary) in [band.low, band.high].into_iter().enumerate() {
-            if boundary.planar_face == face {
-                references.push((band_index, endpoint, boundary.planar_loop));
+            if boundary.face == face {
+                references.push((band_index, endpoint, boundary.loop_id));
             }
         }
     }
@@ -393,13 +398,11 @@ fn certify_band_in_host(
 
     match [low_role, high_role] {
         [EndpointRole::Port, EndpointRole::Port] => {
-            let low_face = store.get(band.low.planar_face)?;
-            let high_face = store.get(band.high.planar_face)?;
+            let low_face = store.get(band.low.face)?;
+            let high_face = store.get(band.high.face)?;
             invalid |= side_face.sense != Sense::Reversed
-                || oriented_axis_alignment(band.low.planar_axis_alignment, low_face.sense)
-                    != Some(-1)
-                || oriented_axis_alignment(band.high.planar_axis_alignment, high_face.sense)
-                    != Some(1);
+                || oriented_axis_alignment(band.low.axis_alignment, low_face.sense) != Some(-1)
+                || oriented_axis_alignment(band.high.axis_alignment, high_face.sense) != Some(1);
             if !certify_port_to_port_sweep(store, band, host_facets)? {
                 return Ok(None);
             }
@@ -410,15 +413,13 @@ fn certify_band_in_host(
             } else {
                 (band.high, band.low, -1)
             };
-            let port_face = store.get(port.planar_face)?;
-            let cap_face = store.get(cap.planar_face)?;
-            let Some(port_outward) =
-                oriented_axis_alignment(port.planar_axis_alignment, port_face.sense)
+            let port_face = store.get(port.face)?;
+            let cap_face = store.get(cap.face)?;
+            let Some(port_outward) = oriented_axis_alignment(port.axis_alignment, port_face.sense)
             else {
                 return Ok(None);
             };
-            let Some(cap_outward) =
-                oriented_axis_alignment(cap.planar_axis_alignment, cap_face.sense)
+            let Some(cap_outward) = oriented_axis_alignment(cap.axis_alignment, cap_face.sense)
             else {
                 return Ok(None);
             };
@@ -451,11 +452,11 @@ fn certify_band_in_host(
 
 fn endpoint_loop_orientation_invalid(
     store: &Store,
-    boundary: RingBoundary,
+    boundary: CylinderRingBoundary,
     role: EndpointRole,
 ) -> Result<bool> {
-    let face = store.get(boundary.planar_face)?;
-    let orientation = certify_loop_orientation(store, boundary.planar_face, boundary.planar_loop)?;
+    let face = store.get(boundary.face)?;
+    let orientation = certify_loop_orientation(store, boundary.face, boundary.loop_id)?;
     let expected_positive = match role {
         EndpointRole::Port => !face.sense.is_forward(),
         EndpointRole::Cap => face.sense.is_forward(),
@@ -476,8 +477,8 @@ fn certify_port_to_port_sweep(
             return Ok(false);
         };
         let outward = plane.frame().z() * sense_factor(face.sense);
-        if *face_id == band.low.planar_face || *face_id == band.high.planar_face {
-            let (incident, opposite) = if *face_id == band.low.planar_face {
+        if *face_id == band.low.face || *face_id == band.high.face {
+            let (incident, opposite) = if *face_id == band.low.face {
                 (band.low.center, band.high.center)
             } else {
                 (band.high.center, band.low.center)
@@ -501,8 +502,8 @@ fn certify_port_to_port_sweep(
 fn certify_inward_sweep(
     store: &Store,
     band: BandEvidence,
-    port: RingBoundary,
-    cap: RingBoundary,
+    port: CylinderRingBoundary,
+    cap: CylinderRingBoundary,
     host_facets: &HostFacets,
 ) -> Result<bool> {
     for (face_id, _) in host_facets {
@@ -511,7 +512,7 @@ fn certify_inward_sweep(
             return Ok(false);
         };
         let outward = plane.frame().z() * sense_factor(face.sense);
-        if *face_id == port.planar_face {
+        if *face_id == port.face {
             if !support_incident_within_resolution(outward, port.center, plane.frame().origin())
                 || interval_vector_dot(outward, cap.center - plane.frame().origin()).hi()
                     >= -LINEAR_RESOLUTION
@@ -571,17 +572,6 @@ fn certify_circle_strictly_inside_support(
     radial_squared.hi() < signed.square().lo()
 }
 
-fn interval_vector_dot(left: Vec3, right: Vec3) -> Interval {
-    Interval::point(left.x) * Interval::point(right.x)
-        + Interval::point(left.y) * Interval::point(right.y)
-        + Interval::point(left.z) * Interval::point(right.z)
-}
-
-fn support_incident_within_resolution(normal: Vec3, point: Point3, origin: Point3) -> bool {
-    let projection = interval_vector_dot(normal, point - origin);
-    projection.lo() >= -LINEAR_RESOLUTION && projection.hi() <= LINEAR_RESOLUTION
-}
-
 fn axis_is_support_normal(cylinder: Cylinder, normal: Vec3) -> bool {
     let axis = cylinder.frame().z();
     normal == axis
@@ -615,133 +605,6 @@ fn parallel_axial_slabs_are_strictly_separated(first: BandEvidence, second: Band
         == Some(PredicateOrientation::Positive)
         || exact_affine_sign(first.cylinder.frame().z(), first.low.center, second_high)
             == Some(PredicateOrientation::Positive)
-}
-
-fn host_cylinder_ring_boundary(
-    store: &Store,
-    shell_id: ShellId,
-    side_face_id: FaceId,
-    cylinder: Cylinder,
-    side_loop_id: LoopId,
-) -> Result<Option<RingBoundary>> {
-    let side_loop = store.get(side_loop_id)?;
-    let [side_fin_id] = side_loop.fins.as_slice() else {
-        return Ok(None);
-    };
-    if side_loop.face != side_face_id
-        || certify_loop_simplicity(store, side_loop_id)? != LoopSimplicity::Certified
-    {
-        return Ok(None);
-    }
-    let side_fin = store.get(*side_fin_id)?;
-    let edge = store.get(side_fin.edge)?;
-    let [first_fin, second_fin] = edge.fins.as_slice() else {
-        return Ok(None);
-    };
-    if side_fin.parent != side_loop_id
-        || edge.tolerance.is_some()
-        || edge.bounds.is_some()
-        || edge.vertices != [None, None]
-        || !edge.fins.contains(side_fin_id)
-    {
-        return Ok(None);
-    }
-    let planar_fin_id = if first_fin == side_fin_id {
-        *second_fin
-    } else if second_fin == side_fin_id {
-        *first_fin
-    } else {
-        return Ok(None);
-    };
-    let planar_fin = store.get(planar_fin_id)?;
-    if planar_fin.edge != side_fin.edge || planar_fin.sense == side_fin.sense {
-        return Ok(None);
-    }
-    let planar_loop_id = planar_fin.parent;
-    let planar_loop = store.get(planar_loop_id)?;
-    let planar_face_id = planar_loop.face;
-    let planar_face = store.get(planar_face_id)?;
-    if planar_face.shell != shell_id
-        || planar_loop.fins.as_slice() != [planar_fin_id]
-        || !planar_face.loops.contains(&planar_loop_id)
-        || certify_loop_simplicity(store, planar_loop_id)? != LoopSimplicity::Certified
-        || !matches!(store.get(planar_face.surface)?, SurfaceGeom::Plane(_))
-    {
-        return Ok(None);
-    }
-    if certify_whole_fin_incidence(
-        store,
-        side_face_id,
-        side_loop_id,
-        *side_fin_id,
-        LINEAR_RESOLUTION,
-    ) != WholeFinIncidence::Certified
-        || certify_whole_fin_incidence(
-            store,
-            planar_face_id,
-            planar_loop_id,
-            planar_fin_id,
-            LINEAR_RESOLUTION,
-        ) != WholeFinIncidence::Certified
-    {
-        return Ok(None);
-    }
-
-    let Some(curve_id) = edge.curve else {
-        return Ok(None);
-    };
-    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
-        return Ok(None);
-    };
-    let SurfaceGeom::Plane(plane) = store.get(planar_face.surface)? else {
-        unreachable!("host ring classification retains a plane");
-    };
-    if circle.radius() != cylinder.radius()
-        || exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
-        || !certified_point_on_axis(cylinder.frame(), circle.frame().origin())
-        || !support_incident_within_resolution(
-            plane.frame().z(),
-            circle.frame().origin(),
-            plane.frame().origin(),
-        )
-    {
-        return Ok(None);
-    }
-    let Some(planar_axis_alignment) = exact_axis_alignment(cylinder.frame(), plane.frame().z())
-    else {
-        return Ok(None);
-    };
-    let Some(side_use) = side_fin.pcurve else {
-        return Ok(None);
-    };
-    let Curve2dGeom::Line(side_line) = store.get(side_use.curve())? else {
-        return Ok(None);
-    };
-    if side_line.dir().y != 0.0 || side_line.dir().x == 0.0 {
-        return Ok(None);
-    }
-    let Some(side_traverses_positive_u) = traversal_is_positive(
-        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
-        side_fin.sense,
-    ) else {
-        return Ok(None);
-    };
-    let Some(planar_use) = planar_fin.pcurve else {
-        return Ok(None);
-    };
-    if !matches!(store.get(planar_use.curve())?, Curve2dGeom::Circle(_))
-        || planar_use.closure_winding() != Some([0, 0])
-    {
-        return Ok(None);
-    }
-    Ok(Some(RingBoundary {
-        planar_face: planar_face_id,
-        planar_loop: planar_loop_id,
-        edge: side_fin.edge,
-        center: circle.frame().origin(),
-        planar_axis_alignment,
-        side_traverses_positive_u,
-    }))
 }
 
 #[cfg(test)]
