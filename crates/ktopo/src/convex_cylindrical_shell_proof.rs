@@ -1,16 +1,17 @@
-//! Structural proof for a convex cylinder clipped by planar halfspaces.
+//! Structural proof for a convex quadric clipped by planar halfspaces.
 //!
 //! This recognizer does not consume constructor provenance or enumerate a
-//! named solid layout. It reconstructs one or more pairwise-disjoint finite
-//! partial charts or whole-period annular charts on one exact analytic
-//! cylinder from live pcurves,
-//! obtains every planar constraint through manifold peer incidence, and
-//! proves with outward intervals that every complete cylinder patch and every
-//! boundary edge lie in every constraint. Full-period rectangular charts
-//! require explicit closure winding and complementary uses of one seam edge.
-//! Planar face cells are simple Jordan
-//! domains whose boundaries lie in the convex intersection. A strict interior
-//! witness makes that intersection full dimensional.
+//! named solid layout. For cylinders, it reconstructs one or more
+//! pairwise-disjoint finite partial charts or whole-period annular charts on
+//! one exact analytic support from live pcurves, obtains every planar
+//! constraint through manifold peer incidence, and proves with outward
+//! intervals that every complete cylinder patch and every boundary edge lie
+//! in every constraint. Full-period rectangular charts require explicit
+//! closure winding and complementary uses of one seam edge. For spheres, it
+//! proves the single circle-bounded spherical cap and planar disk are the
+//! boundary of a ball/halfspace intersection. Planar face cells are simple
+//! Jordan domains whose boundaries lie in the convex intersection. A strict
+//! interior witness makes the intersection full dimensional.
 //!
 //! Consequently the connected, closed manifold is a boundaryless subset of
 //! the connected boundary of the convex intersection; local whole-fin
@@ -19,16 +20,18 @@
 //! fail closed.
 
 use super::shell_lemmas::{
-    affine_value, circle_affine_range, dot_interval, finite_interval, finite_point, harmonic_range,
-    interval_abs_upper, peer_face_from_fin_unchecked, union,
+    affine_value, certified_parallel, circle_affine_range, dot_interval, finite_interval,
+    finite_point, harmonic_range, interval_abs_upper, oriented_dot_sign,
+    peer_face_from_fin_unchecked, support_incident_within_resolution, union,
 };
 use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
 use crate::entity::{FaceDomain, FinId, FinPcurve, SeamSide, SurfaceParameter};
 use kcore::math;
 use kgeom::param::ParamRange;
+use kgeom::surface::Sphere;
 
-/// Cumulative structural and constraint work for clipped cylinders.
+/// Cumulative structural and constraint work for clipped quadrics.
 pub(crate) const CONVEX_CYLINDRICAL_SHELL_WORK: StageId =
     match StageId::new("ktopo.check.convex-cylindrical-shell-work") {
         Ok(stage) => stage,
@@ -86,6 +89,7 @@ pub(super) fn certify_convex_cylindrical_shell(
     }
 
     let mut cylinder_faces = Vec::new();
+    let mut sphere_faces = Vec::new();
     let mut planar_faces = Vec::new();
     for &face_id in &shell.faces {
         let face = store.get(face_id)?;
@@ -94,16 +98,18 @@ pub(super) fn certify_convex_cylindrical_shell(
         }
         match store.get(face.surface)? {
             SurfaceGeom::Cylinder(cylinder) => cylinder_faces.push((face_id, *cylinder)),
+            SurfaceGeom::Sphere(sphere) => sphere_faces.push((face_id, *sphere)),
             SurfaceGeom::Plane(_) => planar_faces.push(face_id),
             _ => return Ok(None),
         }
     }
-    let Some((_, cylinder)) = cylinder_faces.first().copied() else {
-        return Ok(None);
-    };
-    if planar_faces.is_empty() {
+    if planar_faces.is_empty()
+        || cylinder_faces.is_empty() == sphere_faces.is_empty()
+        || sphere_faces.len() > 1
+    {
         return Ok(None);
     }
+    let quadric_count = cylinder_faces.len().max(sphere_faces.len());
 
     if let Some(scope) = scope {
         scope.ledger().require_limit(
@@ -111,12 +117,8 @@ pub(super) fn certify_convex_cylindrical_shell(
             ResourceKind::Work,
             AccountingMode::Cumulative,
         )?;
-        let Some(work) = convex_cylindrical_proof_work(
-            store,
-            shell_id,
-            planar_faces.len(),
-            cylinder_faces.len(),
-        )?
+        let Some(work) =
+            convex_cylindrical_proof_work(store, shell_id, planar_faces.len(), quadric_count)?
         else {
             return Ok(Some(indeterminate()));
         };
@@ -124,6 +126,18 @@ pub(super) fn certify_convex_cylindrical_shell(
             .ledger_mut()
             .charge(CONVEX_CYLINDRICAL_SHELL_WORK, work)?;
     }
+
+    if let [(sphere_face, sphere)] = sphere_faces.as_slice() {
+        return certify_convex_spherical_intersection(
+            store,
+            shell_id,
+            *sphere_face,
+            *sphere,
+            &planar_faces,
+        );
+    }
+
+    let (_, cylinder) = cylinder_faces[0];
 
     let mut patches = Vec::with_capacity(cylinder_faces.len());
     for (face, candidate) in cylinder_faces {
@@ -224,6 +238,203 @@ fn convex_cylindrical_proof_work(
                 .checked_mul(4)
                 .and_then(|supports| work.checked_add(supports))
         }))
+}
+
+fn certify_convex_spherical_intersection(
+    store: &Store,
+    shell_id: ShellId,
+    sphere_face_id: FaceId,
+    sphere: Sphere,
+    planar_faces: &[FaceId],
+) -> Result<Option<ShellCertification>> {
+    let [plane_face_id] = planar_faces else {
+        return Ok(Some(indeterminate()));
+    };
+    let sphere_face = store.get(sphere_face_id)?;
+    let plane_face = store.get(*plane_face_id)?;
+    let ([sphere_loop_id], [plane_loop_id]) =
+        (sphere_face.loops.as_slice(), plane_face.loops.as_slice())
+    else {
+        return Ok(Some(indeterminate()));
+    };
+    let sphere_loop = store.get(*sphere_loop_id)?;
+    let plane_loop = store.get(*plane_loop_id)?;
+    let ([sphere_fin_id], [plane_fin_id]) =
+        (sphere_loop.fins.as_slice(), plane_loop.fins.as_slice())
+    else {
+        return Ok(Some(indeterminate()));
+    };
+    if sphere_face.shell != shell_id
+        || plane_face.shell != shell_id
+        || sphere_face.tolerance.is_some()
+        || plane_face.tolerance.is_some()
+        || certify_loop_simplicity(store, *sphere_loop_id)? != LoopSimplicity::Certified
+        || certify_loop_simplicity(store, *plane_loop_id)? != LoopSimplicity::Certified
+    {
+        return Ok(Some(indeterminate()));
+    }
+    let sphere_fin = store.get(*sphere_fin_id)?;
+    let plane_fin = store.get(*plane_fin_id)?;
+    if sphere_fin.edge != plane_fin.edge || sphere_fin.sense == plane_fin.sense {
+        return Ok(Some(indeterminate()));
+    }
+    let edge = store.get(sphere_fin.edge)?;
+    if edge.tolerance.is_some()
+        || edge.fins.len() != 2
+        || !edge.fins.contains(sphere_fin_id)
+        || !edge.fins.contains(plane_fin_id)
+    {
+        return Ok(Some(indeterminate()));
+    }
+    let Some(curve_id) = edge.curve else {
+        return Ok(Some(indeterminate()));
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(Some(indeterminate()));
+    };
+    let SurfaceGeom::Plane(plane) = store.get(plane_face.surface)? else {
+        return Ok(Some(indeterminate()));
+    };
+    if certify_edge_surface_incidence(
+        store,
+        sphere_fin.edge,
+        sphere_face.surface,
+        LINEAR_RESOLUTION,
+    )? != IncidenceCertification::Certified
+        || certify_edge_surface_incidence(
+            store,
+            plane_fin.edge,
+            plane_face.surface,
+            LINEAR_RESOLUTION,
+        )? != IncidenceCertification::Certified
+        || !certified_parallel(circle.frame().z(), plane.frame().z())
+        || !support_incident_within_resolution(
+            plane.frame().z(),
+            circle.frame().origin(),
+            plane.frame().origin(),
+        )
+        || !sphere_cap_disk_is_inside_ball(sphere, *circle)
+    {
+        return Ok(Some(indeterminate()));
+    }
+
+    let range = match edge.bounds {
+        Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => ParamRange::new(lo, hi),
+        Some(_) => return Ok(Some(indeterminate())),
+        None => circle.param_range(),
+    };
+    let parameter = if sphere_fin.sense == Sense::Forward {
+        range.lo
+    } else {
+        range.hi
+    };
+    let point = circle.eval(parameter);
+    let tangent = circle.eval_derivs(parameter, 1).d[1]
+        * if sphere_fin.sense == Sense::Forward {
+            1.0
+        } else {
+            -1.0
+        };
+    let oriented_sphere_normal = (point - sphere.frame().origin())
+        * if sphere_face.sense == Sense::Forward {
+            1.0
+        } else {
+            -1.0
+        };
+    let patch_interior = oriented_sphere_normal.cross(tangent);
+    let Some(raw_side) = oriented_dot_sign(patch_interior, plane.frame().z()) else {
+        return Ok(Some(indeterminate()));
+    };
+    let (outward, outward_sense) = if raw_side < 0 {
+        (plane.frame().z(), Sense::Forward)
+    } else {
+        (-plane.frame().z(), Sense::Reversed)
+    };
+    let Some(witness) = strict_spherical_intersection_witness(sphere, *circle, *plane, outward)
+    else {
+        return Ok(Some(indeterminate()));
+    };
+    let Some(witness_side) = affine_value(outward, witness, plane.frame().origin()) else {
+        return Ok(Some(indeterminate()));
+    };
+    if witness_side.hi() >= 0.0 || !strictly_inside_sphere(sphere, witness) {
+        return Ok(Some(indeterminate()));
+    }
+
+    // The plane/sphere intersection is exactly the one certified boundary
+    // circle. The connected sphere face selects one of its two complementary
+    // caps, and `patch_interior` selects the strict halfspace containing that
+    // cap. The planar disk is inside the ball by
+    // `sphere_cap_disk_is_inside_ball`, so the two cells are the complete
+    // boundary of the full-dimensional ball/halfspace intersection.
+    let plane_outward = plane.frame().z()
+        * if plane_face.sense == Sense::Forward {
+            1.0
+        } else {
+            -1.0
+        };
+    let local_orientation_valid = sphere_face.sense == Sense::Forward
+        && oriented_dot_sign(patch_interior, -plane_outward) == Some(1)
+        && plane_face.sense == outward_sense;
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: if local_orientation_valid {
+            ShellOrientation::Positive
+        } else {
+            ShellOrientation::Invalid
+        },
+    }))
+}
+
+fn sphere_cap_disk_is_inside_ball(sphere: Sphere, circle: kgeom::curve::Circle) -> bool {
+    if !circle.radius().is_finite() || circle.radius() <= 0.0 {
+        return false;
+    }
+    let offset = circle.frame().origin() - sphere.frame().origin();
+    let (Some(x), Some(y), Some(z)) = (
+        dot_interval(circle.frame().x(), offset),
+        dot_interval(circle.frame().y(), offset),
+        dot_interval(circle.frame().z(), offset),
+    ) else {
+        return false;
+    };
+    let Some(center_radial) = finite_interval(x.square() + y.square()).and_then(Interval::sqrt)
+    else {
+        return false;
+    };
+    let farthest = (center_radial + Interval::point(circle.radius())).square() + z.square();
+    let allowed = (Interval::point(sphere.radius()) + Interval::point(LINEAR_RESOLUTION)).square();
+    farthest.hi().is_finite() && farthest.hi() <= allowed.lo()
+}
+
+fn strict_spherical_intersection_witness(
+    sphere: Sphere,
+    circle: kgeom::curve::Circle,
+    plane: kgeom::surface::Plane,
+    outward: Vec3,
+) -> Option<Point3> {
+    let center_offset = circle.frame().origin() - sphere.frame().origin();
+    let center_distance_squared = finite_interval(
+        Interval::point(center_offset.x).square()
+            + Interval::point(center_offset.y).square()
+            + Interval::point(center_offset.z).square(),
+    )?;
+    let center_distance = center_distance_squared.sqrt()?;
+    let slack = sphere.radius() - center_distance.hi();
+    if !slack.is_finite() || slack <= 2.0 * LINEAR_RESOLUTION {
+        return None;
+    }
+    let witness = circle.frame().origin() - outward * (0.5 * slack);
+    let side = affine_value(outward, witness, plane.frame().origin())?;
+    (finite_point(witness) && side.hi() < 0.0).then_some(witness)
+}
+
+fn strictly_inside_sphere(sphere: Sphere, point: Point3) -> bool {
+    let offset = point - sphere.frame().origin();
+    let distance_squared = Interval::point(offset.x).square()
+        + Interval::point(offset.y).square()
+        + Interval::point(offset.z).square();
+    distance_squared.hi() < Interval::point(sphere.radius()).square().lo()
 }
 
 fn prepare_cylinder_patch(
@@ -1283,7 +1494,8 @@ mod tests {
         AnalyticShellPcurve, AnalyticShellSurface, AnalyticShellVertex, AnalyticVertexKey,
     };
     use crate::check::{CheckLevel, CheckOutcome, check_body_report};
-    use crate::make::{cylinder, cylindrical_sheet};
+    use crate::entity::{Edge, Face, Fin, Loop};
+    use crate::make::{cylinder, cylindrical_sheet, solid_body_scaffold};
     use crate::transaction::FullCommitRequirement;
     use kgeom::curve::{Circle, Curve, Line};
     use kgeom::curve2d::{Circle2d, Line2d};
@@ -1329,6 +1541,60 @@ mod tests {
             .find(|region| store.get(*region).unwrap().kind == RegionKind::Solid)
             .unwrap();
         store.get(region).unwrap().shells[0]
+    }
+
+    fn sphere_cap_shell(store: &mut Store, frame: Frame) -> (ShellId, FaceId, FaceId) {
+        let (_body, shell) = solid_body_scaffold(store);
+        let sphere = Sphere::new(frame, 1.25).unwrap();
+        let circle_frame =
+            Frame::new(frame.origin() + frame.z() * 0.75, frame.z(), frame.x()).unwrap();
+        let circle = Circle::new(circle_frame, 1.0).unwrap();
+        let curve = store.insert_curve(CurveGeom::Circle(circle)).unwrap();
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [None, None],
+            bounds: None,
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        let sphere_surface = store.insert_surface(SurfaceGeom::Sphere(sphere)).unwrap();
+        let sphere_face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface: sphere_surface,
+            sense: Sense::Forward,
+            domain: None,
+            tolerance: None,
+        });
+        let plane = Plane::new(
+            Frame::new(circle_frame.origin(), -circle_frame.z(), circle_frame.x()).unwrap(),
+        );
+        let plane_surface = store.insert_surface(SurfaceGeom::Plane(plane)).unwrap();
+        let plane_face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface: plane_surface,
+            sense: Sense::Forward,
+            domain: None,
+            tolerance: None,
+        });
+        store.get_mut(shell).unwrap().faces = vec![sphere_face, plane_face];
+        for (face, sense) in [(sphere_face, Sense::Forward), (plane_face, Sense::Reversed)] {
+            let loop_id = store.add(Loop {
+                face,
+                fins: Vec::new(),
+            });
+            store.get_mut(face).unwrap().loops.push(loop_id);
+            let fin = store.add(Fin {
+                parent: loop_id,
+                edge,
+                sense,
+                pcurve: None,
+            });
+            store.get_mut(loop_id).unwrap().fins.push(fin);
+            store.get_mut(edge).unwrap().fins.push(fin);
+        }
+        (shell, sphere_face, plane_face)
     }
 
     fn session_with_limit(allowed: u64) -> kcore::operation::SessionPolicy {
@@ -1864,6 +2130,49 @@ mod tests {
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
                 orientation: ShellOrientation::Positive,
+            }
+        );
+    }
+
+    #[test]
+    fn sphere_cap_disk_containment_and_support_route_are_interval_certified() {
+        let frame = Frame::new(
+            Point3::new(3.0, -2.0, 1.25),
+            Vec3::new(0.48, 0.64, 0.6),
+            Vec3::new(0.8, -0.6, 0.0),
+        )
+        .unwrap();
+        let sphere = Sphere::new(frame, 1.25).unwrap();
+        let circle_frame =
+            Frame::new(frame.origin() + frame.z() * 0.75, frame.z(), frame.x()).unwrap();
+        assert!(sphere_cap_disk_is_inside_ball(
+            sphere,
+            Circle::new(circle_frame, 1.0).unwrap(),
+        ));
+        assert!(!sphere_cap_disk_is_inside_ball(
+            sphere,
+            Circle::new(circle_frame, 1.01).unwrap(),
+        ));
+
+        let mut store = Store::new();
+        let (shell, _sphere_face, plane_face) = sphere_cap_shell(&mut store, frame);
+        assert_eq!(
+            certify_convex_cylindrical_shell(&store, shell, None)
+                .unwrap()
+                .unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Positive,
+            }
+        );
+        store.get_mut(plane_face).unwrap().sense = Sense::Reversed;
+        assert_eq!(
+            certify_convex_cylindrical_shell(&store, shell, None)
+                .unwrap()
+                .unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Invalid,
             }
         );
     }
