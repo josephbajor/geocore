@@ -30,7 +30,7 @@ const ANALYTIC_ORACLE_TOLERANCE: f64 = 1.0e-10;
 const CYLINDER_TOPOLOGY: [usize; 3] = [3, 2, 0];
 
 fn partial_unite_shell_stage() -> kernel::StageId {
-    kernel::StageId::new("ktopo.check.two-host-axial-chain-shell-work").unwrap()
+    kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap()
 }
 
 #[derive(Debug, Clone, Copy)]

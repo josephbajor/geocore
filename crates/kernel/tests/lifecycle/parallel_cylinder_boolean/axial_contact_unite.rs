@@ -15,7 +15,7 @@ fn deterministic_acos(value: f64) -> f64 {
 }
 
 fn contact_shell_stage() -> kernel::StageId {
-    kernel::StageId::new("ktopo.check.parallel-cylinder-contact-shell-work").unwrap()
+    kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap()
 }
 
 #[derive(Debug, Clone, Copy)]

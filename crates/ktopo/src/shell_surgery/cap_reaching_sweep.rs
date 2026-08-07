@@ -1,4 +1,4 @@
-//! Shell theorem for a strict-secant product feature reaching one cylinder cap.
+//! Shared theorem verification for a strict-secant product feature reaching one cylinder cap.
 //!
 //! The admitted unsplit representation starts with a finite cylinder band and,
 //! over one terminal axial interval, either removes its intersection with a
@@ -14,39 +14,17 @@
 //! `boundary((D x I) ∪ (N x J))` for any authored frame and either axial
 //! direction; other decompositions fail closed.
 
-use super::shell_lemmas::indeterminate;
-use super::shell_lemmas::proof_work as quadratic_proof_work;
-use super::shell_lemmas::proof_work_budget;
 use super::*;
 
-use super::shell_lemmas::{
+use super::super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, RadialSide, Side, Translation, all_shell_faces_consumed,
     cap_reaching_circle_on_cylinder, certified_close, certified_nonzero, certified_parallel,
     certify_sweep_support, circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face,
     peer_face_from_fin, peer_fin, prepare_cap, ruling_connects, translated_carrier,
     translated_vertices,
 };
-
-#[cfg(test)]
-#[path = "cap_reaching_cylinder_shell_proof/tests.rs"]
-mod tests;
-
-/// Cumulative deterministic work for cap-reaching cylinder-feature proofs.
-pub(crate) const CAP_REACHING_CYLINDER_SHELL_WORK: StageId =
-    match StageId::new("ktopo.check.cap-reaching-cylinder-shell-work") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid cap-reaching cylinder-shell work stage"),
-    };
-
-const DEFAULT_CAP_REACHING_CYLINDER_SHELL_WORK: u64 = 1_048_576;
-
-pub(super) fn cap_reaching_cylinder_proof_budget() -> BudgetPlan {
-    proof_work_budget(
-        CAP_REACHING_CYLINDER_SHELL_WORK,
-        DEFAULT_CAP_REACHING_CYLINDER_SHELL_WORK,
-        "built-in cap-reaching cylinder-shell proof budget is valid",
-    )
-}
+use crate::cylindrical_band::CylindricalBandSolidInput;
+use kgeom::param::ParamRange;
 
 #[derive(Debug)]
 struct WholeCap {
@@ -90,70 +68,54 @@ enum TerminalFeature {
     Boss,
 }
 
-/// Attempt the admitted two-root, two-axial-end cap-reaching feature theorem.
-pub(super) fn certify_cap_reaching_cylinder_shell(
+/// Verify one untrusted cap-reaching proposal from live topology and geometry.
+pub(super) fn certify_cap_reaching_evidence(
     store: &Store,
     shell_id: ShellId,
-    scope: Option<&mut OperationScope<'_, '_>>,
+    evidence: &CapReachingSurgeryEvidence,
 ) -> Result<Option<ShellCertification>> {
+    if evidence.shell != shell_id {
+        return Ok(None);
+    }
     let shell = store.get(shell_id)?;
     if !shell.edges.is_empty() || shell.vertex.is_some() {
         return Ok(None);
     }
-    let mut cylinder_count = 0_usize;
+    let mut cylinders = Vec::new();
+    let mut planar_faces = Vec::new();
     for &face_id in &shell.faces {
         let face = store.get(face_id)?;
         if face.shell != shell_id {
             return Ok(None);
         }
         match store.get(face.surface)? {
-            SurfaceGeom::Cylinder(_) => {
-                cylinder_count =
-                    cylinder_count
-                        .checked_add(1)
-                        .ok_or(kcore::error::Error::InvalidGeometry {
-                            reason: "cap-reaching cylinder count overflow",
-                        })?;
-            }
-            SurfaceGeom::Plane(_) => {}
+            SurfaceGeom::Cylinder(cylinder) => cylinders.push((face_id, *cylinder)),
+            SurfaceGeom::Plane(_) => planar_faces.push(face_id),
             _ => return Ok(None),
         }
     }
-    if cylinder_count < 2 {
+    if cylinders.len() < 2
+        || cylinders != evidence.cylinders
+        || planar_faces != evidence.planar_faces
+        || !cylinders.iter().any(|(face, cylinder)| {
+            *face == evidence.host_face && same_cylinder(*cylinder, evidence.cylinder)
+        })
+    {
         return Ok(None);
     }
-    if let Some(scope) = scope {
-        scope.ledger().require_limit(
-            CAP_REACHING_CYLINDER_SHELL_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-        )?;
-        let Some(work) = cap_reaching_proof_work(store, shell_id, cylinder_count)? else {
-            return Ok(Some(indeterminate()));
-        };
-        scope
-            .ledger_mut()
-            .charge(CAP_REACHING_CYLINDER_SHELL_WORK, work)?;
-    }
-    let mut cylinders = Vec::with_capacity(cylinder_count);
-    for &face_id in &shell.faces {
-        let face = store.get(face_id)?;
-        if let SurfaceGeom::Cylinder(cylinder) = store.get(face.surface)? {
-            cylinders.push((face_id, *cylinder));
-        }
-    }
-    for &(host_face, host) in &cylinders {
-        if let Some(certification) = certify_host(store, shell_id, host_face, host, &cylinders)? {
-            return Ok(Some(certification));
-        }
-    }
-    Ok(None)
+    certify_host(
+        store,
+        shell_id,
+        evidence.host_face,
+        evidence.cylinder,
+        &cylinders,
+    )
 }
 
 /// No-scratch structural upper bound for every candidate scan and pairwise
 /// comparison. Unique edges are at most the fin count and unique vertices at
 /// most twice it, so `1 + F + L + 4U` dominates theorem scratch size.
-fn cap_reaching_proof_work(
+pub(super) fn proof_work(
     store: &Store,
     shell_id: ShellId,
     cylinder_count: usize,
@@ -197,9 +159,6 @@ fn cap_reaching_proof_work(
     };
     Ok(quadratic_proof_work(size, 32, 0, candidates))
 }
-
-#[cfg(test)]
-use cap_reaching_proof_work as proof_work;
 fn certify_host(
     store: &Store,
     shell_id: ShellId,
@@ -250,6 +209,14 @@ fn certify_host(
     let Some([inner, reached]) = order_ends_from_whole(&whole, host, &mut ends) else {
         return Ok(None);
     };
+    let Some(base_certification) =
+        certify_cylindrical_base(host, whole.center, reached.cap.plane.frame().origin())?
+    else {
+        return Ok(None);
+    };
+    if base_certification.embedding != ShellEmbedding::Certified {
+        return Ok(None);
+    }
     let Some(translation) = translated_vertices(store, &inner.cap, &reached.cap)? else {
         return Ok(None);
     };
@@ -305,6 +272,36 @@ fn certify_host(
         translation.vector,
         terminal_feature,
     )?))
+}
+
+/// Prove the finite host cylinder independently of the surgery topology.
+/// The axial endpoints and analytic support come only from the live,
+/// predicate-checked host/cap decomposition above; a canonical base is then
+/// delegated to the existing generalized convex-cylinder theorem.
+fn certify_cylindrical_base(
+    cylinder: Cylinder,
+    first_center: Point3,
+    second_center: Point3,
+) -> Result<Option<ShellCertification>> {
+    let coordinate = |point: Point3| (point - cylinder.frame().origin()).dot(cylinder.frame().z());
+    let first = coordinate(first_center);
+    let second = coordinate(second_center);
+    if !first.is_finite() || !second.is_finite() || first == second {
+        return Ok(None);
+    }
+    let input = CylindricalBandSolidInput::new(
+        *cylinder.frame(),
+        cylinder.radius(),
+        ParamRange::new(first.min(second), first.max(second)),
+    );
+    let mut base = Store::new();
+    let mut transaction = base.transaction()?;
+    let output = transaction.assemble_cylindrical_band_solid(&input)?;
+    super::super::convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(
+        transaction.store(),
+        output.shell(),
+        None,
+    )
 }
 
 fn prepare_whole_cap(

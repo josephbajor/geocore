@@ -374,6 +374,10 @@ fn six_face_parallel_cylinder_union_is_certified_and_checked() {
         certify_portal_cylinder_shell(transaction.store(), output.shell(), None).unwrap(),
         positive()
     );
+    super::super::assert_periodic_host_evidence_claims_are_rechecked(
+        transaction.store(),
+        output.shell(),
+    );
     let report = check_body_report(transaction.store(), output.body(), CheckLevel::Full).unwrap();
     assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:?}");
     transaction

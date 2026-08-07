@@ -161,11 +161,10 @@ KERNEL_PACKAGE_FILES = {
 # configuration the spine cannot express is refused, not special-cased. History:
 # commits 62c60bf..aa15f9f.
 LIVE_SHELL_CERTIFIERS = frozenset(
-    "certify_whole_closed_surface certify_cylindrical_host_shell "
+    "certify_whole_closed_surface certify_shell_surgery "
     "certify_bounded_skew_lobe_shell "
-    "certify_mixed_profile_prism certify_cap_reaching_cylinder_shell "
-    "certify_two_host_axial_chain_shell certify_portal_cylinder_shell "
-    "certify_chord_portal_shell certify_convex_cylindrical_shell "
+    "certify_mixed_profile_prism "
+    "certify_convex_cylindrical_shell "
     "certify_convex_planar_shell "
     "certify_semantic_planar_shell_in_scope certify_general_planar_shell_in_scope".split()
 )
@@ -175,10 +174,8 @@ crates/kernel/src/boolean/mixed_shell_plan/parallel_cylinder_lens.rs crates/kern
 crates/kernel/src/boolean/parallel_cylinder_pipeline.rs crates/kernel/src/boolean/parallel_cylinder_relation.rs
 crates/kernel/src/boolean/transverse_cylinder_pipeline.rs crates/kernel/tests/lifecycle/parallel_cylinder_boolean.rs
 crates/kops/tests/parallel_cylinder_radial_relation.rs crates/ktopo/src/bounded_skew_lobe_shell_proof.rs
-crates/ktopo/src/cap_reaching_cylinder_shell_proof.rs crates/ktopo/src/chord_portal_shell_proof.rs
 crates/ktopo/src/convex_cylindrical_shell_proof.rs crates/ktopo/src/planar_shell_proof.rs
-crates/ktopo/src/portal_cylinder_shell_proof.rs crates/ktopo/src/semantic_planar_shell_proof.rs
-crates/ktopo/src/two_host_axial_chain_shell_proof.rs
+crates/ktopo/src/semantic_planar_shell_proof.rs
 """.split()
 )
 
