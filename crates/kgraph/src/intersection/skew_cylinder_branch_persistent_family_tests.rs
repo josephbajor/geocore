@@ -255,6 +255,32 @@ fn exact_corner_clusters_are_persisted_and_accounted_without_zero_length_members
             && certificate.root(1).is_some()
             && certificate.root(2).is_none()
     }));
+    let mut isolated_points = isolated
+        .iter()
+        .map(|event| {
+            family
+                .isolated_point_certificate(event.sheet(), event.ordinal())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    isolated_points.sort_by(|first, second| first.point().y.total_cmp(&second.point().y));
+    assert_eq!(isolated_points.len(), 2);
+    for (certificate, expected_y) in isolated_points.into_iter().zip([-12.0, 12.0]) {
+        let point = certificate.point();
+        assert!((point.x - 5.0).abs() <= TEST_TOLERANCE);
+        assert!((point.y - expected_y).abs() <= TEST_TOLERANCE);
+        assert!((point.z - 16.0).abs() <= TEST_TOLERANCE);
+        assert_eq!(certificate.event_certificate().event().root_count(), 2);
+        assert!(certificate.root(0).is_some());
+        assert!(certificate.root(1).is_some());
+        assert!(certificate.root(2).is_none());
+        assert!(
+            certificate
+                .source_surface_points()
+                .into_iter()
+                .all(|source| { source.dist(point) <= TEST_TOLERANCE })
+        );
+    }
     assert!(
         family
             .root_event_certificate(
@@ -302,6 +328,15 @@ fn isolated_only_family_mints_event_carriers_without_curve_members() {
         assert_eq!(certificate.event().root_count(), 2);
         assert!(certificate.root(0).is_some());
         assert!(certificate.root(1).is_some());
+        let point = family
+            .isolated_point_certificate(SkewCylinderSheet::Upper, ordinal)
+            .unwrap();
+        assert!(
+            point
+                .source_surface_points()
+                .into_iter()
+                .all(|source| source.dist(point.point()) <= TEST_TOLERANCE)
+        );
     }
 }
 

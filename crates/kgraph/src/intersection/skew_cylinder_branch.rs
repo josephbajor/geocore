@@ -70,6 +70,7 @@ pub use persistent_family::{
     PersistentSkewCylinderFiniteWindowFamilyCertificate,
     PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
     PersistentSkewCylinderFiniteWindowFamilyReissue,
+    PersistentSkewCylinderFiniteWindowIsolatedPointCertificate,
     PersistentSkewCylinderFiniteWindowMemberCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput, PersistentSkewCylinderFiniteWindowRootEvent,
     PersistentSkewCylinderFiniteWindowRootEventCertificate,
