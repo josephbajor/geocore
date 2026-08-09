@@ -118,7 +118,7 @@ pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_OPEN_SPAN_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_WORK,
     SKEW_CYLINDER_ROOT_CLUSTER_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-    SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderStrictDiscriminantMiss,
+    SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderIsolatedContact, SkewCylinderStrictDiscriminantMiss,
 };
 pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
