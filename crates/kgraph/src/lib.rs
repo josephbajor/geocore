@@ -107,6 +107,7 @@ pub use skew_cylinder_branch::{
     PersistentSkewCylinderFiniteWindowFamilyReissue,
     PersistentSkewCylinderFiniteWindowMemberCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput, PersistentSkewCylinderFiniteWindowRootEvent,
+    PersistentSkewCylinderFiniteWindowRootEventCertificate,
     PersistentSkewCylinderFiniteWindowRootEventKind,
     PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
     PersistentSkewCylinderOpenSpanCarrier, PersistentSkewCylinderOpenSpanCertificate,

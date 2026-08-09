@@ -501,6 +501,27 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
         }
     }
 
+    /// Bind one physical root-event ordinal for exact downstream carriage.
+    ///
+    /// Unlike member membership, this selector covers every closed-set
+    /// stratum: Boundary, Contact, and Isolated. Consumers remain responsible
+    /// for publishing only the strata they can represent without omission.
+    pub const fn root_event_certificate(
+        self,
+        sheet: SkewCylinderSheet,
+        ordinal: usize,
+    ) -> Option<PersistentSkewCylinderFiniteWindowRootEventCertificate> {
+        if ordinal < self.root_event_count(sheet) {
+            Some(PersistentSkewCylinderFiniteWindowRootEventCertificate {
+                family: self,
+                sheet,
+                ordinal: ordinal as u8,
+            })
+        } else {
+            None
+        }
+    }
+
     /// Exact bound root grouped into one persistent physical event.
     pub fn root_event_root(
         &self,
@@ -588,6 +609,50 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
     }
 }
 
+/// Complete finite-window family plus one immutable physical root event.
+///
+/// This is the zero-dimensional counterpart of
+/// [`PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate`]. It
+/// retains exact event/root identity without pretending that the event is a
+/// positive-length member endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersistentSkewCylinderFiniteWindowRootEventCertificate {
+    family: PersistentSkewCylinderFiniteWindowFamilyCertificate,
+    sheet: SkewCylinderSheet,
+    ordinal: u8,
+}
+
+impl PersistentSkewCylinderFiniteWindowRootEventCertificate {
+    /// Complete finite-window family owning this event.
+    pub const fn family(self) -> PersistentSkewCylinderFiniteWindowFamilyCertificate {
+        self.family
+    }
+
+    /// Ordered quadratic sheet owning this event.
+    pub const fn sheet(self) -> SkewCylinderSheet {
+        self.sheet
+    }
+
+    /// Immutable sheet-local event ordinal.
+    pub const fn ordinal(self) -> usize {
+        self.ordinal as usize
+    }
+
+    /// Compact physical event selected by this certificate.
+    pub const fn event(self) -> PersistentSkewCylinderFiniteWindowRootEvent {
+        match self.family.root_event(self.sheet, self.ordinal as usize) {
+            Some(event) => event,
+            None => panic!("sealed root-event certificate always names one event"),
+        }
+    }
+
+    /// Exact authored-bound root grouped into this physical event.
+    pub fn root(self, root_ordinal: usize) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.family
+            .root_event_root(self.sheet, self.ordinal as usize, root_ordinal)
+    }
+}
+
 /// Complete family plus one immutable represented ordinal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate {
@@ -656,8 +721,7 @@ pub fn certify_persistent_skew_cylinder_finite_window_family(
         source_windows,
     )?;
     let derived_members = derived_open_members(finite_topology);
-    if members.is_empty()
-        || members.len() != derived_members.len()
+    if members.len() != derived_members.len()
         || members.len() > PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS
     {
         return Err(IntersectionCertificateError::InvalidTraceFamily);

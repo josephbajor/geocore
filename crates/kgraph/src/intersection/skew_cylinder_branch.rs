@@ -72,6 +72,7 @@ pub use persistent_family::{
     PersistentSkewCylinderFiniteWindowFamilyReissue,
     PersistentSkewCylinderFiniteWindowMemberCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput, PersistentSkewCylinderFiniteWindowRootEvent,
+    PersistentSkewCylinderFiniteWindowRootEventCertificate,
     PersistentSkewCylinderFiniteWindowRootEventKind,
     PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
     PersistentSkewCylinderRootInsideSide, certify_persistent_skew_cylinder_finite_window_family,
