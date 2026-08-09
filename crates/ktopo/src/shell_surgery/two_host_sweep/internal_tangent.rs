@@ -1,4 +1,4 @@
-//! Internally tangent radius-transition case of the axial-chain shell theorem.
+//! Internally tangent radius-transition case of the shared two-host theorem.
 //!
 //! Every cylinder band has exactly two complete ring boundaries. Bounded
 //! contact rings form a connected path of one or two exact tangent shoulders;
@@ -8,7 +8,7 @@
 //! the three-band/two-shoulder chain without relying on face storage order,
 //! cylinder order, or authored axis direction.
 
-use super::super::shell_lemmas::two_host_circle_on_cylinder;
+use super::super::super::shell_lemmas::two_host_circle_on_cylinder;
 use super::*;
 use crate::analytic_tangency::{
     circles_are_exactly_internal_tangent, point_is_within_circle_endpoint_envelope,
@@ -140,6 +140,12 @@ pub(super) fn certify_internal_tangent_contact(
         let Some(band) = prepare_tangent_band(store, shell_id, face, cylinder)? else {
             return Ok(None);
         };
+        let centers = band
+            .boundaries
+            .map(|boundary| boundary.ring().circle.frame().origin());
+        if !super::certify_cylindrical_base_embedding(cylinder, centers[0], centers[1])? {
+            return Ok(None);
+        }
         bands.push(band);
     }
     let Some(shoulders) = prepare_tangent_shoulders(store, shell_id, &bands)? else {

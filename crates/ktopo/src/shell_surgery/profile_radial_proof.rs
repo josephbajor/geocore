@@ -8,7 +8,7 @@
 //! open interior stays wholly on one side of the host cylinder. Tangency,
 //! coincidence, a missing endpoint match, or interval ambiguity fails closed.
 
-use super::super::shell_lemmas::{
+use super::super::super::shell_lemmas::{
     IntervalBounds2, RadialSide, circle_affine_range, circle_secant_span_side, radial_coordinates,
 };
 use super::*;

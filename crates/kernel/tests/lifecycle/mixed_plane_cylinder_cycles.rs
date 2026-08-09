@@ -2172,7 +2172,7 @@ fn nonconvex_star_section_and_intersection_commit_full_valid_deterministically()
 
 #[test]
 fn five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically() {
-    let stage = kernel::StageId::new("ktopo.check.portal-cylinder-shell-work").unwrap();
+    let stage = kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap();
     let settings_at = |allowed| {
         OperationSettings::new().with_budget_overrides(
             BudgetPlan::new([LimitSpec::new(

@@ -1,4 +1,4 @@
-//! Shell theorem for the union of two strict-secant axial cylinder bands.
+//! Shared theorem for two-host axial chains and exact contact subfamilies.
 //!
 //! The admitted unsplit representation is the boundary of
 //! `(D0 x [a0,a1]) union (D1 x [b0,b1])` for geometrically parallel cylinder
@@ -14,57 +14,19 @@
 //! plus the same two mapped topology roots establish arc complementarity;
 //! parameter-span widths are deliberately irrelevant.
 
-use super::shell_lemmas::proof_work as quadratic_proof_work;
-use super::shell_lemmas::{indeterminate, proof_work_budget};
 use super::*;
 
-use super::shell_lemmas::{
+use super::super::shell_lemmas::{
     Cap, CapUse, ProfileCarrier, RadialSide, Translation, all_shell_faces_consumed,
     axis_distance_squared, certified_close, certified_nonzero, certified_parallel,
     circle_secant_span_side, mapped_vertex, oriented_dot_sign, peer_face, peer_face_from_fin,
     peer_fin, prepare_cap, ruling_connects, translated_vertices, two_host_circle_on_cylinder,
 };
+use crate::cylindrical_band::CylindricalBandSolidInput;
+use kgeom::param::ParamRange;
 
-#[path = "two_host_axial_chain_shell_proof/internal_tangent.rs"]
+#[path = "two_host_sweep/internal_tangent.rs"]
 mod internal_tangent;
-
-#[cfg(test)]
-#[path = "two_host_axial_chain_shell_proof/tests.rs"]
-mod tests;
-
-/// Compatibility stage retained for axial-contact shell proof accounting.
-pub(crate) const PARALLEL_CYLINDER_CONTACT_SHELL_WORK: StageId =
-    match StageId::new("ktopo.check.parallel-cylinder-contact-shell-work") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid parallel-cylinder contact shell work stage"),
-    };
-
-const DEFAULT_PARALLEL_CYLINDER_CONTACT_SHELL_WORK: u64 = 4096;
-
-pub(super) fn axial_contact_proof_budget() -> BudgetPlan {
-    proof_work_budget(
-        PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
-        DEFAULT_PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
-        "built-in parallel-cylinder contact shell proof budget is valid",
-    )
-}
-
-/// Cumulative deterministic work for two-host axial-chain shell proofs.
-pub(crate) const TWO_HOST_AXIAL_CHAIN_SHELL_WORK: StageId =
-    match StageId::new("ktopo.check.two-host-axial-chain-shell-work") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid two-host axial-chain shell work stage"),
-    };
-
-const DEFAULT_TWO_HOST_AXIAL_CHAIN_SHELL_WORK: u64 = 1_048_576;
-
-pub(super) fn two_host_axial_chain_proof_budget() -> BudgetPlan {
-    proof_work_budget(
-        TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
-        DEFAULT_TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
-        "built-in two-host axial-chain shell proof budget is valid",
-    )
-}
 
 #[derive(Debug, Clone, Copy)]
 struct WholeEnd {
@@ -123,57 +85,43 @@ struct Chain {
     translation: Translation,
 }
 
-/// Attempt the incidence-discovered two-host axial-chain union theorem.
-pub(super) fn certify_two_host_axial_chain_shell(
+#[derive(Debug, Clone, Copy)]
+pub(super) struct VerifiedTwoHost {
+    pub(super) certification: ShellCertification,
+    pub(super) contact: bool,
+}
+
+/// Verify one untrusted two-host proposal from live topology and geometry.
+pub(super) fn certify_two_host_evidence(
     store: &Store,
     shell_id: ShellId,
-    mut scope: Option<&mut OperationScope<'_, '_>>,
-) -> Result<Option<ShellCertification>> {
+    evidence: &TwoHostSurgeryEvidence,
+) -> Result<Option<VerifiedTwoHost>> {
+    if evidence.shell != shell_id {
+        return Ok(None);
+    }
     let shell = store.get(shell_id)?;
     if !shell.edges.is_empty() || shell.vertex.is_some() {
         return Ok(None);
     }
-    let mut cylinder_count = 0_usize;
+    let mut cylinders = Vec::new();
+    let mut planar_faces = Vec::new();
     for &face_id in &shell.faces {
         let face = store.get(face_id)?;
         if face.shell != shell_id {
             return Ok(None);
         }
         match store.get(face.surface)? {
-            SurfaceGeom::Cylinder(_) => {
-                cylinder_count =
-                    cylinder_count
-                        .checked_add(1)
-                        .ok_or(kcore::error::Error::InvalidGeometry {
-                            reason: "two-host axial-chain cylinder count overflow",
-                        })?;
-            }
-            SurfaceGeom::Plane(_) => {}
+            SurfaceGeom::Cylinder(cylinder) => cylinders.push((face_id, *cylinder)),
+            SurfaceGeom::Plane(_) => planar_faces.push(face_id),
             _ => return Ok(None),
         }
     }
-    if cylinder_count < 2 {
+    if cylinders.len() < 2
+        || cylinders != evidence.cylinders
+        || planar_faces != evidence.planar_faces
+    {
         return Ok(None);
-    }
-    if let Some(scope) = scope.as_deref_mut() {
-        scope.ledger().require_limit(
-            TWO_HOST_AXIAL_CHAIN_SHELL_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-        )?;
-        let Some(work) = two_host_axial_chain_proof_work(store, shell_id, cylinder_count)? else {
-            return Ok(Some(indeterminate()));
-        };
-        scope
-            .ledger_mut()
-            .charge(TWO_HOST_AXIAL_CHAIN_SHELL_WORK, work)?;
-    }
-
-    let mut cylinders = Vec::with_capacity(cylinder_count);
-    for &face_id in &shell.faces {
-        if let SurfaceGeom::Cylinder(cylinder) = store.get(store.get(face_id)?.surface)? {
-            cylinders.push((face_id, *cylinder));
-        }
     }
     for &(first_face, first) in &cylinders {
         for &(second_face, second) in &cylinders {
@@ -183,50 +131,28 @@ pub(super) fn certify_two_host_axial_chain_shell(
             if let Some((certification, contact)) =
                 certify_host_pair(store, shell_id, first_face, first, second_face, second)?
             {
-                if contact && !charge_contact_proof(store, shell_id, scope.as_deref_mut())? {
-                    return Ok(Some(indeterminate()));
-                }
-                return Ok(Some(certification));
+                return Ok(Some(VerifiedTwoHost {
+                    certification,
+                    contact,
+                }));
             }
         }
     }
     if let Some(certification) = certify_nested_axial_contact(store, shell_id, &cylinders)? {
-        if !charge_contact_proof(store, shell_id, scope.as_deref_mut())? {
-            return Ok(Some(indeterminate()));
-        }
-        return Ok(Some(certification));
+        return Ok(Some(VerifiedTwoHost {
+            certification,
+            contact: true,
+        }));
     }
     let certification =
         internal_tangent::certify_internal_tangent_contact(store, shell_id, &cylinders)?;
-    if certification.is_some() && !charge_contact_proof(store, shell_id, scope)? {
-        return Ok(Some(indeterminate()));
-    }
-    Ok(certification)
+    Ok(certification.map(|certification| VerifiedTwoHost {
+        certification,
+        contact: true,
+    }))
 }
 
-fn charge_contact_proof(
-    store: &Store,
-    shell_id: ShellId,
-    scope: Option<&mut OperationScope<'_, '_>>,
-) -> Result<bool> {
-    let Some(scope) = scope else {
-        return Ok(true);
-    };
-    scope.ledger().require_limit(
-        PARALLEL_CYLINDER_CONTACT_SHELL_WORK,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
-    )?;
-    let Some(work) = contact_proof_work(store, shell_id)? else {
-        return Ok(false);
-    };
-    scope
-        .ledger_mut()
-        .charge(PARALLEL_CYLINDER_CONTACT_SHELL_WORK, work)?;
-    Ok(true)
-}
-
-fn contact_proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
+pub(super) fn contact_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
     let shell = store.get(shell_id)?;
     let mut loops = 0_u64;
     let mut fins = 0_u64;
@@ -264,7 +190,7 @@ fn contact_proof_work(store: &Store, shell_id: ShellId) -> Result<Option<u64>> {
 /// simplicity, and periodic fallback. It also dominates the two bounded-loop
 /// passes for every possible transition cap. This retains the full quadratic
 /// three-layer periodic-pair term instead of trying to absorb it in `N^2`.
-fn two_host_axial_chain_proof_work(
+pub(super) fn proof_work(
     store: &Store,
     shell_id: ShellId,
     cylinder_count: usize,
@@ -327,9 +253,6 @@ fn two_host_axial_chain_proof_work(
     };
     Ok(quadratic_proof_work(size, 48, additional, candidates))
 }
-
-#[cfg(test)]
-use two_host_axial_chain_proof_work as proof_work;
 fn certify_host_pair(
     store: &Store,
     shell_id: ShellId,
@@ -355,6 +278,11 @@ fn certify_host_pair(
     let Some(transitions) = prepare_transitions(store, &first, &second)? else {
         return Ok(None);
     };
+    if !certify_host_band_base(&first, &transitions, true)?
+        || !certify_host_band_base(&second, &transitions, false)?
+    {
+        return Ok(None);
+    }
     if let Some(chain) = prepare_chain(store, &first, &second, transitions)? {
         let lower = &chain.transitions[chain.lower];
         let upper = &chain.transitions[chain.upper];
@@ -509,6 +437,17 @@ fn certify_nested_axial_contact(
     ) else {
         return Ok(None);
     };
+    if !certify_cylindrical_base_embedding(
+        first.cylinder,
+        first.ends[0].center,
+        first.ends[1].center,
+    )? || !certify_cylindrical_base_embedding(
+        second.cylinder,
+        second.ends[0].center,
+        second.ends[1].center,
+    )? {
+        return Ok(None);
+    }
     let shared = first
         .ends
         .iter()
@@ -1094,6 +1033,70 @@ fn circle_center(use_: CapUse) -> Result<Point3> {
             reason: "two-host axial-chain transition lost its circle carrier",
         }),
     }
+}
+
+fn certify_host_band_base(
+    band: &HostBand,
+    transitions: &[Transition],
+    first_use: bool,
+) -> Result<bool> {
+    let mut terminal = None;
+    let mut greatest = -1.0_f64;
+    for transition in transitions {
+        let use_ = if first_use {
+            transition.first
+        } else {
+            transition.second
+        };
+        let center = circle_center(use_)?;
+        let distance = (center - band.whole.center)
+            .dot(band.cylinder.frame().z())
+            .abs();
+        if distance > greatest {
+            greatest = distance;
+            terminal = Some(center);
+        }
+    }
+    let Some(terminal) = terminal else {
+        return Ok(false);
+    };
+    certify_cylindrical_base_embedding(band.cylinder, band.whole.center, terminal)
+}
+
+/// Delegate every independently reconstructed finite-cylinder base to the
+/// existing generalized convex-cylinder theorem. Surgery incidence is bound
+/// separately; this proves the analytic support and axial extent without
+/// trusting any family verdict.
+pub(super) fn certify_cylindrical_base_embedding(
+    cylinder: Cylinder,
+    first_center: Point3,
+    second_center: Point3,
+) -> Result<bool> {
+    let coordinate = |point: Point3| (point - cylinder.frame().origin()).dot(cylinder.frame().z());
+    let first = coordinate(first_center);
+    let second = coordinate(second_center);
+    if !first.is_finite() || !second.is_finite() || first == second {
+        return Ok(false);
+    }
+    let input = CylindricalBandSolidInput::new(
+        *cylinder.frame(),
+        cylinder.radius(),
+        ParamRange::new(first.min(second), first.max(second)),
+    );
+    let mut base = Store::new();
+    let mut transaction = base.transaction()?;
+    let output = transaction.assemble_cylindrical_band_solid(&input)?;
+    Ok(matches!(
+        super::super::convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(
+            transaction.store(),
+            output.shell(),
+            None,
+        )?,
+        Some(ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            ..
+        })
+    ))
 }
 
 fn strictly_precedes(first: Point3, second: Point3, direction: Vec3) -> bool {

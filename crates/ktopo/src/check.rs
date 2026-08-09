@@ -2339,23 +2339,12 @@ mod tests {
                 16_777_216,
             )
         };
-        let portal_cylinder_snapshot = |consumed| {
-            snapshot(
-                kcore::operation::StageId::new("ktopo.check.portal-cylinder-shell-work").unwrap(),
-                ResourceKind::Work,
-                consumed,
-                16_777_216,
-            )
-        };
         let cavity_stage = crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK;
         let domain_stage = crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS;
         let planar_stage = crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK;
         let semantic_region = crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK;
         let semantic_shell = crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK;
         let facet_stage = crate::shell_proof::SHELL_FACET_PAIR_WORK;
-        let contact_stage = crate::shell_proof::PARALLEL_CYLINDER_CONTACT_SHELL_WORK;
-        let two_host_stage =
-            kcore::operation::StageId::new("ktopo.check.two-host-axial-chain-shell-work").unwrap();
         let mut store = Store::new();
         let body = clean_block(&mut store);
         let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
@@ -2385,22 +2374,22 @@ mod tests {
                     0,
                     4096,
                 ),
-                proof_snapshot(crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK, 0),
-                proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
-                proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 6),
                 snapshot(domain_stage, ResourceKind::Items, 1, 4096),
                 proof_snapshot(crate::loop_proof::FACE_LOOP_CONTAINMENT_WORK, 0),
                 proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
                 mixed_profile_snapshot(62_415),
-                snapshot(contact_stage, ResourceKind::Work, 0, 4096),
                 snapshot(planar_stage, ResourceKind::Work, 0, 200_000),
-                portal_cylinder_snapshot(0),
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
-                proof_snapshot(two_host_stage, 0),
+                snapshot(
+                    crate::shell_proof::SHELL_SURGERY_WORK,
+                    ResourceKind::Work,
+                    0,
+                    16_777_216,
+                ),
             ]
         );
         const CALLER_STAGE: kcore::operation::StageId =
@@ -2462,22 +2451,22 @@ mod tests {
                     4096,
                 ),
                 snapshot(CALLER_STAGE, ResourceKind::Work, 3, 5),
-                proof_snapshot(crate::shell_proof::CAP_REACHING_CYLINDER_SHELL_WORK, 0),
-                proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
-                proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 12),
                 snapshot(domain_stage, ResourceKind::Items, 2, 4096),
                 proof_snapshot(crate::loop_proof::FACE_LOOP_CONTAINMENT_WORK, 0),
                 proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
                 mixed_profile_snapshot(124_830),
-                snapshot(contact_stage, ResourceKind::Work, 0, 4096),
                 snapshot(planar_stage, ResourceKind::Work, 0, 200_000),
-                portal_cylinder_snapshot(0),
                 proof_snapshot(semantic_region, 0),
                 proof_snapshot(semantic_shell, 0),
                 snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
-                proof_snapshot(two_host_stage, 0),
+                snapshot(
+                    crate::shell_proof::SHELL_SURGERY_WORK,
+                    ResourceKind::Work,
+                    0,
+                    16_777_216,
+                ),
             ]
         );
         assert!(report.limit_events().is_empty());
