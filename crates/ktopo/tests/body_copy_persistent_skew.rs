@@ -129,6 +129,7 @@ fn family_bound_certificate() -> PersistentSkewCylinderOpenSpanCertificate {
         topologies: &topologies,
         ranges,
         canonical_to_source: [0, 1],
+        coincidence_tolerance: TOLERANCE,
     })
     .unwrap();
     let mut spans = Vec::new();

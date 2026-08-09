@@ -435,6 +435,7 @@ fn intersect_strict_positive_two_sheet(
         topologies: &topologies,
         ranges,
         canonical_to_source,
+        coincidence_tolerance: tolerance,
     };
     let root_cluster_plan = match plan_skew_cylinder_root_clusters(topology_input) {
         Ok(plan) => plan,

@@ -72,6 +72,7 @@ fn finite_topology(
         topologies: &topologies,
         ranges,
         canonical_to_source: formula_to_source,
+        coincidence_tolerance: 0.0,
     })
     .unwrap()
 }

@@ -31,9 +31,19 @@ use crate::{FaceId, FinId, LoopId, PartId};
 
 /// Source-edge pairs proven to share an exact root in one graph-certified
 /// semantic ruling parameterization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ExactRulingEndpointRoot {
+    edges: [RawEdgeId; 2],
+    edge_parameters: Option<[Interval; 2]>,
+    source_roots: [Option<(
+        SourceRootKey,
+        super::root_identity::CertifiedSourceRootScalar,
+    )>; 2],
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RulingEndpointCoincidenceProof {
-    edge_pairs: [Option<[RawEdgeId; 2]>; 2],
+    roots: Vec<ExactRulingEndpointRoot>,
 }
 
 impl RulingEndpointCoincidenceProof {
@@ -42,7 +52,7 @@ impl RulingEndpointCoincidenceProof {
         if pairs.is_empty() || pairs.len() > 2 {
             return None;
         }
-        let mut edge_pairs = [None; 2];
+        let mut roots = Vec::with_capacity(pairs.len());
         for (index, pair) in pairs.iter().copied().enumerate() {
             if pairs[..index]
                 .iter()
@@ -50,39 +60,79 @@ impl RulingEndpointCoincidenceProof {
             {
                 return None;
             }
-            edge_pairs[index] = Some(pair);
+            roots.push(ExactRulingEndpointRoot {
+                edges: pair,
+                edge_parameters: None,
+                source_roots: [None, None],
+            });
         }
-        Some(Self { edge_pairs })
+        Some(Self { roots })
     }
 
-    pub(super) fn proves(self, left: RulingTrimSite, right: RulingTrimSite) -> bool {
-        self.edge_pairs.contains(&Some([left.edge, right.edge]))
+    /// Bind the exact source roots of already-published zero-dimensional
+    /// skew-cylinder contacts. Multiple contacts may lie on the same pair of
+    /// whole-period ring edges, so intrinsic root enclosures remain part of
+    /// the authority rather than collapsing identity to an edge pair.
+    pub(super) fn from_isolated_contacts(
+        contacts: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
+    ) -> Option<Self> {
+        let roots = contacts
+            .iter()
+            .filter_map(|contact| {
+                let [Some(left), Some(right)] = contact.root_evidence else {
+                    return None;
+                };
+                Some(ExactRulingEndpointRoot {
+                    edges: [left.edge, right.edge],
+                    edge_parameters: Some([left.edge_parameter, right.edge_parameter]),
+                    source_roots: [
+                        contact.root_scalars[0].map(|scalar| (left.root, scalar)),
+                        contact.root_scalars[1].map(|scalar| (right.root, scalar)),
+                    ],
+                })
+            })
+            .collect::<Vec<_>>();
+        (!roots.is_empty()).then_some(Self { roots })
+    }
+
+    pub(super) fn proves(&self, left: RulingTrimSite, right: RulingTrimSite) -> bool {
+        self.exact_root(left, right).is_some()
+    }
+
+    pub(super) fn source_roots(
+        &self,
+        left: RulingTrimSite,
+        right: RulingTrimSite,
+    ) -> Option<
+        [Option<(
+            SourceRootKey,
+            super::root_identity::CertifiedSourceRootScalar,
+        )>; 2],
+    > {
+        Some(self.exact_root(left, right)?.source_roots)
+    }
+
+    fn exact_root(
+        &self,
+        left: RulingTrimSite,
+        right: RulingTrimSite,
+    ) -> Option<&ExactRulingEndpointRoot> {
+        self.roots.iter().find(|root| {
+            root.edges == [left.edge, right.edge]
+                && root.edge_parameters.is_none_or(|parameters| {
+                    intervals_overlap(parameters[0], left.edge_parameter)
+                        && intervals_overlap(parameters[1], right.edge_parameter)
+                })
+        })
     }
 }
 
-/// Clip, merge, identity-certify, and accumulate one ruling branch.
-pub(super) fn append_branch(
-    store: &Store,
-    raw_faces: [RawFaceId; 2],
-    facades: &[FaceId; 2],
-    branch: SectionBranch,
-    root_identity: &mut RootIdentityAuthority,
-    scope: &mut OperationScope<'_, '_>,
-    acc: &mut super::SectionAccumulator,
-) -> Result<()> {
-    append_branch_impl(
-        store,
-        raw_faces,
-        facades,
-        branch,
-        |_, _, _| Ok(None),
-        root_identity,
-        scope,
-        acc,
-    )
+fn intervals_overlap(a: Interval, b: Interval) -> bool {
+    a.lo() <= b.hi() && b.lo() <= a.hi()
 }
 
-/// Cylinder/Cylinder seam for proving selected dual-source ruling endpoints.
+/// Clip, merge, identity-certify, and accumulate one ruling branch with
+/// selected dual-source endpoint authority.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn append_branch_with_endpoint_proof<F>(
     store: &Store,
@@ -336,6 +386,13 @@ fn certify_endpoint(
                         reason: "ruling source root has no canonical scalar materialization",
                     },
                 })?;
+                let scalar = match merged.source_roots[operand] {
+                    Some((authority_root, authority_scalar)) if authority_root == root => {
+                        authority_scalar
+                    }
+                    Some(_) => return Ok(Err(super::GAP_INCOMPATIBLE_EDGE_PARAMETERS)),
+                    None => scalar,
+                };
                 (parameter, scalar)
             }
             super::root_identity::RootOrderOutcome::Indeterminate(gap) => {

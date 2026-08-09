@@ -1,4 +1,4 @@
-//! Facade-only baseline for coincident finite-window skew-cylinder roots.
+//! Facade-only completion fixture for coincident finite-window skew-cylinder roots.
 //! Wall-time budget: less than 10 seconds as part of the `lifecycle` target.
 
 use super::*;
@@ -10,12 +10,6 @@ const FIRST_UPPER: f64 = 17.0;
 const SECOND_RADIUS: f64 = 20.0;
 const SECOND_LOWER: f64 = -14.0;
 const SECOND_UPPER: f64 = 5.0;
-const PAIR_UNRESOLVED: &str = "a candidate face pair returned an indeterminate intersection result";
-const TANGENT_CONTACT: &str = "a ruling has an unresolved tangent or zero-length trim contact";
-const UNORDERED_CROSSINGS: &str = "ruling trim crossings could not be certifiably ordered";
-const DISK_CHORD_UNRESOLVED: &str =
-    "a disk-cap chord is not strictly contained by one opposing planar trim span";
-const MIXED_STITCH_UNRESOLVED: &str = "bounded section fragments await mixed-family stitching";
 
 #[derive(Debug, Clone, Copy)]
 enum Placement {
@@ -174,16 +168,8 @@ fn assert_contact_corner_oracle(fixture: &Fixture, frame: Frame) {
     }
 }
 
-fn gap_count(graph: &BodySectionGraph, reason: &str) -> usize {
-    graph
-        .gaps()
-        .iter()
-        .filter(|gap| gap.reason() == reason)
-        .count()
-}
-
 #[test]
-fn finite_window_contact_corner_retains_downstream_gaps_read_only_in_both_orders() {
+fn finite_window_contact_corner_sections_completely_read_only_in_both_orders() {
     for placement in [Placement::World, Placement::Oblique] {
         let fixture = fixture(placement);
         assert_contact_corner_oracle(&fixture, shared_frame(placement));
@@ -191,24 +177,51 @@ fn finite_window_contact_corner_retains_downstream_gaps_read_only_in_both_orders
         let forward = section(&fixture, false);
         let replay = section(&fixture, false);
         let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
 
         assert_eq!(forward, replay);
+        assert_eq!(swapped, swapped_replay);
         for graph in [&forward, &swapped] {
-            assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
-            assert!(gap_count(graph, PAIR_UNRESOLVED) <= 1, "{graph:#?}");
-            assert_eq!(gap_count(graph, TANGENT_CONTACT), 2, "{graph:#?}");
-            assert_eq!(gap_count(graph, UNORDERED_CROSSINGS), 2, "{graph:#?}");
-            assert_eq!(gap_count(graph, DISK_CHORD_UNRESOLVED), 2, "{graph:#?}");
-            assert_eq!(gap_count(graph, MIXED_STITCH_UNRESOLVED), 1, "{graph:#?}");
-            assert!(graph.branches().len() >= 6, "{graph:#?}");
-            assert!(graph.curve_endpoints().len() >= 4, "{graph:#?}");
-            assert!(graph.curve_fragments().len() >= 2, "{graph:#?}");
-            assert!(graph.curve_components().is_empty(), "{graph:#?}");
             assert_eq!(
-                graph.gaps().len(),
-                7 + gap_count(graph, PAIR_UNRESOLVED),
-                "{graph:#?}"
+                graph.completion(),
+                SectionCompletion::Complete,
+                "{placement:?}: {:?}",
+                graph.gaps()
             );
+            assert!(graph.gaps().is_empty(), "{placement:?}: {:?}", graph.gaps());
+            assert_eq!(graph.branches().len(), 10, "{placement:?}");
+            assert_eq!(graph.curve_endpoints().len(), 8, "{placement:?}");
+            assert_eq!(graph.curve_fragments().len(), 8, "{placement:?}");
+            assert_eq!(graph.isolated_contacts().len(), 2, "{placement:?}");
+            // Zero-dimensional contacts remain first-class members: neither
+            // legacy planar vertices nor degenerate curve edges are created.
+            assert!(graph.vertices().is_empty(), "{placement:?}");
+            assert!(graph.edges().is_empty(), "{placement:?}");
+            assert_eq!(graph.curve_components().len(), 1, "{placement:?}");
+            let component = &graph.curve_components()[0];
+            assert!(component.closed());
+            assert_eq!(component.fragments().len(), 8);
+            assert_eq!(component.isolated_contacts().len(), 2);
+            assert_eq!(component.isolated_contacts(), &[0, 1]);
+            for contact in graph.isolated_contacts() {
+                assert_eq!(contact.roots().len(), 2);
+                assert!(contact.endpoint() < graph.curve_endpoints().len());
+                for operand in 0..2 {
+                    assert_eq!(
+                        contact
+                            .roots()
+                            .iter()
+                            .filter(|root| root.operand() == operand)
+                            .count(),
+                        1
+                    );
+                }
+                let point = contact.point();
+                assert!([-12.0, 12.0].into_iter().any(|y| {
+                    point.dist(shared_frame(placement).point_at(SECOND_UPPER, y, FIRST_LOWER))
+                        <= 1.0e-8
+                }));
+            }
         }
         assert_eq!(
             swapped.bodies(),
@@ -219,7 +232,7 @@ fn finite_window_contact_corner_retains_downstream_gaps_read_only_in_both_orders
 }
 
 #[test]
-fn finite_window_contact_corner_boolean_refuses_atomically_in_both_orders() {
+fn finite_window_contact_corner_boolean_still_refuses_assembly_atomically_in_both_orders() {
     for placement in [Placement::World, Placement::Oblique] {
         for swapped in [false, true] {
             let mut fixture = fixture(placement);
@@ -239,10 +252,14 @@ fn finite_window_contact_corner_boolean_refuses_atomically_in_both_orders() {
                     second,
                 ))
                 .unwrap();
-            assert!(matches!(
-                outcome.into_result().unwrap(),
-                BooleanOutcome::Refused(BooleanRefusal::BoundaryProofIncomplete)
-            ));
+            let result = outcome.into_result().unwrap();
+            assert!(
+                matches!(
+                    result,
+                    BooleanOutcome::Refused(BooleanRefusal::AssemblyRejected)
+                ),
+                "{placement:?} swapped={swapped}: {result:?}"
+            );
             assert_eq!(PartCounts::from_fixture(&fixture), before);
             let part = fixture.session.part(fixture.part.clone()).unwrap();
             assert!(part.body(fixture.first.clone()).is_ok());

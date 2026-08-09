@@ -85,12 +85,12 @@ pub(crate) use skew_cylinder_persistence::{
 };
 pub use skew_cylinder_public::{
     SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralPhysicalRoot,
-    SectionBoundedProceduralTrimProvenance, SectionSkewCylinderAxialBoundary,
-    SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve,
-    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderEmbeddingCertificate,
-    SectionSkewCylinderInterval, SectionSkewCylinderPcurveCellCertificate,
-    SectionSkewCylinderPcurveEnclosure, SectionSkewCylinderRootChart,
-    SectionSkewCylinderRootCorridorCertificate,
+    SectionBoundedProceduralTrimProvenance, SectionIsolatedContact, SectionIsolatedContactRoot,
+    SectionSkewCylinderAxialBoundary, SectionSkewCylinderBranchCarrier,
+    SectionSkewCylinderBranchPcurve, SectionSkewCylinderCarrierRootEnclosure,
+    SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
+    SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
+    SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
 };
 
 #[cfg(test)]
@@ -902,6 +902,7 @@ impl SectionCurveFragment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionCurveComponent {
     fragments: Vec<usize>,
+    isolated_contacts: Vec<usize>,
     closed: bool,
 }
 
@@ -909,6 +910,12 @@ impl SectionCurveComponent {
     /// Indices into [`BodySectionGraph::curve_fragments`] in traversal order.
     pub fn fragments(&self) -> &[usize] {
         &self.fragments
+    }
+
+    /// Indices into [`BodySectionGraph::isolated_contacts`] attached to this
+    /// component by their exact proof-keyed endpoint identity.
+    pub fn isolated_contacts(&self) -> &[usize] {
+        &self.isolated_contacts
     }
 
     /// Whether exact endpoint incidence closes this component. The current
@@ -1008,6 +1015,7 @@ pub struct BodySectionGraph {
     pub(crate) edges: Vec<SectionEdge>,
     pub(crate) branches: Vec<SectionBranch>,
     pub(crate) curve_endpoints: Vec<SectionCurveEndpoint>,
+    pub(crate) isolated_contacts: Vec<SectionIsolatedContact>,
     pub(crate) curve_fragments: Vec<SectionCurveFragment>,
     pub(crate) curve_components: Vec<SectionCurveComponent>,
     pub(crate) periodic_face_embeddings: Vec<SectionPeriodicFaceEmbeddingEvidence>,
@@ -1047,6 +1055,12 @@ impl BodySectionGraph {
     /// Proof-keyed endpoints shared by bounded branch fragments.
     pub fn curve_endpoints(&self) -> &[SectionCurveEndpoint] {
         &self.curve_endpoints
+    }
+
+    /// Certified zero-dimensional section members, kept distinct from planar
+    /// stitch vertices and positive-length curve fragments.
+    pub fn isolated_contacts(&self) -> &[SectionIsolatedContact] {
+        &self.isolated_contacts
     }
 
     /// Exact branch fragments in deterministic publisher order.
@@ -1447,6 +1461,7 @@ struct SectionAccumulator {
     ruling_fragments: Vec<ruling_publish::CertifiedRulingFragment>,
     disk_fragments: Vec<disk_publish::CertifiedDiskCapFragment>,
     bounded_procedural_fragments: Vec<skew_cylinder_fragment::CertifiedBoundedSkewCylinderFragment>,
+    isolated_contacts: Vec<skew_cylinder_fragment::CertifiedSectionIsolatedContact>,
     cylinder_cylinder_exterior_radial_separations:
         Vec<SectionCylinderCylinderExteriorRadialSeparation>,
     skew_cylinder_strict_discriminant_misses: Vec<SectionSkewCylinderStrictDiscriminantMiss>,
@@ -2446,9 +2461,17 @@ fn process_pair(
                 acc,
             )
         }
-        (AdmittedFaceBoundary::Disk(_), AdmittedFaceBoundary::Disk(_)) => {
-            acc.pair_gap(GAP_DISK_CHORD_TRIM_UNRESOLVED, a, b);
-            Ok(())
+        (AdmittedFaceBoundary::Disk(first), AdmittedFaceBoundary::Disk(second)) => {
+            disk_publish::process_disk_pair(
+                store,
+                a,
+                b,
+                [*first, *second],
+                pair,
+                root_identity,
+                scope,
+                acc,
+            )
         }
     }
 }
@@ -2552,6 +2575,7 @@ fn assemble_graph(
         ruling_fragments,
         disk_fragments,
         bounded_procedural_fragments,
+        isolated_contacts,
         cylinder_cylinder_exterior_radial_separations,
         skew_cylinder_strict_discriminant_misses,
         mut gaps,
@@ -2601,6 +2625,7 @@ fn assemble_graph(
         .collect();
     let curve_publish::PublishedCurves {
         endpoints: curve_endpoints,
+        isolated_contacts,
         fragments: curve_fragments,
         components: curve_components,
         rings,
@@ -2613,6 +2638,7 @@ fn assemble_graph(
         &ruling_fragments,
         &disk_fragments,
         &bounded_procedural_fragments,
+        &isolated_contacts,
         &closed_stitched,
     )?;
     let periodic_face_embeddings = periodic_embedding::certify_periodic_faces(
@@ -2662,6 +2688,7 @@ fn assemble_graph(
         edges,
         branches,
         curve_endpoints,
+        isolated_contacts,
         curve_fragments,
         curve_components,
         periodic_face_embeddings,

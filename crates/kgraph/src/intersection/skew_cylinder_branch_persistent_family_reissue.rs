@@ -144,6 +144,7 @@ pub fn reissue_persistent_skew_cylinder_finite_window_family(
         topologies: &bound_topologies,
         ranges: formula_windows,
         canonical_to_source: formula_to_source,
+        coincidence_tolerance: source.tolerance(),
     })
     .map_err(|_| IntersectionCertificateError::InvalidTraceFamily)?;
     let mut member_inputs = Vec::new();

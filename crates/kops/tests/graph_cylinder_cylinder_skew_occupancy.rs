@@ -12,6 +12,7 @@ use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
+use kgeom::vec::Point3;
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph,
     PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK,
@@ -67,6 +68,28 @@ fn exact_corner_pair() -> [Cylinder; 2] {
     ]
 }
 
+fn oblique_exact_corner_pair() -> ([Cylinder; 2], Frame) {
+    let frame = Frame::new(
+        kgeom::vec::Point3::new(2.5, -1.75, 0.625),
+        kgeom::vec::Vec3::new(0.48, 0.64, 0.6),
+        kgeom::vec::Vec3::new(0.8, -0.6, 0.0),
+    )
+    .unwrap();
+    let cylinders = [
+        Cylinder::new(frame.with_origin(frame.point_at(0.0, 0.0, 16.0)), 13.0).unwrap(),
+        Cylinder::new(
+            Frame::new(frame.point_at(-14.0, 0.0, 0.0), frame.x(), frame.y()).unwrap(),
+            20.0,
+        )
+        .unwrap(),
+    ];
+    (cylinders, frame)
+}
+
+fn world_corner_points() -> [Point3; 2] {
+    [Point3::new(5.0, -12.0, 16.0), Point3::new(5.0, 12.0, 16.0)]
+}
+
 fn graph_pair(cylinders: [Cylinder; 2]) -> (GeometryGraph, [kgraph::SurfaceHandle; 2]) {
     let mut graph = GeometryGraph::new();
     let handles = cylinders.map(|cylinder| graph.insert_surface(cylinder).unwrap());
@@ -99,6 +122,7 @@ fn assert_corner_topology(
     result: &kops::intersect::GraphSurfaceSurfaceIntersections,
     sources: [kgraph::SurfaceHandle; 2],
     source_cylinders: [Cylinder; 2],
+    expected_points: [Point3; 2],
 ) {
     let tolerance = Tolerances::default().linear();
     assert_eq!(result.branch_graph.source_surfaces, sources);
@@ -148,11 +172,12 @@ fn assert_corner_topology(
         assert_eq!(vertex.event, IntersectionBranchVertexEvent::IsolatedContact);
     }
 
-    carrier_points.sort_by(|first, second| first.y.total_cmp(&second.y));
-    for (point, expected_y) in carrier_points.into_iter().zip([-12.0, 12.0]) {
-        assert!((point.x - 5.0).abs() <= tolerance);
-        assert!((point.y - expected_y).abs() <= tolerance);
-        assert!((point.z - 16.0).abs() <= tolerance);
+    for point in carrier_points {
+        assert!(
+            expected_points
+                .into_iter()
+                .any(|expected| point.dist(expected) <= tolerance)
+        );
     }
     for (ordinal, edge) in result.branch_graph.edges.iter().enumerate() {
         assert_eq!(edge.endpoint_vertices, [2 + 2 * ordinal, 3 + 2 * ordinal]);
@@ -1193,7 +1218,7 @@ fn root_cluster_work_has_exact_n_and_atomic_n_minus_one_boundary() {
     );
     let exact_result = exact.result();
     let exact_result = exact_result.as_ref().unwrap();
-    assert_corner_topology(exact_result, handles, cylinders);
+    assert_corner_topology(exact_result, handles, cylinders, world_corner_points());
     assert_eq!(
         observed_work(exact.report(), SKEW_CYLINDER_ROOT_CLUSTER_WORK),
         required_work
@@ -1285,11 +1310,12 @@ fn exact_corner_contacts_are_complete_replay_and_swap_stable() {
     .unwrap();
 
     assert_eq!(forward, replay);
-    assert_corner_topology(&forward, handles, cylinders);
+    assert_corner_topology(&forward, handles, cylinders, world_corner_points());
     assert_corner_topology(
         &reversed,
         [handles[1], handles[0]],
         [cylinders[1], cylinders[0]],
+        world_corner_points(),
     );
     assert_eq!(reversed.raw, forward.raw.clone().swapped());
 
@@ -1306,6 +1332,31 @@ fn exact_corner_contacts_are_complete_replay_and_swap_stable() {
             [forward_parameters[1], forward_parameters[0]]
         );
     }
+}
+
+#[test]
+fn oblique_exact_corner_contacts_are_complete() {
+    let (cylinders, frame) = oblique_exact_corner_pair();
+    let windows = [
+        cylinder_window(range(0.0, 1.0)),
+        cylinder_window(range(0.0, 19.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+    let result = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_corner_topology(
+        &result,
+        handles,
+        cylinders,
+        [-12.0, 12.0].map(|y| frame.point_at(5.0, y, 16.0)),
+    );
 }
 
 #[test]

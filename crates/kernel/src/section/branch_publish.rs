@@ -1,7 +1,10 @@
 //! Publication dispatch for proof-bearing curved analytic branches.
 //!
-//! Discovery stays source-order deterministic; unsupported descriptors and
-//! indeterminate orientation evidence continue to fail closed as section gaps.
+//! Discovery stays source-order deterministic within each pair-family phase.
+//! Cylinder/Cylinder pairs precede Plane/Cylinder pairs because their exact
+//! isolated contacts are topology authority for later mixed-family ruling
+//! endpoints. Unsupported descriptors and indeterminate orientation evidence
+//! continue to fail closed as section gaps.
 
 use super::*;
 
@@ -68,191 +71,210 @@ pub(super) fn collect_certified_curved_branches(
     scope: &mut OperationScope<'_, '_>,
     acc: &mut SectionAccumulator,
 ) -> Result<()> {
-    for (a_index, &raw_a) in faces_a.iter().enumerate() {
-        let face_a = read(store.get(raw_a))?;
-        let surface_a = read(store.surface(face_a.surface))?;
-        for (b_index, &raw_b) in faces_b.iter().enumerate() {
-            let face_b = read(store.get(raw_b))?;
-            let surface_b = read(store.surface(face_b.surface))?;
-            let Some(pair_kind) = pair_kind(surface_a, surface_b) else {
-                continue;
-            };
-            *examined += 1;
-            scope
-                .ledger_mut()
-                .observe(SECTION_FACE_PAIRS, ResourceKind::Items, *examined)
-                .map_err(Error::from)?;
-            charge(scope, 1)?;
-            let broad_phase_empty = broad_phase::certifiably_disjoint(
-                envelopes_a[a_index],
-                envelopes_b[b_index],
-                linear,
-            );
-            if broad_phase_empty && pair_kind != CertifiedCurvedPair::CylinderCylinder {
-                continue;
-            }
-            let facades = [
-                FaceId::new(part_id.clone(), raw_a),
-                FaceId::new(part_id.clone(), raw_b),
-            ];
-            let (Some(domain_a), Some(domain_b)) = (face_a.domain(), face_b.domain()) else {
-                if broad_phase_empty {
+    for pair_family in [
+        CertifiedCurvedPair::CylinderCylinder,
+        CertifiedCurvedPair::PlaneCylinder,
+    ] {
+        for (a_index, &raw_a) in faces_a.iter().enumerate() {
+            let face_a = read(store.get(raw_a))?;
+            let surface_a = read(store.surface(face_a.surface))?;
+            for (b_index, &raw_b) in faces_b.iter().enumerate() {
+                let face_b = read(store.get(raw_b))?;
+                let surface_b = read(store.surface(face_b.surface))?;
+                let Some(pair_kind) = pair_kind(surface_a, surface_b) else {
+                    continue;
+                };
+                if pair_kind != pair_family {
                     continue;
                 }
-                acc.gaps.push(SectionGap {
-                    reason: GAP_PAIR_UNRESOLVED,
-                    faces: facades.to_vec(),
-                });
-                continue;
-            };
-            let source_domains = [[domain_a.u, domain_a.v], [domain_b.u, domain_b.v]];
-            let discovery_domains = match pair_kind {
-                CertifiedCurvedPair::PlaneCylinder => {
-                    circle_discovery::plane_cylinder_discovery_domains(
-                        [surface_a, surface_b],
-                        source_domains,
-                    )
+                *examined += 1;
+                scope
+                    .ledger_mut()
+                    .observe(SECTION_FACE_PAIRS, ResourceKind::Items, *examined)
+                    .map_err(Error::from)?;
+                charge(scope, 1)?;
+                let broad_phase_empty = broad_phase::certifiably_disjoint(
+                    envelopes_a[a_index],
+                    envelopes_b[b_index],
+                    linear,
+                );
+                if broad_phase_empty && pair_kind != CertifiedCurvedPair::CylinderCylinder {
+                    continue;
                 }
-                CertifiedCurvedPair::CylinderCylinder => source_domains,
-            };
-            let intersections = match intersect_bounded_graph_surfaces_in_scope(
-                store.geometry(),
-                face_a.surface,
-                discovery_domains[0],
-                face_b.surface,
-                discovery_domains[1],
-                scope,
-            ) {
-                Ok(intersections) => intersections,
-                Err(error) => {
-                    if let Some(error) = lift_limit_error(error.clone()) {
-                        return Err(error);
-                    }
-                    // Cylinder/Cylinder queries that were independently
-                    // rejected by conservative source-face envelopes are
-                    // still offered to the analytic layer so exact global
-                    // separation provenance can be retained. Refusal cannot
-                    // invalidate that earlier complete-domain exclusion proof.
+                let facades = [
+                    FaceId::new(part_id.clone(), raw_a),
+                    FaceId::new(part_id.clone(), raw_b),
+                ];
+                let (Some(domain_a), Some(domain_b)) = (face_a.domain(), face_b.domain()) else {
                     if broad_phase_empty {
                         continue;
                     }
-                    let recovered = if pair_kind == CertifiedCurvedPair::PlaneCylinder {
-                        semantic_ruling::recover(
-                            store,
-                            [raw_a, raw_b],
-                            &facades,
+                    acc.gaps.push(SectionGap {
+                        reason: GAP_PAIR_UNRESOLVED,
+                        faces: facades.to_vec(),
+                    });
+                    continue;
+                };
+                let source_domains = [[domain_a.u, domain_a.v], [domain_b.u, domain_b.v]];
+                let discovery_domains = match pair_kind {
+                    CertifiedCurvedPair::PlaneCylinder => {
+                        circle_discovery::plane_cylinder_discovery_domains(
                             [surface_a, surface_b],
-                            [face_a.sense, face_b.sense],
-                            discovery_domains,
-                            &error,
-                            scope,
-                        )?
-                    } else {
-                        None
-                    };
-                    if let Some(branches) = recovered {
-                        for branch in branches {
-                            ruling_publish::append_branch(
+                            source_domains,
+                        )
+                    }
+                    CertifiedCurvedPair::CylinderCylinder => source_domains,
+                };
+                let intersections = match intersect_bounded_graph_surfaces_in_scope(
+                    store.geometry(),
+                    face_a.surface,
+                    discovery_domains[0],
+                    face_b.surface,
+                    discovery_domains[1],
+                    scope,
+                ) {
+                    Ok(intersections) => intersections,
+                    Err(error) => {
+                        if let Some(error) = lift_limit_error(error.clone()) {
+                            return Err(error);
+                        }
+                        // Cylinder/Cylinder queries that were independently
+                        // rejected by conservative source-face envelopes are
+                        // still offered to the analytic layer so exact global
+                        // separation provenance can be retained. Refusal cannot
+                        // invalidate that earlier complete-domain exclusion proof.
+                        if broad_phase_empty {
+                            continue;
+                        }
+                        let recovered = if pair_kind == CertifiedCurvedPair::PlaneCylinder {
+                            semantic_ruling::recover(
                                 store,
                                 [raw_a, raw_b],
                                 &facades,
-                                branch,
+                                [surface_a, surface_b],
+                                [face_a.sense, face_b.sense],
+                                discovery_domains,
+                                &error,
+                                scope,
+                            )?
+                        } else {
+                            None
+                        };
+                        if let Some(branches) = recovered {
+                            let endpoint_proof =
+                            ruling_publish::RulingEndpointCoincidenceProof::from_isolated_contacts(
+                                &acc.isolated_contacts,
+                            );
+                            for branch in branches {
+                                let endpoint_proof = endpoint_proof.clone();
+                                ruling_publish::append_branch_with_endpoint_proof(
+                                    store,
+                                    [raw_a, raw_b],
+                                    &facades,
+                                    branch,
+                                    |_, _, _| Ok(endpoint_proof),
+                                    root_identity,
+                                    scope,
+                                    acc,
+                                )?;
+                            }
+                        } else {
+                            acc.gaps.push(SectionGap {
+                                reason: GAP_PAIR_UNRESOLVED,
+                                faces: facades.to_vec(),
+                            });
+                        }
+                        continue;
+                    }
+                };
+                if intersections.raw.is_proven_empty() {
+                    // `Ok` is the proof boundary: the graph-aware solver owns the
+                    // complete-domain exclusion theorem for its admitted surface
+                    // pair. Its closed Cylinder/Cylinder admissions own both
+                    // parallel exterior separation and strict-negative skew
+                    // discriminant misses; Section neither reconstructs nor
+                    // tolerance-tests those relations.
+                    // Require the verified graph payload to agree before
+                    // publishing the result as a gap-free empty pair.
+                    let parallel_miss = intersections
+                        .parallel_cylinder_exterior_radial_separation()
+                        .is_some();
+                    let skew_miss = intersections
+                        .skew_cylinder_strict_discriminant_miss()
+                        .is_some();
+                    let certified_empty = match pair_kind {
+                        CertifiedCurvedPair::PlaneCylinder => !parallel_miss && !skew_miss,
+                        CertifiedCurvedPair::CylinderCylinder => parallel_miss ^ skew_miss,
+                    };
+                    if intersections.branch_graph.vertices.is_empty()
+                        && intersections.branch_graph.edges.is_empty()
+                        && certified_empty
+                    {
+                        if parallel_miss {
+                            acc.cylinder_cylinder_exterior_radial_separations.push(
+                                SectionCylinderCylinderExteriorRadialSeparation {
+                                    faces: facades.clone(),
+                                },
+                            );
+                        } else if skew_miss {
+                            acc.skew_cylinder_strict_discriminant_misses
+                                .push(SectionSkewCylinderStrictDiscriminantMiss { faces: facades });
+                        }
+                        continue;
+                    }
+                    acc.gaps.push(SectionGap {
+                        reason: GAP_PAIR_UNRESOLVED,
+                        faces: facades.to_vec(),
+                    });
+                    continue;
+                }
+                let isolated_contacts = intersections.skew_cylinder_isolated_contacts();
+                let points_are_represented = intersections.raw.points.is_empty()
+                    || pair_kind == CertifiedCurvedPair::CylinderCylinder
+                        && isolated_contacts.len() == intersections.raw.points.len();
+                if !intersections.raw.is_complete()
+                    || !points_are_represented
+                    || !intersections.raw.regions.is_empty()
+                {
+                    acc.gaps.push(SectionGap {
+                        reason: GAP_PAIR_UNRESOLVED,
+                        faces: facades.to_vec(),
+                    });
+                    continue;
+                }
+                match pair_kind {
+                    CertifiedCurvedPair::PlaneCylinder => {
+                        for edge in &intersections.branch_graph.edges {
+                            append_plane_cylinder_branch(
+                                store,
+                                [raw_a, raw_b],
+                                &facades,
+                                edge,
+                                &intersections.branch_graph.vertices,
+                                [surface_a, surface_b],
+                                [face_a.sense, face_b.sense],
                                 root_identity,
                                 scope,
                                 acc,
                             )?;
                         }
-                    } else {
-                        acc.gaps.push(SectionGap {
-                            reason: GAP_PAIR_UNRESOLVED,
-                            faces: facades.to_vec(),
-                        });
                     }
-                    continue;
-                }
-            };
-            if intersections.raw.is_proven_empty() {
-                // `Ok` is the proof boundary: the graph-aware solver owns the
-                // complete-domain exclusion theorem for its admitted surface
-                // pair. Its closed Cylinder/Cylinder admissions own both
-                // parallel exterior separation and strict-negative skew
-                // discriminant misses; Section neither reconstructs nor
-                // tolerance-tests those relations.
-                // Require the verified graph payload to agree before
-                // publishing the result as a gap-free empty pair.
-                let parallel_miss = intersections
-                    .parallel_cylinder_exterior_radial_separation()
-                    .is_some();
-                let skew_miss = intersections
-                    .skew_cylinder_strict_discriminant_miss()
-                    .is_some();
-                let certified_empty = match pair_kind {
-                    CertifiedCurvedPair::PlaneCylinder => !parallel_miss && !skew_miss,
-                    CertifiedCurvedPair::CylinderCylinder => parallel_miss ^ skew_miss,
-                };
-                if intersections.branch_graph.vertices.is_empty()
-                    && intersections.branch_graph.edges.is_empty()
-                    && certified_empty
-                {
-                    if parallel_miss {
-                        acc.cylinder_cylinder_exterior_radial_separations.push(
-                            SectionCylinderCylinderExteriorRadialSeparation {
-                                faces: facades.clone(),
-                            },
-                        );
-                    } else if skew_miss {
-                        acc.skew_cylinder_strict_discriminant_misses
-                            .push(SectionSkewCylinderStrictDiscriminantMiss { faces: facades });
-                    }
-                    continue;
-                }
-                acc.gaps.push(SectionGap {
-                    reason: GAP_PAIR_UNRESOLVED,
-                    faces: facades.to_vec(),
-                });
-                continue;
-            }
-            if !intersections.raw.is_complete()
-                || !intersections.raw.points.is_empty()
-                || !intersections.raw.regions.is_empty()
-            {
-                acc.gaps.push(SectionGap {
-                    reason: GAP_PAIR_UNRESOLVED,
-                    faces: facades.to_vec(),
-                });
-                continue;
-            }
-            match pair_kind {
-                CertifiedCurvedPair::PlaneCylinder => {
-                    for edge in &intersections.branch_graph.edges {
-                        append_plane_cylinder_branch(
+                    CertifiedCurvedPair::CylinderCylinder => {
+                        skew_cylinder_fragment::append_face_pair_branches(
                             store,
                             [raw_a, raw_b],
                             &facades,
-                            edge,
+                            &intersections.branch_graph.edges,
+                            isolated_contacts,
                             &intersections.branch_graph.vertices,
                             [surface_a, surface_b],
                             [face_a.sense, face_b.sense],
+                            linear,
                             root_identity,
                             scope,
                             acc,
                         )?;
                     }
-                }
-                CertifiedCurvedPair::CylinderCylinder => {
-                    skew_cylinder_fragment::append_face_pair_branches(
-                        store,
-                        [raw_a, raw_b],
-                        &facades,
-                        &intersections.branch_graph.edges,
-                        &intersections.branch_graph.vertices,
-                        [surface_a, surface_b],
-                        [face_a.sense, face_b.sense],
-                        linear,
-                        root_identity,
-                        scope,
-                        acc,
-                    )?;
                 }
             }
         }
@@ -300,11 +322,15 @@ fn append_plane_cylinder_branch(
         }
     };
     if matches!(branch.carrier, SectionCarrier::Line { .. }) {
-        return ruling_publish::append_branch(
+        let endpoint_proof = ruling_publish::RulingEndpointCoincidenceProof::from_isolated_contacts(
+            &acc.isolated_contacts,
+        );
+        return ruling_publish::append_branch_with_endpoint_proof(
             store,
             raw_faces,
             facades,
             branch,
+            |_, _, _| Ok(endpoint_proof),
             root_identity,
             scope,
             acc,
