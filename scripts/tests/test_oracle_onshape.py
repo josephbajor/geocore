@@ -476,6 +476,24 @@ class CornerContactProbeTests(unittest.TestCase):
         self.assertIn("BooleanOperationType.SUBTRACTION", rendered)
         self.assertNotIn("__LIBRARY_VERSION__", rendered)
 
+    def test_matching_spec_unwraps_the_live_onshape_message_envelope(self):
+        response = {
+            "featureSpecs": [
+                {
+                    "message": {
+                        "featureType": "cornerContactSubtract",
+                        "namespace": "probe-namespace",
+                    },
+                    "type": 129,
+                    "typeName": "BTFeatureSpec",
+                }
+            ]
+        }
+        self.assertEqual(
+            host_probes._matching_spec(response),
+            response["featureSpecs"][0]["message"],
+        )
+
     def test_probe_preserves_native_and_roundtrip_structure_then_cleans_up(self):
         details = {
             "errorEnum": "NO_ERROR",
@@ -509,8 +527,12 @@ class CornerContactProbeTests(unittest.TestCase):
             return_value={
                 "featureSpecs": [
                     {
-                        "featureType": "cornerContactSubtract",
-                        "namespace": "probe-namespace",
+                        "message": {
+                            "featureType": "cornerContactSubtract",
+                            "namespace": "probe-namespace",
+                        },
+                        "type": 129,
+                        "typeName": "BTFeatureSpec",
                     }
                 ]
             },
@@ -542,6 +564,11 @@ class CornerContactProbeTests(unittest.TestCase):
             self.assertEqual(
                 Path(tmp, host_probes.ROUNDTRIP_XT).read_bytes(),
                 b"**PARASOLID replay",
+            )
+            specs = json.loads(Path(tmp, "feature-studio-specs.json").read_text())
+            self.assertEqual(
+                specs["featureSpecs"][0]["message"]["featureType"],
+                "cornerContactSubtract",
             )
             self.assertEqual(
                 [call.args[2] for call in delete.call_args_list], ["ps", "fs"]

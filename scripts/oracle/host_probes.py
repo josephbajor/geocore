@@ -234,9 +234,13 @@ def _probe_feature(spec):
 
 
 def _matching_spec(response):
+    specs = [
+        spec.get("message") if isinstance(spec.get("message"), dict) else spec
+        for spec in response.get("featureSpecs") or []
+    ]
     matches = [
         spec
-        for spec in response.get("featureSpecs") or []
+        for spec in specs
         if spec.get("featureType") == "cornerContactSubtract"
     ]
     if len(matches) != 1:
@@ -298,9 +302,11 @@ def run_corner_contact_subtract_probe(transport, config, output_dir, revision="-
             transport, config, feature_studio_id, template, source
         )
         _write_json(output / "feature-studio-update.json", update)
-        spec = _matching_spec(
-            get_feature_studio_specs(transport, config, feature_studio_id)
+        feature_specs = get_feature_studio_specs(
+            transport, config, feature_studio_id
         )
+        _write_json(output / "feature-studio-specs.json", feature_specs)
+        spec = _matching_spec(feature_specs)
 
         part_studio = create_part_studio(transport, config, "corner-contact-oracle-result")
         part_studio_id = part_studio.get("id")
