@@ -126,6 +126,30 @@ new sixteenth payload has not yet received licensed-host evidence. Later writer-
 changes must also mark the record stale and queue a final-byte replay under the
 invalidation rule above.
 
+The corner-contact representation blocker has a host-native observational
+suite rather than a kernel-authored output fixture:
+
+```sh
+python3 scripts/oracle_loop.py probe corner-contact-subtract \
+  --output-dir oracle/probes/onshape/corner-contact-subtract
+```
+
+It creates disposable Feature Studio and Part Studio tabs, constructs the exact
+finite-cylinder `first - second` case from
+`scripts/oracle/probes/corner_contact_subtract.fs`, and asks Onshape's licensed
+Parasolid to perform the Subtract. It then exports the native result as X_T,
+uploads that X_T through the normal translation path, re-exports it, and
+compares normalized body/face/loop/edge/vertex structure. Both raw X_T files,
+both raw body-detail responses, normalized summaries, the rendered
+FeatureScript, and hashes are retained in the evidence directory. The
+temporary tabs are deleted after evidence capture.
+
+This probe deliberately has no expected body count: rejection, multiple
+bodies, or a one-body point-contact representation are all findings. It is not
+part of either certification identity and cannot make a conformance claim by
+itself. The raw native/replay X_T evidence decides the kernel representation
+contract before the blocked Boolean is enabled.
+
 ## 2. Manual catch-up entry points
 
 `scripts/oracle_loop.py` drives the entire loop through Onshape's REST API
@@ -135,10 +159,11 @@ repository CI has no host credentials and never invokes `bundle`.
 
 The shared path is the manual **Licensed-host oracle catch-up** GitHub Action
 (`.github/workflows/oracle-catchup.yml`), dispatched from the default branch.
-Protect its `onshape-oracle` environment and configure `ONSHAPE_ACCESS_KEY`,
+Choose `base`, `boolean`, or the host-native `corner-contact` probe. Protect
+its `onshape-oracle` environment and configure `ONSHAPE_ACCESS_KEY`,
 `ONSHAPE_SECRET_KEY`, `ONSHAPE_DOCUMENT_ID`, `ONSHAPE_WORKSPACE_ID`, and
-`ONSHAPE_ELEMENT_ID` as secrets. Choose `base` or `boolean`, optionally select
-exact manifest fixture names with the locally generated bundle SHA-256, confirm
+`ONSHAPE_ELEMENT_ID` as secrets. For `base` or `boolean`, optionally select
+exact manifest fixture names with the locally generated bundle SHA-256; confirm
 the spend, and set the request ceiling.
 The action serializes runs and archives exact identities, outboxes, host re-exports,
 logs, metadata, and partial result rows; it never changes a certification record

@@ -43,18 +43,30 @@ The trusted shell cascade and `LIVE_SHELL_CERTIFIERS` remain byte-identical at
 their existing eight entries. No ninth certifier was added, and the diagnostic
 Stage 4 experiment was discarded.
 
-## What must be resolved before Boolean enablement
+## Representation decision is oracle-bound
 
-The kernel needs a family-general, regularized representation decision for a
-solid whose selected boundary pieces meet only at certified isolated points.
-That decision must either:
+Decomposing the selected set into vertex-manifold bodies and extending the
+store/checker contract for point-contact solids are hypotheses, not choices to
+make from first principles. Parasolid X_T round-trip is the representation
+contract, so Stage 4 stays blocked until licensed Parasolid shows what its own
+Subtract emits for this exact topology.
 
-1. decompose the selected set into honest vertex-manifold output bodies using
-   proof evidence that applies beyond this fixture, or
-2. extend the store/checker representation contract for point-contact solids
-   and route it through the existing trusted theorem architecture.
+The manual R5 `corner-contact` suite now constructs the two fixture cylinders
+inside Onshape from the same exact literals and evaluates `first - second`:
 
-Until one of those routes proves simple loops, vertex links, shell embedding,
-and shell orientation under Full validation, `AssemblyRejected` is the
-required covenant-preserving result.
+- first cylinder: radius 13, axis `(0,0,16)` to `(0,0,17)`;
+- second cylinder: radius 20, axis `(-14,0,0)` to `(5,0,0)`; and
+- expected isolated contact positions: `(5,-12,16)` and `(5,12,16)`.
 
+The probe does not assert a body count. It retains Onshape's native body,
+face, loop, edge, and vertex structure; exports the result as raw X_T; imports
+that X_T back into Onshape; retains the replay structure and re-export; and
+compares normalized topology with host ids removed. This distinguishes at
+least separate bodies, one body with topologically shared contact vertices,
+and coincident-but-distinct vertices. The raw X_T remains authoritative for
+shell/region structure not exposed by the body-details API.
+
+The observed native and replay representation will select the implementation
+route. Until that evidence is recorded and its topology can pass Full
+validation without a new trusted certifier, `AssemblyRejected` is the required
+covenant-preserving result.
