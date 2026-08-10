@@ -187,6 +187,23 @@ def decode_json(status, body, action):
         raise OracleError("{} returned non-JSON body".format(action))
 
 
+def request_json(transport, method, path, payload, action):
+    """Issue one JSON request and decode its response.
+
+    The host-probe path uses the same bounded transport as fixture replay so
+    Feature Studio, Part Studio, and cleanup calls count against the one
+    manually dispatched request ceiling.
+    """
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    status, response = transport.request(
+        method,
+        path,
+        body,
+        "application/json;charset=UTF-8; qs=0.09",
+    )
+    return decode_json(status, response, action)
+
+
 def load_config(path=CONFIG_PATH):
     """Load and validate the untracked document-coordinates file."""
     path = Path(path)
@@ -281,6 +298,105 @@ def list_elements(transport, config):
     path = "/api/v6/documents/d/{document_id}/w/{workspace_id}/elements".format(**config)
     status, body = transport.request("GET", path)
     return decode_json(status, body, "element list")
+
+
+def create_feature_studio(transport, config, name):
+    """Create one disposable Feature Studio and return its element record."""
+    path = "/api/featurestudios/d/{document_id}/w/{workspace_id}".format(**config)
+    return request_json(
+        transport,
+        "POST",
+        path,
+        {"name": name},
+        "Feature Studio creation",
+    )
+
+
+def get_feature_studio_contents(transport, config, element_id):
+    """Read the host-generated Feature Studio template and version metadata."""
+    path = "/api/featurestudios/d/{document_id}/w/{workspace_id}/e/{target_element_id}".format(
+        target_element_id=element_id, **config
+    )
+    status, body = transport.request("GET", path)
+    return decode_json(status, body, "Feature Studio contents")
+
+
+def update_feature_studio_contents(transport, config, element_id, template, contents):
+    """Replace a disposable Feature Studio with the rendered probe source."""
+    path = "/api/featurestudios/d/{document_id}/w/{workspace_id}/e/{target_element_id}".format(
+        target_element_id=element_id, **config
+    )
+    payload = {
+        "contents": contents,
+        "serializationVersion": template.get("serializationVersion", ""),
+        "sourceMicroversion": template.get("sourceMicroversion", ""),
+        "rejectMicroversionSkew": True,
+    }
+    if not payload["serializationVersion"] or not payload["sourceMicroversion"]:
+        raise OracleError("Feature Studio template omitted version metadata")
+    return request_json(
+        transport,
+        "POST",
+        path,
+        payload,
+        "Feature Studio update",
+    )
+
+
+def get_feature_studio_specs(transport, config, element_id):
+    """Return the callable feature specifications exported by one studio."""
+    path = (
+        "/api/featurestudios/d/{document_id}/w/{workspace_id}/e/{target_element_id}/featurespecs"
+    ).format(target_element_id=element_id, **config)
+    status, body = transport.request("GET", path)
+    return decode_json(status, body, "Feature Studio specs")
+
+
+def create_part_studio(transport, config, name):
+    """Create one disposable Part Studio and return its element record."""
+    path = "/api/v9/partstudios/d/{document_id}/w/{workspace_id}".format(**config)
+    return request_json(
+        transport,
+        "POST",
+        path,
+        {"name": name},
+        "Part Studio creation",
+    )
+
+
+def add_part_studio_feature(transport, config, element_id, feature):
+    """Add one serialized standard/custom feature to a Part Studio."""
+    path = "/api/v9/partstudios/d/{document_id}/w/{workspace_id}/e/{target_element_id}/features".format(
+        target_element_id=element_id, **config
+    )
+    return request_json(
+        transport,
+        "POST",
+        path,
+        {"btType": "BTFeatureDefinitionCall-1406", "feature": feature},
+        "Part Studio feature creation",
+    )
+
+
+def get_part_studio_body_details(transport, config, element_id):
+    """Read explicit body/face/loop/edge/vertex structure from a Part Studio."""
+    path = (
+        "/api/v9/partstudios/d/{document_id}/w/{workspace_id}/e/{target_element_id}/bodydetails"
+        "?rollbackBarIndex=-1"
+    ).format(target_element_id=element_id, **config)
+    status, body = transport.request("GET", path)
+    return decode_json(status, body, "Part Studio body details")
+
+
+def delete_element(transport, config, element_id):
+    """Delete one disposable element created by a host probe."""
+    path = "/api/elements/d/{document_id}/w/{workspace_id}/e/{target_element_id}".format(
+        target_element_id=element_id, **config
+    )
+    status, body = transport.request("DELETE", path)
+    if status < 200 or status >= 300:
+        excerpt = body.decode("utf-8", errors="replace")[:200] if body else ""
+        raise OracleError("element cleanup failed: HTTP {} {}".format(status, excerpt))
 
 
 def find_translated_part_studio(transport, config):

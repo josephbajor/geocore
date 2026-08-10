@@ -15,7 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from oracle import cli, onshape  # noqa: E402
+from oracle import cli, host_probes, onshape  # noqa: E402
 from oracle.cli import bundle_paths, results_row, verdict_line  # noqa: E402
 
 
@@ -344,6 +344,209 @@ class PartStudioDiscoveryTests(unittest.TestCase):
             transport = FakeTransport([json_response(elements)])
             with self.assertRaises(onshape.OracleError):
                 onshape.find_translated_part_studio(transport, self.CONFIG)
+
+
+class HostModelingApiTests(unittest.TestCase):
+    CONFIG = TranslationLoopTests.CONFIG
+
+    def test_disposable_elements_and_feature_calls_use_workspace_endpoints(self):
+        transport = FakeTransport(
+            [
+                json_response({"id": "fs1"}),
+                json_response({"id": "ps1"}),
+                json_response({"featureState": {"featureStatus": "OK"}}),
+                (204, b""),
+            ]
+        )
+        self.assertEqual(
+            onshape.create_feature_studio(transport, self.CONFIG, "probe")["id"],
+            "fs1",
+        )
+        self.assertEqual(
+            onshape.create_part_studio(transport, self.CONFIG, "result")["id"],
+            "ps1",
+        )
+        response = onshape.add_part_studio_feature(
+            transport,
+            self.CONFIG,
+            "ps1",
+            {"btType": "BTMFeature-134", "featureType": "probe"},
+        )
+        self.assertEqual(response["featureState"]["featureStatus"], "OK")
+        onshape.delete_element(transport, self.CONFIG, "ps1")
+
+        self.assertEqual(
+            transport.calls[0][1],
+            "/api/featurestudios/d/{}/w/{}".format("a" * 24, "b" * 24),
+        )
+        self.assertEqual(
+            transport.calls[1][1],
+            "/api/v9/partstudios/d/{}/w/{}".format("a" * 24, "b" * 24),
+        )
+        self.assertIn("/e/ps1/features", transport.calls[2][1])
+        self.assertEqual(transport.calls[3][0], "DELETE")
+
+    def test_feature_studio_update_binds_host_version_metadata(self):
+        transport = FakeTransport([json_response({"sourceMicroversion": "next"})])
+        response = onshape.update_feature_studio_contents(
+            transport,
+            self.CONFIG,
+            "fs1",
+            {"serializationVersion": "1.2.4", "sourceMicroversion": "source"},
+            "FeatureScript 3000;",
+        )
+        self.assertEqual(response["sourceMicroversion"], "next")
+        payload = json.loads(transport.calls[0][2])
+        self.assertEqual(payload["serializationVersion"], "1.2.4")
+        self.assertEqual(payload["sourceMicroversion"], "source")
+        self.assertTrue(payload["rejectMicroversionSkew"])
+
+
+class CornerContactProbeTests(unittest.TestCase):
+    @staticmethod
+    def body_with_coincident_distinct_vertices():
+        vertices = [
+            {"id": "v0", "point": {"x": 5, "y": 12, "z": 16}},
+            {"id": "v1", "point": {"x": 6, "y": 12, "z": 16}},
+            {"id": "v2", "point": {"x": 5, "y": 13, "z": 16}},
+            {"id": "v3", "point": {"x": 5, "y": 12, "z": 16}},
+            {"id": "v4", "point": {"x": 4, "y": 12, "z": 16}},
+            {"id": "v5", "point": {"x": 5, "y": 11, "z": 16}},
+        ]
+        edges = [
+            {"id": "e0", "vertices": ["v0", "v1"], "curve": {"type": "LINE"}},
+            {"id": "e1", "vertices": ["v1", "v2"], "curve": {"type": "LINE"}},
+            {"id": "e2", "vertices": ["v2", "v0"], "curve": {"type": "LINE"}},
+            {"id": "e3", "vertices": ["v3", "v4"], "curve": {"type": "LINE"}},
+            {"id": "e4", "vertices": ["v4", "v5"], "curve": {"type": "LINE"}},
+            {"id": "e5", "vertices": ["v5", "v3"], "curve": {"type": "LINE"}},
+        ]
+        faces = []
+        for index, edge_ids in enumerate((("e0", "e1", "e2"), ("e3", "e4", "e5"))):
+            faces.append(
+                {
+                    "id": "f{}".format(index),
+                    "surface": {"type": "PLANE"},
+                    "loops": [
+                        {
+                            "coedges": [
+                                {"edgeId": edge_id, "orientation": True}
+                                for edge_id in edge_ids
+                            ]
+                        }
+                    ],
+                }
+            )
+        return {"type": "SOLID", "faces": faces, "edges": edges, "vertices": vertices}
+
+    def test_summary_retains_point_coincidence_without_host_ids(self):
+        summary = host_probes.summarize_body_details(
+            {
+                "errorEnum": "NO_ERROR",
+                "bodies": [self.body_with_coincident_distinct_vertices()],
+            }
+        )
+        self.assertEqual(summary["body_count"], 1)
+        self.assertEqual(summary["bodies"][0]["edge_face_component_sizes"], [1, 1])
+        self.assertEqual(summary["bodies"][0]["vertex_face_component_sizes"], [1, 1])
+        self.assertEqual(
+            summary["coincident_vertex_clusters"],
+            [
+                {
+                    "point_m": [5.0, 12.0, 16.0],
+                    "multiplicity": 2,
+                    "per_body_multiplicities": [2],
+                }
+            ],
+        )
+        self.assertEqual(summary["expected_contact_vertices"][1]["multiplicity"], 2)
+
+    def test_summary_rejects_nonfinite_vertex_coordinates(self):
+        body = self.body_with_coincident_distinct_vertices()
+        body["vertices"][0]["point"]["x"] = float("nan")
+        with self.assertRaisesRegex(onshape.OracleError, "finite point"):
+            host_probes.summarize_body_details({"bodies": [body]})
+
+    def test_probe_source_reuses_the_host_selected_library_version(self):
+        rendered = host_probes.render_feature_source(
+            "FeatureScript 3123;\nimport(path : \"onshape/std/geometry.fs\", version : \"3123.0\");\n"
+        )
+        self.assertIn("FeatureScript 3123;", rendered)
+        self.assertIn('version : "3123.0"', rendered)
+        self.assertIn("BooleanOperationType.SUBTRACTION", rendered)
+        self.assertNotIn("__LIBRARY_VERSION__", rendered)
+
+    def test_probe_preserves_native_and_roundtrip_structure_then_cleans_up(self):
+        details = {
+            "errorEnum": "NO_ERROR",
+            "bodies": [self.body_with_coincident_distinct_vertices()],
+        }
+        accepted = onshape.FixtureResult(
+            name=host_probes.NATIVE_XT,
+            size=12,
+            state="DONE",
+            reason="",
+            classification="",
+            result_element_ids=["translated"],
+        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            host_probes, "find_translated_part_studio", return_value="baseline"
+        ), mock.patch.object(
+            host_probes, "create_feature_studio", return_value={"id": "fs"}
+        ), mock.patch.object(
+            host_probes,
+            "get_feature_studio_contents",
+            return_value={
+                "contents": "FeatureScript 3123;",
+                "serializationVersion": "1.2.4",
+                "sourceMicroversion": "source",
+            },
+        ), mock.patch.object(
+            host_probes, "update_feature_studio_contents", return_value={}
+        ), mock.patch.object(
+            host_probes,
+            "get_feature_studio_specs",
+            return_value={
+                "featureSpecs": [
+                    {
+                        "featureType": "cornerContactSubtract",
+                        "namespace": "probe-namespace",
+                    }
+                ]
+            },
+        ), mock.patch.object(
+            host_probes, "create_part_studio", return_value={"id": "ps"}
+        ), mock.patch.object(
+            host_probes,
+            "add_part_studio_feature",
+            return_value={"featureState": {"featureStatus": "OK"}},
+        ), mock.patch.object(
+            host_probes, "get_part_studio_body_details", side_effect=[details, details]
+        ), mock.patch.object(
+            host_probes,
+            "reexport_element",
+            side_effect=[b"**PARASOLID native", b"**PARASOLID replay"],
+        ), mock.patch.object(
+            host_probes, "run_fixture", return_value=accepted
+        ), mock.patch.object(
+            host_probes, "delete_element"
+        ) as delete:
+            code = host_probes.run_corner_contact_subtract_probe(
+                object(), {}, tmp, revision="abc123"
+            )
+            self.assertEqual(code, 0)
+            manifest = json.loads(Path(tmp, "manifest.json").read_text())
+            self.assertEqual(manifest["status"], "stable")
+            self.assertTrue(manifest["topology_stable"])
+            self.assertEqual(Path(tmp, host_probes.NATIVE_XT).read_bytes(), b"**PARASOLID native")
+            self.assertEqual(
+                Path(tmp, host_probes.ROUNDTRIP_XT).read_bytes(),
+                b"**PARASOLID replay",
+            )
+            self.assertEqual(
+                [call.args[2] for call in delete.call_args_list], ["ps", "fs"]
+            )
+            self.assertEqual(json.loads(Path(tmp, "cleanup.json").read_text())["errors"], [])
 
 
 class ReexportTests(unittest.TestCase):

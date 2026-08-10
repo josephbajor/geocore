@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Exact generated bundle to validate
+        description: Generated bundle or host-native probe to validate
         required: true
         default: base
         type: choice
         options:
           - base
           - boolean
+          - corner-contact
       request_limit:
         description: Total Onshape API request ceiling for this session (1-400)
         required: true
@@ -66,7 +67,7 @@ jobs:
             exit 1
           fi
           case "$SUITE" in
-            base|boolean) ;;
+            base|boolean|corner-contact) ;;
             *) echo "Unknown suite: $SUITE"; exit 1 ;;
           esac
           if [[ -n "$EXPECTED_BUNDLE_SHA256" && ! "$EXPECTED_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
@@ -74,6 +75,10 @@ jobs:
             exit 1
           fi
           if [[ -n "$FIXTURES" ]]; then
+            if [[ "$SUITE" == corner-contact ]]; then
+              echo "The corner-contact host probe does not accept bundle fixture names."
+              exit 1
+            fi
             if [[ -z "$EXPECTED_BUNDLE_SHA256" ]]; then
               echo "Selected-fixture batches require expected_bundle_sha256."
               exit 1
@@ -85,6 +90,10 @@ jobs:
                 exit 1
               fi
             done
+          fi
+          if [[ "$SUITE" == corner-contact && -n "$EXPECTED_BUNDLE_SHA256" ]]; then
+            echo "The corner-contact host probe is source-bound, not bundle-bound."
+            exit 1
           fi
           echo "request_limit=$REQUEST_LIMIT" >> "$GITHUB_OUTPUT"
           echo "### Licensed-host catch-up" >> "$GITHUB_STEP_SUMMARY"
@@ -254,6 +263,40 @@ jobs:
           echo "completion_code=$complete" >> "$GITHUB_OUTPUT"
           echo "- Boolean CLI exit: \`$code\`; requests: \`${used:-unknown}\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Run corner-contact representation probe
+        id: corner_contact
+        if: ${{ inputs.suite == 'corner-contact' }}
+        shell: bash
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+          ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
+          ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
+          ONSHAPE_ELEMENT_ID: ${{ secrets.ONSHAPE_ELEMENT_ID }}
+          ONSHAPE_REQUEST_LIMIT: ${{ steps.budget.outputs.request_limit }}
+        run: |
+          set +e
+          python3 scripts/oracle_loop.py probe corner-contact-subtract \
+            --output-dir "$RUNNER_TEMP/oracle-evidence/corner-contact" \
+            --request-count-file "$RUNNER_TEMP/oracle-evidence/corner-contact-requests.txt" \
+            --completion-file "$RUNNER_TEMP/oracle-evidence/corner-contact-complete.txt" \
+            2>&1 \
+            | sed -e "s/$ONSHAPE_DOCUMENT_ID/[redacted]/g" \
+                  -e "s/$ONSHAPE_WORKSPACE_ID/[redacted]/g" \
+                  -e "s/$ONSHAPE_ELEMENT_ID/[redacted]/g" \
+            | tee "$RUNNER_TEMP/oracle-evidence/corner-contact.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          code=${statuses[0]}
+          if [[ "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+            code=2
+          fi
+          used=$(cat "$RUNNER_TEMP/oracle-evidence/corner-contact-requests.txt" 2>/dev/null || true)
+          complete=$(cat "$RUNNER_TEMP/oracle-evidence/corner-contact-complete.txt" 2>/dev/null || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "completion_code=$complete" >> "$GITHUB_OUTPUT"
+          echo "- Corner-contact CLI exit: \`$code\`; requests: \`${used:-unknown}\` (1 means a completed representation finding)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload exact catch-up evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -272,6 +315,8 @@ jobs:
           BASE_COMPLETION: ${{ steps.base.outputs.completion_code }}
           BOOLEAN_EXIT: ${{ steps.boolean.outputs.exit_code }}
           BOOLEAN_COMPLETION: ${{ steps.boolean.outputs.completion_code }}
+          CORNER_CONTACT_EXIT: ${{ steps.corner_contact.outputs.exit_code }}
+          CORNER_CONTACT_COMPLETION: ${{ steps.corner_contact.outputs.completion_code }}
         run: |
           if [[ "$SUITE" == base ]]; then
             if [[ -z "$BASE_EXIT" || "$BASE_COMPLETION" != "$BASE_EXIT" || "$BASE_EXIT" -ge 2 ]]; then
@@ -282,6 +327,12 @@ jobs:
           if [[ "$SUITE" == boolean ]]; then
             if [[ -z "$BOOLEAN_EXIT" || "$BOOLEAN_COMPLETION" != "$BOOLEAN_EXIT" || "$BOOLEAN_EXIT" -ne 0 ]]; then
               echo "Boolean catch-up did not complete the selected fixture batch cleanly."
+              exit 1
+            fi
+          fi
+          if [[ "$SUITE" == corner-contact ]]; then
+            if [[ -z "$CORNER_CONTACT_EXIT" || "$CORNER_CONTACT_COMPLETION" != "$CORNER_CONTACT_EXIT" || "$CORNER_CONTACT_EXIT" -ge 2 ]]; then
+              echo "Corner-contact probe did not complete with preserved host evidence."
               exit 1
             fi
           fi

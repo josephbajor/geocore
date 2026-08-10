@@ -31,6 +31,7 @@ CONFIG_TEMPLATE = {
 
 DEFAULT_OUTBOX = ROOT / "oracle" / "outbox"
 DEFAULT_INBOX = ROOT / "oracle" / "inbox" / "onshape"
+DEFAULT_PROBE_OUTPUT = ROOT / "oracle" / "probes" / "onshape" / "corner-contact-subtract"
 
 
 def writer_identity():
@@ -313,6 +314,44 @@ def command_identity(args):
     return 0
 
 
+def command_probe(args):
+    """Run one host-native modeling probe and preserve raw replay evidence."""
+    from .host_probes import PROBE_NAME, run_corner_contact_subtract_probe
+
+    if args.probe != PROBE_NAME:
+        raise OracleError("unknown host probe: {}".format(args.probe))
+    request_count_file = (
+        Path(args.request_count_file) if args.request_count_file else None
+    )
+    completion_file = Path(args.completion_file) if args.completion_file else None
+    for output_file in (request_count_file, completion_file):
+        if output_file is not None:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("", encoding="utf-8")
+
+    transport = ApiKeyTransport.from_environment()
+    config = load_config(ROOT / CONFIG_PATH)
+    exit_code = None
+    try:
+        exit_code = run_corner_contact_subtract_probe(
+            transport,
+            config,
+            args.output_dir,
+            revision=writer_identity(),
+        )
+    finally:
+        limit = transport.request_limit if transport.request_limit is not None else "unbounded"
+        print("\nOnshape API requests: {} / {}".format(transport.request_count, limit))
+        if request_count_file is not None:
+            request_count_file.write_text(
+                str(transport.request_count) + "\n", encoding="utf-8"
+            )
+    if completion_file is not None:
+        completion_file.write_text(str(exit_code) + "\n", encoding="utf-8")
+    print("host probe evidence: {}".format(args.output_dir))
+    return exit_code
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="oracle_loop",
@@ -380,6 +419,22 @@ def build_parser():
     )
     identity.add_argument("--outbox", default=str(DEFAULT_OUTBOX))
     identity.set_defaults(func=command_identity)
+
+    probe = commands.add_parser(
+        "probe",
+        help="run a host-native modeling operation and X_T replay experiment",
+    )
+    probe.add_argument("probe", choices=["corner-contact-subtract"])
+    probe.add_argument("--output-dir", default=str(DEFAULT_PROBE_OUTPUT))
+    probe.add_argument(
+        "--request-count-file",
+        help="write the number of attempted host requests for budget accounting",
+    )
+    probe.add_argument(
+        "--completion-file",
+        help="write the final CLI status only after the probe completes",
+    )
+    probe.set_defaults(func=command_probe)
 
     return parser
 
