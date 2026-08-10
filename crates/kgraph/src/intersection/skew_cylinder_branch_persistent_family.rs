@@ -13,8 +13,8 @@ use kcore::interval::Interval;
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::Curve;
 use kgeom::curve2d::Curve2d;
-use kgeom::param::ParamRange;
-use kgeom::surface::Cylinder;
+use kgeom::param::{ParamRange, wrap_periodic};
+use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Vec2, Vec3};
 
 use super::*;
@@ -501,6 +501,60 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
         }
     }
 
+    /// Bind one physical root-event ordinal for exact downstream carriage.
+    ///
+    /// Unlike member membership, this selector covers every closed-set
+    /// stratum: Boundary, Contact, and Isolated. Consumers remain responsible
+    /// for publishing only the strata they can represent without omission.
+    pub const fn root_event_certificate(
+        self,
+        sheet: SkewCylinderSheet,
+        ordinal: usize,
+    ) -> Option<PersistentSkewCylinderFiniteWindowRootEventCertificate> {
+        if ordinal < self.root_event_count(sheet) {
+            Some(PersistentSkewCylinderFiniteWindowRootEventCertificate {
+                family: self,
+                sheet,
+                ordinal: ordinal as u8,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Derive an honest zero-dimensional carrier for one Isolated event.
+    ///
+    /// Contact and Boundary events deliberately return `None`: their
+    /// downstream representations remain distinct from isolated points and
+    /// positive-length member endpoints respectively.
+    pub fn isolated_point_certificate(
+        self,
+        sheet: SkewCylinderSheet,
+        ordinal: usize,
+    ) -> Option<PersistentSkewCylinderFiniteWindowIsolatedPointCertificate> {
+        let event = self.root_event_certificate(sheet, ordinal)?;
+        if event.event().kind() != PersistentSkewCylinderFiniteWindowRootEventKind::Isolated {
+            return None;
+        }
+        let certificate = PersistentSkewCylinderFiniteWindowIsolatedPointCertificate { event };
+        let carrier = certificate.point();
+        let parameters = certificate.source_surface_parameters();
+        let surface_points = certificate.source_surface_points();
+        let residuals = surface_points.map(|point| point.dist(carrier));
+        ([carrier.x, carrier.y, carrier.z]
+            .into_iter()
+            .all(f64::is_finite)
+            && parameters.into_iter().flatten().all(f64::is_finite)
+            && surface_points
+                .into_iter()
+                .flat_map(|point| [point.x, point.y, point.z])
+                .all(f64::is_finite)
+            && residuals
+                .into_iter()
+                .all(|residual| residual.is_finite() && residual <= self.tolerance))
+        .then_some(certificate)
+    }
+
     /// Exact bound root grouped into one persistent physical event.
     pub fn root_event_root(
         &self,
@@ -588,6 +642,126 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
     }
 }
 
+/// Complete finite-window family plus one immutable physical root event.
+///
+/// This is the zero-dimensional counterpart of
+/// [`PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate`]. It
+/// retains exact event/root identity without pretending that the event is a
+/// positive-length member endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersistentSkewCylinderFiniteWindowRootEventCertificate {
+    family: PersistentSkewCylinderFiniteWindowFamilyCertificate,
+    sheet: SkewCylinderSheet,
+    ordinal: u8,
+}
+
+impl PersistentSkewCylinderFiniteWindowRootEventCertificate {
+    /// Complete finite-window family owning this event.
+    pub const fn family(self) -> PersistentSkewCylinderFiniteWindowFamilyCertificate {
+        self.family
+    }
+
+    /// Ordered quadratic sheet owning this event.
+    pub const fn sheet(self) -> SkewCylinderSheet {
+        self.sheet
+    }
+
+    /// Immutable sheet-local event ordinal.
+    pub const fn ordinal(self) -> usize {
+        self.ordinal as usize
+    }
+
+    /// Compact physical event selected by this certificate.
+    pub const fn event(self) -> PersistentSkewCylinderFiniteWindowRootEvent {
+        match self.family.root_event(self.sheet, self.ordinal as usize) {
+            Some(event) => event,
+            None => panic!("sealed root-event certificate always names one event"),
+        }
+    }
+
+    /// Exact authored-bound root grouped into this physical event.
+    pub fn root(self, root_ordinal: usize) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.family
+            .root_event_root(self.sheet, self.ordinal as usize, root_ordinal)
+    }
+}
+
+/// Exact-root-owned zero-dimensional carrier for one finite-window event.
+///
+/// The physical point is evaluated from the same strict-positive analytic
+/// formula as skew branch carriers, but this type has no curve range and can
+/// only be minted for an `Isolated` event. Exact authored-bound roots remain
+/// available through [`PersistentSkewCylinderFiniteWindowRootEventCertificate`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersistentSkewCylinderFiniteWindowIsolatedPointCertificate {
+    event: PersistentSkewCylinderFiniteWindowRootEventCertificate,
+}
+
+impl PersistentSkewCylinderFiniteWindowIsolatedPointCertificate {
+    /// Complete finite-window family owning this point.
+    pub const fn family(self) -> PersistentSkewCylinderFiniteWindowFamilyCertificate {
+        self.event.family()
+    }
+
+    /// Sealed exact physical-root identity.
+    pub const fn event_certificate(self) -> PersistentSkewCylinderFiniteWindowRootEventCertificate {
+        self.event
+    }
+
+    /// Deterministic authored-chart representative used by the point carrier.
+    pub const fn carrier_parameter(self) -> f64 {
+        self.event.event().carrier_parameter()
+    }
+
+    /// Exact authored-bound root grouped into this isolated event.
+    pub fn root(self, root_ordinal: usize) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.event.root(root_ordinal)
+    }
+
+    /// Deterministic model-space point on the admitted analytic carrier.
+    pub fn point(self) -> Vec3 {
+        let algebra = self.algebra();
+        algebra.carrier_derivs(self.carrier_parameter(), 0).d[0]
+    }
+
+    /// Parameters on both source cylinders in caller/live dependency order.
+    pub fn source_surface_parameters(self) -> [[f64; 2]; 2] {
+        let algebra = self.algebra();
+        let parameter = self.carrier_parameter();
+        let formula = [0, 1].map(|operand| {
+            let uv = algebra.pcurve_derivs(operand, parameter, 0).d[0];
+            [uv.x, uv.y]
+        });
+        permute_formula_to_source(formula, self.family().formula_to_source())
+    }
+
+    /// Independent source-surface evaluations at the retained parameters.
+    pub fn source_surface_points(self) -> [Vec3; 2] {
+        let parameters = self.source_surface_parameters();
+        let cylinders = self.family().source_cylinders();
+        [
+            cylinders[0].eval(parameters[0]),
+            cylinders[1].eval(parameters[1]),
+        ]
+    }
+
+    fn algebra(self) -> BranchAlgebra {
+        let family = self.family();
+        let windows = family.formula_windows();
+        let mut algebra = build_algebra(
+            family.formula_cylinders(),
+            windows[0][0],
+            self.event.sheet(),
+        )
+        .expect("sealed strict-positive family always rebuilds finite point algebra");
+        let parameter = self.carrier_parameter();
+        let raw_longitude = algebra.authored_pcurve_derivs(1, parameter, 0).d[0].x;
+        let wrapped_longitude = wrap_periodic(raw_longitude, windows[1][0].lo, TAU);
+        algebra.longitude_offset = wrapped_longitude - raw_longitude;
+        algebra
+    }
+}
+
 /// Complete family plus one immutable represented ordinal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate {
@@ -656,8 +830,7 @@ pub fn certify_persistent_skew_cylinder_finite_window_family(
         source_windows,
     )?;
     let derived_members = derived_open_members(finite_topology);
-    if members.is_empty()
-        || members.len() != derived_members.len()
+    if members.len() != derived_members.len()
         || members.len() > PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_MAX_MEMBERS
     {
         return Err(IntersectionCertificateError::InvalidTraceFamily);

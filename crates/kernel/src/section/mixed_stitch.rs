@@ -6,13 +6,14 @@
 //! fragment count: every bounded fragment contributes one directed arrival and
 //! departure, and only one-in/one-out components become certified cycles.
 
-use super::{SectionCurveFragment, SectionCurveFragmentSpan};
+use super::{SectionCurveFragment, SectionCurveFragmentSpan, SectionIsolatedContact};
 use crate::error::{Error, Result};
 
 /// One maximal directed component in deterministic first-fragment order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedStitchComponent {
     pub(crate) fragments: Vec<usize>,
+    pub(crate) isolated_contacts: Vec<usize>,
     pub(crate) closed: bool,
 }
 
@@ -37,6 +38,7 @@ pub(crate) struct MixedStitchResult {
 /// Assemble every published fragment family by exact endpoint ID.
 pub(crate) fn stitch_curve_fragments(
     fragments: &[SectionCurveFragment],
+    isolated_contacts: &[SectionIsolatedContact],
     endpoint_count: usize,
 ) -> Result<MixedStitchResult> {
     let occurrences = fragments
@@ -48,15 +50,56 @@ pub(crate) fn stitch_curve_fragments(
         })
         .collect::<Vec<_>>();
     let stitched = stitch_endpoint_occurrences(&occurrences, endpoint_count)?;
+    let mut components = stitched
+        .components
+        .into_iter()
+        .map(|component| MixedStitchComponent {
+            fragments: component.sources,
+            isolated_contacts: Vec::new(),
+            closed: component.closed,
+        })
+        .collect::<Vec<_>>();
+    let mut endpoint_components = vec![None; endpoint_count];
+    for (component, stitched) in components.iter().enumerate() {
+        for &fragment in &stitched.fragments {
+            let Some(endpoint_pair) = fragments.get(fragment).and_then(fragment_endpoints) else {
+                continue;
+            };
+            for endpoint in [endpoint_pair.departure, endpoint_pair.arrival] {
+                let Some(slot) = endpoint_components.get_mut(endpoint) else {
+                    return Err(inconsistent_topology(
+                        "section fragment contact referenced an unknown endpoint",
+                    ));
+                };
+                if slot.is_some_and(|current| current != component) {
+                    return Err(inconsistent_topology(
+                        "one section endpoint escaped into multiple mixed components",
+                    ));
+                }
+                *slot = Some(component);
+            }
+        }
+    }
+    for (contact, isolated) in isolated_contacts.iter().enumerate() {
+        let endpoint = isolated.endpoint();
+        let Some(component) = endpoint_components.get(endpoint).copied() else {
+            return Err(inconsistent_topology(
+                "isolated section contact referenced an unknown endpoint",
+            ));
+        };
+        if let Some(component) = component {
+            components[component].isolated_contacts.push(contact);
+        } else {
+            endpoint_components[endpoint] = Some(components.len());
+            components.push(MixedStitchComponent {
+                fragments: Vec::new(),
+                isolated_contacts: vec![contact],
+                closed: true,
+            });
+        }
+    }
     Ok(MixedStitchResult {
-        components: stitched
-            .components
-            .into_iter()
-            .map(|component| MixedStitchComponent {
-                fragments: component.sources,
-                closed: component.closed,
-            })
-            .collect(),
+        components,
         defects: stitched.defects,
     })
 }

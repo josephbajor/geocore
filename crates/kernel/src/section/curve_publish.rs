@@ -12,15 +12,16 @@ use super::{
     ClosedFragmentEndEvidence, ClosedFragmentEvidence, ClosedFragmentEvidenceSpan, SectionBranch,
     SectionCarrier, SectionCurveComponent, SectionCurveEndpoint, SectionCurveEndpointTopology,
     SectionCurveFragment, SectionCurveFragmentEnd, SectionCurveFragmentSpan,
-    SectionCurveTrimProvenance, SectionEdgeParameterInterval, SectionProjectiveParameterInterval,
-    SectionRing, SectionSourceParameterKey, adapt_site, closed_stitch, mixed_stitch,
-    ruling_publish,
+    SectionCurveTrimProvenance, SectionEdgeParameterInterval, SectionIsolatedContact,
+    SectionProjectiveParameterInterval, SectionRing, SectionSourceParameterKey, adapt_site,
+    closed_stitch, mixed_stitch, ruling_publish,
 };
 use crate::error::{Error, Result};
 use crate::{FaceId, FinId, LoopId, PartId};
 
 pub(super) struct PublishedCurves {
     pub(super) endpoints: Vec<SectionCurveEndpoint>,
+    pub(super) isolated_contacts: Vec<SectionIsolatedContact>,
     pub(super) fragments: Vec<SectionCurveFragment>,
     pub(super) components: Vec<SectionCurveComponent>,
     pub(super) rings: Vec<SectionRing>,
@@ -38,6 +39,7 @@ pub(super) fn publish_curves(
     bounded_procedural_fragments: &[
         super::skew_cylinder_fragment::CertifiedBoundedSkewCylinderFragment
     ],
+    isolated_contacts: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
     closed_stitched: &closed_stitch::ClosedStitchResult,
 ) -> Result<PublishedCurves> {
     if closed_fragments.len() != closed_fragment_evidence.len() {
@@ -81,13 +83,16 @@ pub(super) fn publish_curves(
         &mut endpoints,
         &mut fragments,
     )?;
+    let isolated_contacts = publish_isolated_contacts(part, isolated_contacts, &mut endpoints)?;
 
-    let mixed_stitched = mixed_stitch::stitch_curve_fragments(&fragments, endpoints.len())?;
+    let mixed_stitched =
+        mixed_stitch::stitch_curve_fragments(&fragments, &isolated_contacts, endpoints.len())?;
     let components = mixed_stitched
         .components
         .iter()
         .map(|component| SectionCurveComponent {
             fragments: component.fragments.clone(),
+            isolated_contacts: component.isolated_contacts.clone(),
             closed: component.closed,
         })
         .collect();
@@ -95,11 +100,36 @@ pub(super) fn publish_curves(
 
     Ok(PublishedCurves {
         endpoints,
+        isolated_contacts,
         fragments,
         components,
         rings,
         has_mixed_stitch_defects: !mixed_stitched.defects.is_empty(),
     })
+}
+
+fn publish_isolated_contacts(
+    part: &PartId,
+    certified: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
+    endpoints: &mut Vec<SectionCurveEndpoint>,
+) -> Result<Vec<SectionIsolatedContact>> {
+    certified
+        .iter()
+        .map(|contact| {
+            let endpoint = ruling_publish::intern_endpoint(
+                part,
+                contact.endpoint,
+                contact.root_scalars,
+                endpoints,
+            )?;
+            Ok(SectionIsolatedContact {
+                faces: contact.faces.clone(),
+                endpoint,
+                source: contact.source,
+                roots: contact.roots.clone(),
+            })
+        })
+        .collect()
 }
 
 fn index_closed_root_scalars(

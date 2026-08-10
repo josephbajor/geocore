@@ -1163,7 +1163,14 @@ impl ExactSkewCylinderAlgebra {
         canonical_operand: usize,
         bound: f64,
     ) -> Result<AxialEquation, SkewCylinderAxialRootFailure> {
+        let authored_bound = bound;
         let bound = ExactScalar::from_f64(bound)?;
+        if canonical_operand == 0
+            && let Some(equation) =
+                self.semantic_perpendicular_canonical_equation(authored_bound)?
+        {
+            return Ok(equation);
+        }
         let (m, radial_equation) = self.radial_terms()?;
         if canonical_operand == 0 {
             let selector = m.add(&ExactFirstHarmonic::constant(self.a.mul(&bound)?))?;
@@ -1183,6 +1190,10 @@ impl ExactSkewCylinderAlgebra {
             return Err(SkewCylinderAxialRootFailure::InvalidSourceOperand);
         }
 
+        if let Some(height) = self.shared_semantic_opposite_height()? {
+            let direct = height.sub(&ExactFirstHarmonic::constant(bound))?;
+            return Ok(AxialEquation::SharedOppositeHeight { direct, e_sign: 1 });
+        }
         let (dz, z0) = self.opposite_height_terms()?;
         let direct = z0.sub(&ExactFirstHarmonic::constant(self.e.mul(&bound)?))?;
         if dz.is_zero() {
@@ -1222,6 +1233,80 @@ impl ExactSkewCylinderAlgebra {
         )?;
         let z0 = radial_coordinate_harmonic(first, second, DualCoordinate::Third)?;
         Ok((dz, z0))
+    }
+
+    /// Return the common sheet height implied by exactly perpendicular
+    /// authored axes under `Frame`'s semantic orthonormal-basis contract.
+    ///
+    /// A frame's stored companion axis comes from rounded cross products, so
+    /// the dual determinant can contain a spurious sub-ulp ruling-height
+    /// coefficient even when the two authored axes have an exactly zero dot
+    /// product. In that family both sheets share the ordinary axial dot
+    /// coordinate and no quadratic elimination is necessary.
+    fn shared_semantic_opposite_height(
+        &self,
+    ) -> Result<Option<ExactFirstHarmonic>, SkewCylinderAxialRootFailure> {
+        let [first, second] = self.cylinders;
+        let axis = second.frame().z();
+        // Frame-relative coordinates throughout kgeom use this deterministic
+        // rounded dot operation. An exact zero in that semantic coordinate is
+        // the stable authored perpendicular-axis relation; re-expanding the
+        // frame components would resurrect cross-product roundoff that the
+        // `Frame` abstraction deliberately excludes.
+        if first.frame().z().dot(axis) != 0.0 {
+            return Ok(None);
+        }
+        let offset = first.frame().origin() - second.frame().origin();
+        Ok(Some(ExactFirstHarmonic {
+            constant: ExactScalar::from_f64(offset.dot(axis))?,
+            cosine: ExactScalar::from_f64(first.frame().x().dot(axis) * first.radius())?,
+            sine: ExactScalar::from_f64(first.frame().y().dot(axis) * first.radius())?,
+        }))
+    }
+
+    /// Build the first cylinder's bound equation directly in its semantic
+    /// orthonormal coordinates when the authored axes are perpendicular.
+    /// This is algebraically the same radial-distance theorem as the dual
+    /// formula, but it preserves rigid-frame root factors that rounded cross
+    /// products in the companion frame would otherwise perturb by one ulp.
+    fn semantic_perpendicular_canonical_equation(
+        &self,
+        bound: f64,
+    ) -> Result<Option<AxialEquation>, SkewCylinderAxialRootFailure> {
+        let [first, second] = self.cylinders;
+        if first.frame().z().dot(second.frame().z()) != 0.0 {
+            return Ok(None);
+        }
+        let offset = first.frame().origin() - second.frame().origin() + first.frame().z() * bound;
+        let radius = first.radius();
+        let axes = [first.frame().x(), first.frame().y(), first.frame().z()];
+        let coordinates: [Result<ExactFirstHarmonic, RootIsolationFailure>; 3] = axes.map(|axis| {
+            Ok(ExactFirstHarmonic {
+                constant: ExactScalar::from_f64(offset.dot(axis))?,
+                cosine: ExactScalar::from_f64(first.frame().x().dot(axis) * radius)?,
+                sine: ExactScalar::from_f64(first.frame().y().dot(axis) * radius)?,
+            })
+        });
+        let [x, y, z] = coordinates;
+        let [x, y, z] = [x?, y?, z?];
+        let second_axis = second.frame().z();
+        let second_height = ExactFirstHarmonic {
+            constant: ExactScalar::from_f64(offset.dot(second_axis))?,
+            cosine: ExactScalar::from_f64(first.frame().x().dot(second_axis) * radius)?,
+            sine: ExactScalar::from_f64(first.frame().y().dot(second_axis) * radius)?,
+        };
+        let radius_squared = ExactScalar::from_f64(second.radius())?
+            .mul(&ExactScalar::from_f64(second.radius())?)?;
+        let eliminated = x
+            .square()?
+            .add(&y.square()?)?
+            .add(&z.square()?)?
+            .sub(&second_height.square()?)?
+            .sub(&ExactSecondHarmonic::constant(radius_squared))?;
+        Ok(Some(AxialEquation::Canonical {
+            eliminated,
+            selector: z,
+        }))
     }
 
     fn radial_terms(

@@ -11,12 +11,13 @@ use kcore::operation::OperationScope;
 use kgeom::curve::Curve;
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
-    PairedSkewCylinderBranchResidualCertificate, SkewCylinderBranchGuardedEnd,
+    PairedSkewCylinderBranchResidualCertificate, PersistentSkewCylinderAxialBoundary,
+    PersistentSkewCylinderHalfAngleChart, SkewCylinderBranchGuardedEnd,
     SkewCylinderBranchPcurveRootCorridorCertificate,
 };
 use kops::intersect::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
-    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderIsolatedContact, SkewCylinderRootInsideSideProof,
 };
 use ktopo::entity::{
     EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId,
@@ -50,9 +51,31 @@ struct PreparedOpenSkewBranch {
     fragment: CertifiedBoundedSkewCylinderFragment,
 }
 
+struct PreparedSkewFacePairData {
+    branches: Vec<PreparedSkewBranch>,
+    isolated_contacts: Vec<CertifiedSectionIsolatedContact>,
+}
+
 enum PreparedSkewFacePair {
-    Ready(Vec<PreparedSkewBranch>),
+    Ready(Box<PreparedSkewFacePairData>),
     Gap(&'static str),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CertifiedSectionIsolatedContact {
+    pub(super) faces: [FaceId; 2],
+    pub(super) source: SkewCylinderIsolatedContact,
+    pub(super) endpoint: closed_stitch::CertifiedClosedEndpoint,
+    pub(super) root_scalars: [Option<CertifiedSourceRootScalar>; 2],
+    pub(super) roots: Vec<SectionIsolatedContactRoot>,
+    pub(super) root_evidence: [Option<CertifiedIsolatedRootEvidence>; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CertifiedIsolatedRootEvidence {
+    pub(super) edge: RawEdgeId,
+    pub(super) root: SourceRootKey,
+    pub(super) edge_parameter: Interval,
 }
 
 /// Publish all graph branches for one Cylinder/Cylinder face pair atomically.
@@ -66,6 +89,7 @@ pub(super) fn append_face_pair_branches(
     raw_faces: [RawFaceId; 2],
     facades: &[FaceId; 2],
     edges: &[IntersectionBranchEdge],
+    isolated_contacts: &[SkewCylinderIsolatedContact],
     vertices: &[kops::intersect::IntersectionBranchVertex],
     surfaces: [&SurfaceGeom; 2],
     senses: [Sense; 2],
@@ -74,10 +98,11 @@ pub(super) fn append_face_pair_branches(
     scope: &mut OperationScope<'_, '_>,
     acc: &mut SectionAccumulator,
 ) -> Result<()> {
-    let has_skew = edges.iter().any(|edge| {
-        edge.certificate.as_skew_cylinder_two_sheet().is_some()
-            || edge.certificate.as_skew_cylinder_open_span().is_some()
-    });
+    let has_skew = !isolated_contacts.is_empty()
+        || edges.iter().any(|edge| {
+            edge.certificate.as_skew_cylinder_two_sheet().is_some()
+                || edge.certificate.as_skew_cylinder_open_span().is_some()
+        });
     if !has_skew {
         for edge in edges {
             super::cylinder_cylinder_publish::append_branch(
@@ -121,6 +146,24 @@ pub(super) fn append_face_pair_branches(
     };
     let annuli = [first_annulus, second_annulus];
 
+    let isolated_contacts = match prepare_isolated_contacts(
+        store,
+        raw_faces,
+        facades,
+        isolated_contacts,
+        &annuli,
+        root_identity,
+        scope,
+    )? {
+        Some(contacts) => contacts,
+        None => {
+            acc.gaps.push(SectionGap {
+                reason: GAP_PAIR_UNRESOLVED,
+                faces: facades.to_vec(),
+            });
+            return Ok(());
+        }
+    };
     let prepared = prepare_skew_face_pair(
         store,
         raw_faces,
@@ -135,13 +178,183 @@ pub(super) fn append_face_pair_branches(
         scope,
     )?;
     match prepared {
-        PreparedSkewFacePair::Ready(prepared) => commit_prepared_branches(prepared, acc),
+        PreparedSkewFacePair::Ready(mut prepared) => {
+            prepared.isolated_contacts = isolated_contacts;
+            let PreparedSkewFacePairData {
+                branches,
+                isolated_contacts,
+            } = *prepared;
+            commit_prepared_branches(branches, acc);
+            acc.isolated_contacts.extend(isolated_contacts);
+        }
         PreparedSkewFacePair::Gap(reason) => acc.gaps.push(SectionGap {
             reason,
             faces: facades.to_vec(),
         }),
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_isolated_contacts(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    contacts: &[SkewCylinderIsolatedContact],
+    annuli: &[CertifiedSourceAnnulus; 2],
+    roots: &mut RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<Option<Vec<CertifiedSectionIsolatedContact>>> {
+    let mut prepared = Vec::with_capacity(contacts.len());
+    for contact in contacts.iter().copied() {
+        let point = contact.point();
+        let surface_parameters = contact.surface_parameters();
+        if !finite_point(point)
+            || surface_parameters
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            || contact.root_count() == 0
+        {
+            return Ok(None);
+        }
+
+        let mut sites = raw_faces.map(stitch::SiteKey::Face);
+        let mut root_keys = [None, None];
+        let mut edge_parameters = [None, None];
+        let mut root_scalars = [None, None];
+        let mut root_evidence = [None, None];
+        let mut public_roots = Vec::with_capacity(contact.root_count());
+        for ordinal in 0..contact.root_count() {
+            let Some(graph_root) = contact.root(ordinal) else {
+                return Ok(None);
+            };
+            let operand = graph_root.tag.source_slot();
+            if operand > 1 || root_keys[operand].is_some() {
+                return Ok(None);
+            }
+            let (ring, axial_boundary) = match graph_root.tag.boundary() {
+                PersistentSkewCylinderAxialBoundary::Lower => (
+                    annuli[operand].lower(),
+                    SectionSkewCylinderAxialBoundary::Lower,
+                ),
+                PersistentSkewCylinderAxialBoundary::Upper => (
+                    annuli[operand].upper(),
+                    SectionSkewCylinderAxialBoundary::Upper,
+                ),
+            };
+            if graph_root.sheet != contact.certificate().event_certificate().sheet()
+                || ring.face() != raw_faces[operand]
+                || ring.authored_height().to_bits() != graph_root.bound.to_bits()
+            {
+                return Ok(None);
+            }
+
+            let longitude = surface_parameters[operand][0];
+            let observed_longitude = Interval::new(longitude.next_down(), longitude.next_up());
+            let Some(observed_edge_parameter) =
+                ring.intrinsic_edge_parameter_for_longitude(observed_longitude)
+            else {
+                return Ok(None);
+            };
+            let query = SourceRootQuery::new(ring.edge(), raw_faces[1 - operand]);
+            let root = match roots.resolve(store, query, observed_edge_parameter, scope)? {
+                RootResolution::Resolved(root) => root,
+                RootResolution::Indeterminate(_) => return Ok(None),
+            };
+            let (root_parameter, source_root_scalar) = match roots
+                .certify_order(store, query, scope)?
+            {
+                RootOrderOutcome::Certified(order) => {
+                    let Some(root_parameter) = order.roots().get(root.ordinal()).copied() else {
+                        return Err(inconsistent_topology(
+                            "isolated skew source-root ordinal escaped its certified order",
+                        ));
+                    };
+                    let Some(scalar) = order.materialize(root) else {
+                        return Err(inconsistent_topology(
+                            "isolated skew source root has no scalar materialization",
+                        ));
+                    };
+                    (root_parameter, scalar)
+                }
+                RootOrderOutcome::Indeterminate(_) => return Ok(None),
+            };
+            let edge_parameter = Interval::new(
+                observed_edge_parameter.lo().min(root_parameter.lo()),
+                observed_edge_parameter.hi().max(root_parameter.hi()),
+            );
+            let root_point = ring.circle().eval(source_root_scalar.parameter());
+            if !finite_point(root_point)
+                || root_point.dist(point) > contact.certificate().family().tolerance()
+            {
+                return Ok(None);
+            }
+
+            let chart = match graph_root.half_angle_chart {
+                PersistentSkewCylinderHalfAngleChart::Tangent => {
+                    SectionSkewCylinderRootChart::TangentHalfAngle
+                }
+                PersistentSkewCylinderHalfAngleChart::Cotangent => {
+                    SectionSkewCylinderRootChart::CotangentHalfAngle
+                }
+            };
+            let projective = graph_root.half_angle_bracket;
+            if projective.iter().any(|value| !value.is_finite()) || projective[0] > projective[1] {
+                return Ok(None);
+            }
+            sites[operand] = stitch::SiteKey::Edge(ring.edge());
+            root_keys[operand] = Some(closed_stitch::CertifiedSourceParameterKey::new(
+                root.edge(),
+                root.ordinal(),
+            ));
+            edge_parameters[operand] = Some(edge_parameter);
+            root_scalars[operand] = Some(source_root_scalar);
+            root_evidence[operand] = Some(CertifiedIsolatedRootEvidence {
+                edge: ring.edge(),
+                root,
+                edge_parameter,
+            });
+            public_roots.push(SectionIsolatedContactRoot {
+                operand,
+                axial_boundary,
+                authored_bound: graph_root.bound,
+                face: facades[operand].clone(),
+                loop_id: LoopId::new(facades[operand].part().clone(), ring.loop_id()),
+                fin: FinId::new(facades[operand].part().clone(), ring.fin()),
+                source_parameter: SectionSourceParameterKey::from_certified_root(
+                    facades[operand].part(),
+                    root,
+                    source_root_scalar,
+                ),
+                edge_parameter: SectionEdgeParameterInterval::from_interval(edge_parameter),
+                carrier_root: SectionSkewCylinderCarrierRootEnclosure {
+                    chart,
+                    lo: projective[0],
+                    hi: projective[1],
+                },
+            });
+        }
+        if public_roots.len() != contact.root_count() {
+            return Ok(None);
+        }
+        prepared.push(CertifiedSectionIsolatedContact {
+            faces: facades.clone(),
+            source: contact,
+            endpoint: closed_stitch::CertifiedClosedEndpoint::trim_site(
+                stitch::VertexKey {
+                    a: sites[0],
+                    b: sites[1],
+                },
+                root_keys,
+                edge_parameters,
+            ),
+            root_scalars,
+            roots: public_roots,
+            root_evidence,
+        });
+    }
+    Ok(Some(prepared))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -221,7 +434,12 @@ fn prepare_skew_face_pair(
         }
     }
 
-    Ok(PreparedSkewFacePair::Ready(prepared))
+    Ok(PreparedSkewFacePair::Ready(Box::new(
+        PreparedSkewFacePairData {
+            branches: prepared,
+            isolated_contacts: Vec::new(),
+        },
+    )))
 }
 
 fn commit_prepared_branches(prepared: Vec<PreparedSkewBranch>, acc: &mut SectionAccumulator) {
@@ -1119,6 +1337,7 @@ mod tests {
             raw_faces,
             &facades,
             &edges,
+            intersections.skew_cylinder_isolated_contacts(),
             &intersections.branch_graph.vertices,
             surfaces,
             face_data.map(|face| face.sense()),
@@ -1146,7 +1365,7 @@ mod tests {
         else {
             panic!("bounded skew fixture lost its final projective root")
         };
-        proof.half_angle_bracket[0] = proof.half_angle_bracket[1];
+        proof.half_angle_bracket[0] = proof.half_angle_bracket[1] + 1.0;
         let mut roots = RootIdentityAuthority::new();
         let mut acc = SectionAccumulator::default();
         append_face_pair_branches(
@@ -1154,6 +1373,7 @@ mod tests {
             raw_faces,
             &facades,
             &edges,
+            intersections.skew_cylinder_isolated_contacts(),
             &intersections.branch_graph.vertices,
             surfaces,
             face_data.map(|face| face.sense()),

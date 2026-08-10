@@ -113,6 +113,12 @@ pub(crate) struct MergedRulingEndpoint {
     pub(crate) carrier_parameter: Interval,
     /// Intrinsic source-edge evidence corresponding exactly to `sites`.
     pub(crate) edge_parameters: [Option<Interval>; 2],
+    /// Optional canonical scalar authority supplied by an exact isolated
+    /// contact that proves this dual-source endpoint identity.
+    pub(crate) source_roots: [Option<(
+        super::root_identity::SourceRootKey,
+        super::root_identity::CertifiedSourceRootScalar,
+    )>; 2],
 }
 
 /// One positive-length intersection of two operand-local ruling spans.
@@ -805,6 +811,7 @@ fn merged_endpoint(site: RulingTrimSite, operand: usize) -> MergedRulingEndpoint
         sites,
         carrier_parameter: site.carrier_parameter,
         edge_parameters,
+        source_roots: [None, None],
     }
 }
 
@@ -813,7 +820,7 @@ fn coincident_endpoint(
     right: RulingTrimSite,
     proof: Option<&RulingEndpointCoincidenceProof>,
 ) -> Option<MergedRulingEndpoint> {
-    proof.copied().filter(|proof| proof.proves(left, right))?;
+    let source_roots = proof?.source_roots(left, right)?;
     Some(MergedRulingEndpoint {
         sites: [Some(left), Some(right)],
         carrier_parameter: Interval::new(
@@ -825,6 +832,7 @@ fn coincident_endpoint(
                 .max(right.carrier_parameter.hi()),
         ),
         edge_parameters: [Some(left.edge_parameter), Some(right.edge_parameter)],
+        source_roots,
     })
 }
 
@@ -885,9 +893,28 @@ fn merge_ruling_spans_impl(
             j += 1;
             continue;
         }
-        if left.start.carrier_parameter.hi() >= right.end.carrier_parameter.lo()
-            || right.start.carrier_parameter.hi() >= left.end.carrier_parameter.lo()
-        {
+        let left_starts_at_right_end =
+            left.start.carrier_parameter.hi() >= right.end.carrier_parameter.lo();
+        let right_starts_at_left_end =
+            right.start.carrier_parameter.hi() >= left.end.carrier_parameter.lo();
+        if left_starts_at_right_end || right_starts_at_left_end {
+            // A source-certified isolated contact is already represented as a
+            // zero-dimensional Section member. Consume that point-only span
+            // intersection without manufacturing a zero-length curve.
+            if left_starts_at_right_end
+                && !right_starts_at_left_end
+                && endpoint_proof.is_some_and(|proof| proof.proves(left.start, right.end))
+            {
+                j += 1;
+                continue;
+            }
+            if right_starts_at_left_end
+                && !left_starts_at_right_end
+                && endpoint_proof.is_some_and(|proof| proof.proves(left.end, right.start))
+            {
+                i += 1;
+                continue;
+            }
             return Ok(RulingMergeOutcome::Indeterminate(
                 RulingClipGap::TangentialContact,
             ));

@@ -18,7 +18,6 @@ use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
 use kgeom::curve::Circle;
-use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
 use kgeom::vec::{Point3, Vec3};
 use ktopo::entity::{
@@ -170,9 +169,7 @@ impl CertifiedDiskCapEndpoint {
 pub(super) struct CertifiedDiskCapChord {
     faces: [RawFaceId; 2],
     cap_operand: usize,
-    boundary_edge: RawEdgeId,
     carrier: SectionCarrier,
-    range: ParamRange,
     uv_lines: [SectionUvLine; 2],
     residual_bounds: [f64; 2],
     endpoints: [CertifiedDiskCapEndpoint; 2],
@@ -187,16 +184,8 @@ impl CertifiedDiskCapChord {
         self.cap_operand
     }
 
-    pub(super) const fn boundary_edge(&self) -> RawEdgeId {
-        self.boundary_edge
-    }
-
     pub(super) const fn carrier(&self) -> SectionCarrier {
         self.carrier
-    }
-
-    pub(super) const fn range(&self) -> ParamRange {
-        self.range
     }
 
     pub(super) const fn uv_lines(&self) -> &[SectionUvLine; 2] {
@@ -407,7 +396,6 @@ pub(super) fn clip_disk_cap(
     Ok(DiskCapClipOutcome::Chord(CertifiedDiskCapChord {
         faces,
         cap_operand,
-        boundary_edge,
         carrier: SectionCarrier::Line {
             origin: Point3::new(
                 pair.carrier.origin[0],
@@ -420,10 +408,6 @@ pub(super) fn clip_disk_cap(
                 pair.carrier.direction[2],
             ),
         },
-        range: ParamRange::new(
-            start.carrier_parameter_representative,
-            end.carrier_parameter_representative,
-        ),
         uv_lines: pair.uv_lines,
         residual_bounds: pair.residual_bounds,
         endpoints: [start, end],
@@ -906,14 +890,16 @@ mod tests {
 
             assert_eq!(chord.faces(), &fixture.faces);
             assert_eq!(chord.cap_operand(), cap_operand);
-            assert_eq!(chord.boundary_edge(), fixture.boundary_edge);
             assert!(chord.residual_bounds().iter().all(|value| *value == 0.0));
-            assert!((chord.range().lo + 1.0).abs() <= 1.0e-14);
-            assert!((chord.range().hi - 1.0).abs() <= 1.0e-14);
 
             let endpoints = chord.endpoints();
             assert!(endpoints[0].carrier_parameter().contains(-1.0));
             assert!(endpoints[1].carrier_parameter().contains(1.0));
+            assert!(
+                endpoints
+                    .iter()
+                    .all(|endpoint| endpoint.root().edge() == fixture.boundary_edge)
+            );
             let expected_ordinals = if cap_operand == 0 { [0, 1] } else { [1, 0] };
             assert_eq!(
                 [endpoints[0].root().ordinal(), endpoints[1].root().ordinal()],

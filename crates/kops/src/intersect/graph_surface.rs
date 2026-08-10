@@ -14,7 +14,7 @@ use super::graph_cylinder_cylinder::{
     intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
 };
 use super::graph_cylinder_cylinder_skew::{
-    CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections,
+    CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections, SkewCylinderIsolatedContact,
     SkewCylinderStrictDiscriminantMiss, intersect_certified_skew_cylinders,
 };
 use super::graph_cylinder_cylinder_skew_branch::build_verified_skew_cylinder_branch;
@@ -367,6 +367,7 @@ pub struct GraphSurfaceSurfaceIntersections {
     pub branch_graph: IntersectionBranchGraph,
     parallel_cylinder_exterior_radial_separation: Option<ParallelCylinderExteriorRadialSeparation>,
     skew_cylinder_strict_discriminant_miss: Option<SkewCylinderStrictDiscriminantMiss>,
+    skew_cylinder_isolated_contacts: Vec<SkewCylinderIsolatedContact>,
 }
 
 impl GraphSurfaceSurfaceIntersections {
@@ -393,6 +394,16 @@ impl GraphSurfaceSurfaceIntersections {
         &self,
     ) -> Option<SkewCylinderStrictDiscriminantMiss> {
         self.skew_cylinder_strict_discriminant_miss
+    }
+
+    /// Exact-root-owned zero-dimensional contacts published by the
+    /// strict-positive skew Cylinder/Cylinder finite-window solver.
+    ///
+    /// The returned certificates are aligned one-for-one with `raw.points`.
+    /// Other solver families and incomplete skew results return an empty
+    /// slice.
+    pub fn skew_cylinder_isolated_contacts(&self) -> &[SkewCylinderIsolatedContact] {
+        &self.skew_cylinder_isolated_contacts
     }
 }
 
@@ -962,6 +973,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     let mut parallel_cylinder_exterior_radial_separation = None;
     let mut skew_cylinder_strict_discriminant_miss = None;
     let mut skew_cylinder_branches = None;
+    let mut skew_cylinder_isolated_contacts = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1034,6 +1046,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     raw,
                     strict_miss,
                     branches,
+                    isolated_contacts,
                 } = intersect_certified_skew_cylinders(
                     cylinders,
                     ranges,
@@ -1042,6 +1055,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 )?;
                 skew_cylinder_strict_discriminant_miss = strict_miss;
                 skew_cylinder_branches = branches;
+                skew_cylinder_isolated_contacts = Some(isolated_contacts);
                 raw
             };
             (raw, None)
@@ -1210,6 +1224,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             fields,
             offset_plane_traces,
             skew_cylinder_branches: skew_cylinder_branches.as_deref(),
+            skew_cylinder_isolated_contacts: skew_cylinder_isolated_contacts.as_deref(),
         },
         [range_a, range_b],
         &raw,
@@ -1222,6 +1237,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         branch_graph,
         parallel_cylinder_exterior_radial_separation,
         skew_cylinder_strict_discriminant_miss,
+        skew_cylinder_isolated_contacts: skew_cylinder_isolated_contacts.unwrap_or_default(),
     })
 }
 
@@ -1847,7 +1863,19 @@ fn build_verified_branch_graph(
         fields,
         offset_plane_traces,
         skew_cylinder_branches,
+        skew_cylinder_isolated_contacts,
     } = proof_sources;
+    if let Some(contacts) = skew_cylinder_isolated_contacts
+        && (contacts.len() != raw.points.len()
+            || contacts
+                .iter()
+                .zip(&raw.points)
+                .any(|(contact, point)| contact.raw_point() != *point))
+    {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
     let mut vertices = raw
         .points
         .iter()
@@ -2140,6 +2168,7 @@ struct ResolvedGraphProofSources<'a> {
     fields: [ResolvedGraphSurfaceField<'a>; 2],
     offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
     skew_cylinder_branches: Option<&'a [CertifiedSkewCylinderBranch]>,
+    skew_cylinder_isolated_contacts: Option<&'a [SkewCylinderIsolatedContact]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

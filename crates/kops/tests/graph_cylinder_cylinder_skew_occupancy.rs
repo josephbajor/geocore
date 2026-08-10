@@ -12,6 +12,7 @@ use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
+use kgeom::vec::Point3;
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph,
     PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK,
@@ -26,10 +27,11 @@ use kops::intersect::{
     IntersectionBranchEndpointProof, IntersectionBranchTopology, IntersectionBranchVertexEvent,
     SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,
     SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY, SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
-    SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH, SKEW_CYLINDER_OPEN_SPAN_WORK,
-    SKEW_CYLINDER_ROOT_CLUSTER_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
-    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SKEW_CYLINDER_TWO_SHEET_WORK,
-    SkewCylinderAxialBoundaryProof, SkewCylinderAxialRelationProof,
+    SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY, SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
+    SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH,
+    SKEW_CYLINDER_OPEN_SPAN_WORK, SKEW_CYLINDER_ROOT_CLUSTER_WORK,
+    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
+    SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderAxialBoundaryProof, SkewCylinderAxialRelationProof,
     SkewCylinderRootInsideSideProof, SurfaceIntersectionCurve, intersect_bounded_graph_surfaces,
     intersect_bounded_graph_surfaces_with_context,
 };
@@ -66,6 +68,28 @@ fn exact_corner_pair() -> [Cylinder; 2] {
     ]
 }
 
+fn oblique_exact_corner_pair() -> ([Cylinder; 2], Frame) {
+    let frame = Frame::new(
+        kgeom::vec::Point3::new(2.5, -1.75, 0.625),
+        kgeom::vec::Vec3::new(0.48, 0.64, 0.6),
+        kgeom::vec::Vec3::new(0.8, -0.6, 0.0),
+    )
+    .unwrap();
+    let cylinders = [
+        Cylinder::new(frame.with_origin(frame.point_at(0.0, 0.0, 16.0)), 13.0).unwrap(),
+        Cylinder::new(
+            Frame::new(frame.point_at(-14.0, 0.0, 0.0), frame.x(), frame.y()).unwrap(),
+            20.0,
+        )
+        .unwrap(),
+    ];
+    (cylinders, frame)
+}
+
+fn world_corner_points() -> [Point3; 2] {
+    [Point3::new(5.0, -12.0, 16.0), Point3::new(5.0, 12.0, 16.0)]
+}
+
 fn graph_pair(cylinders: [Cylinder; 2]) -> (GeometryGraph, [kgraph::SurfaceHandle; 2]) {
     let mut graph = GeometryGraph::new();
     let handles = cylinders.map(|cylinder| graph.insert_surface(cylinder).unwrap());
@@ -82,6 +106,7 @@ fn assert_no_skew_branches(
     assert!(result.raw.regions.is_empty());
     assert!(result.branch_graph.vertices.is_empty());
     assert!(result.branch_graph.edges.is_empty());
+    assert!(result.skew_cylinder_isolated_contacts().is_empty());
     assert!(
         result.skew_cylinder_strict_discriminant_miss().is_none(),
         "finite-window occupancy must not mint an infinite-support miss witness"
@@ -91,6 +116,78 @@ fn assert_no_skew_branches(
             .parallel_cylinder_exterior_radial_separation()
             .is_none()
     );
+}
+
+fn assert_corner_topology(
+    result: &kops::intersect::GraphSurfaceSurfaceIntersections,
+    sources: [kgraph::SurfaceHandle; 2],
+    source_cylinders: [Cylinder; 2],
+    expected_points: [Point3; 2],
+) {
+    let tolerance = Tolerances::default().linear();
+    assert_eq!(result.branch_graph.source_surfaces, sources);
+    assert!(result.raw.is_complete(), "{:#?}", result.raw);
+    assert!(!result.raw.is_proven_empty());
+    assert!(result.raw.regions.is_empty());
+    assert!(result.raw.incomplete_evidence().is_empty());
+    assert_eq!(result.raw.points.len(), 2);
+    assert_eq!(result.raw.curves.len(), 2);
+    assert_eq!(result.branch_graph.vertices.len(), 6);
+    assert_eq!(result.branch_graph.edges.len(), 2);
+    assert!(result.skew_cylinder_strict_discriminant_miss().is_none());
+    assert!(
+        result
+            .parallel_cylinder_exterior_radial_separation()
+            .is_none()
+    );
+
+    let contacts = result.skew_cylinder_isolated_contacts();
+    assert_eq!(contacts.len(), 2);
+    let expected_family = contacts[0].certificate().family();
+    let mut carrier_points = Vec::with_capacity(2);
+    for (ordinal, (contact, raw_point)) in contacts.iter().zip(&result.raw.points).enumerate() {
+        assert_eq!(contact.raw_point(), *raw_point);
+        assert_eq!(
+            contact.surface_parameters(),
+            [raw_point.uv_a, raw_point.uv_b]
+        );
+        assert_eq!(contact.certificate().family(), expected_family);
+        assert_eq!(contact.root_count(), 2);
+        assert!(contact.root(0).is_some());
+        assert!(contact.root(1).is_some());
+        assert!(contact.root(2).is_none());
+        assert_eq!(raw_point.kind, ContactKind::Transverse);
+
+        let carrier = contact.point();
+        carrier_points.push(carrier);
+        assert!(raw_point.point.dist(carrier) <= tolerance);
+        for (source, parameters) in source_cylinders.iter().zip(contact.surface_parameters()) {
+            assert!(source.eval(parameters).dist(carrier) <= tolerance);
+        }
+
+        let vertex = result.branch_graph.vertices[ordinal];
+        assert_eq!(vertex.point, raw_point.point);
+        assert_eq!(vertex.surface_parameters, [raw_point.uv_a, raw_point.uv_b]);
+        assert_eq!(vertex.kind, raw_point.kind);
+        assert_eq!(vertex.event, IntersectionBranchVertexEvent::IsolatedContact);
+    }
+
+    for point in carrier_points {
+        assert!(
+            expected_points
+                .into_iter()
+                .any(|expected| point.dist(expected) <= tolerance)
+        );
+    }
+    for (ordinal, edge) in result.branch_graph.edges.iter().enumerate() {
+        assert_eq!(edge.endpoint_vertices, [2 + 2 * ordinal, 3 + 2 * ordinal]);
+        let membership = edge
+            .certificate
+            .as_skew_cylinder_open_span_branch()
+            .and_then(|certificate| certificate.finite_window_family_membership())
+            .expect("corner spans must retain their complete finite-window family");
+        assert_eq!(membership.family(), expected_family);
+    }
 }
 
 fn assert_single_typed_gap(
@@ -1121,13 +1218,7 @@ fn root_cluster_work_has_exact_n_and_atomic_n_minus_one_boundary() {
     );
     let exact_result = exact.result();
     let exact_result = exact_result.as_ref().unwrap();
-    assert_single_typed_gap(
-        exact_result,
-        handles,
-        SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
-        SKEW_CYLINDER_AXIAL_CLIP_WORK,
-        SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY,
-    );
+    assert_corner_topology(exact_result, handles, cylinders, world_corner_points());
     assert_eq!(
         observed_work(exact.report(), SKEW_CYLINDER_ROOT_CLUSTER_WORK),
         required_work
@@ -1178,6 +1269,161 @@ fn root_cluster_work_has_exact_n_and_atomic_n_minus_one_boundary() {
         ),
         graph_counts,
         "N-1 refusal must not publish spans, isolated points, or mutate the source graph"
+    );
+}
+
+#[test]
+fn exact_corner_contacts_are_complete_replay_and_swap_stable() {
+    let cylinders = exact_corner_pair();
+    let windows = [
+        cylinder_window(range(16.0, 17.0)),
+        cylinder_window(range(-14.0, 5.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+
+    let forward = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let replay = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[1],
+        windows[1],
+        handles[0],
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(forward, replay);
+    assert_corner_topology(&forward, handles, cylinders, world_corner_points());
+    assert_corner_topology(
+        &reversed,
+        [handles[1], handles[0]],
+        [cylinders[1], cylinders[0]],
+        world_corner_points(),
+    );
+    assert_eq!(reversed.raw, forward.raw.clone().swapped());
+
+    let tolerance = Tolerances::default().linear();
+    for reversed_contact in reversed.skew_cylinder_isolated_contacts() {
+        let forward_contact = forward
+            .skew_cylinder_isolated_contacts()
+            .iter()
+            .find(|contact| contact.point().dist(reversed_contact.point()) <= tolerance)
+            .expect("operand swap must retain the same physical contact carrier");
+        let forward_parameters = forward_contact.surface_parameters();
+        assert_eq!(
+            reversed_contact.surface_parameters(),
+            [forward_parameters[1], forward_parameters[0]]
+        );
+    }
+}
+
+#[test]
+fn oblique_exact_corner_contacts_are_complete() {
+    let (cylinders, frame) = oblique_exact_corner_pair();
+    let windows = [
+        cylinder_window(range(0.0, 1.0)),
+        cylinder_window(range(0.0, 19.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+    let result = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_corner_topology(
+        &result,
+        handles,
+        cylinders,
+        [-12.0, 12.0].map(|y| frame.point_at(5.0, y, 16.0)),
+    );
+}
+
+#[test]
+fn positive_width_windows_publish_an_isolated_only_family() {
+    let cylinders = exact_corner_pair();
+    let windows = [
+        cylinder_window(range(16.0, 17.0)),
+        cylinder_window(range(4.0, 5.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+
+    let result = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(result.raw.is_complete(), "{:#?}", result.raw);
+    assert!(!result.raw.is_proven_empty());
+    assert_eq!(result.raw.points.len(), 2);
+    assert!(result.raw.curves.is_empty());
+    assert!(result.raw.regions.is_empty());
+    assert_eq!(result.branch_graph.source_surfaces, handles);
+    assert_eq!(result.branch_graph.vertices.len(), 2);
+    assert!(result.branch_graph.edges.is_empty());
+    assert_eq!(result.skew_cylinder_isolated_contacts().len(), 2);
+    assert!(result.branch_graph.vertices.iter().all(|vertex| {
+        vertex.event == IntersectionBranchVertexEvent::IsolatedContact
+            && vertex.kind == ContactKind::Transverse
+    }));
+    assert!(
+        result
+            .skew_cylinder_isolated_contacts()
+            .iter()
+            .all(|contact| contact.certificate().family().member_count() == 0)
+    );
+}
+
+#[test]
+fn finite_window_contact_stratum_retains_the_contact_topology_refusal() {
+    let cylinders = perpendicular_pair();
+    let windows = [
+        cylinder_window(range(-3.0, 3.0)),
+        cylinder_window(range(-1.0, 1.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+
+    let result = intersect_bounded_graph_surfaces(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_single_typed_gap(
+        &result,
+        handles,
+        SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
+        SKEW_CYLINDER_DISCRIMINANT_WORK,
+        SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
     );
 }
 

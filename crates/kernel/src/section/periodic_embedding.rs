@@ -2701,10 +2701,12 @@ mod tests {
         let components = [
             SectionCurveComponent {
                 fragments: vec![0, 1, 2, 3],
+                isolated_contacts: Vec::new(),
                 closed: true,
             },
             SectionCurveComponent {
                 fragments: vec![4, 5, 6, 7],
+                isolated_contacts: Vec::new(),
                 closed: true,
             },
         ];

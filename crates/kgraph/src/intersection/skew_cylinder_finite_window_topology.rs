@@ -4,10 +4,14 @@
 //! performs no new root solve and depends on no whole-sheet carrier
 //! certificate. The merge is purely topological: projective root corridors
 //! establish a strict cyclic order, exact open-cell relations establish finite
-//! occupancy, and exact-equal physical roots from independent bound equations
-//! are grouped before their state changes are applied atomically. Numeric
-//! range endpoints are the representable inside sides of those exact-source
-//! corridors; every active bound root remains part of the endpoint proof.
+//! occupancy, and certified common physical roots from independent bound
+//! equations are grouped before their state changes are applied atomically.
+//! Exact root relation owns overlapping corridors; a nonzero caller tolerance
+//! may additionally bridge frame-semantic rigid-placement roundoff, with final
+//! publication still gated by the persistent two-surface point certificate.
+//! Numeric range endpoints are the representable inside sides of those
+//! exact-source corridors; every active bound root remains part of the
+//! endpoint proof.
 
 use core::cmp::Ordering;
 
@@ -80,6 +84,10 @@ pub struct SkewCylinderOpenSpanTopologyInput<'a> {
     pub ranges: [[ParamRange; 2]; 2],
     /// Formula-slot to caller/source-slot permutation.
     pub canonical_to_source: [usize; 2],
+    /// Linear model tolerance allowed to identify frame-semantic root cuts
+    /// whose exact projective corridors differ only by rigid-placement
+    /// roundoff. Zero preserves exact-only clustering.
+    pub coincidence_tolerance: f64,
 }
 
 /// The strict side of a source-root corridor retained by one finite span.
@@ -405,12 +413,17 @@ pub fn plan_skew_cylinder_root_clusters(
     }) {
         return Err(SkewCylinderOpenSpanFailure::RangeMismatch);
     }
+    validate_coincidence_tolerance(input.coincidence_tolerance)?;
     let topologies = normalize_topologies(input)?;
     let mut cuts = Vec::new();
     for (topology_index, topology) in topologies.iter().enumerate() {
         cuts.extend(validate_topology(topology_index, topology)?);
     }
-    build_root_cluster_query_plan(&cuts)
+    build_root_cluster_query_plan(
+        &cuts,
+        input.coincidence_tolerance,
+        formula_cylinders[0].radius(),
+    )
 }
 
 /// Merge four exact source-bound topologies into complete Lower/Upper finite
@@ -430,13 +443,23 @@ pub fn classify_skew_cylinder_open_spans(
     }) {
         return Err(SkewCylinderOpenSpanFailure::RangeMismatch);
     }
+    validate_coincidence_tolerance(input.coincidence_tolerance)?;
     let topologies = normalize_topologies(input)?;
     let mut cuts = Vec::new();
     for (topology_index, topology) in topologies.iter().enumerate() {
         cuts.extend(validate_topology(topology_index, topology)?);
     }
-    let root_cluster_query_plan = build_root_cluster_query_plan(&cuts)?;
-    let clusters = sort_and_cluster_projective_roots(&topologies, &mut cuts)?;
+    let root_cluster_query_plan = build_root_cluster_query_plan(
+        &cuts,
+        input.coincidence_tolerance,
+        formula_cylinders[0].radius(),
+    )?;
+    let clusters = sort_and_cluster_projective_roots(
+        &topologies,
+        &mut cuts,
+        input.coincidence_tolerance,
+        formula_cylinders[0].radius(),
+    )?;
 
     let carrier_range = input.ranges[0][0];
     let mut authored = clusters
@@ -472,6 +495,8 @@ pub fn classify_skew_cylinder_open_spans(
 
 fn build_root_cluster_query_plan(
     cuts: &[RootCut],
+    coincidence_tolerance: f64,
+    carrier_radius: f64,
 ) -> Result<SkewCylinderRootClusterQueryPlan, SkewCylinderOpenSpanFailure> {
     let mut bits = 0_u16;
     for (index, first) in cuts.iter().copied().enumerate() {
@@ -482,7 +507,22 @@ fn build_root_cluster_query_plan(
                 continue;
             }
             match compare_projective_corridors(first.bracket, second.bracket) {
-                Ok(_) => {}
+                Ok(_)
+                    if !tolerance_coincident_root_cuts(
+                        first,
+                        second,
+                        coincidence_tolerance,
+                        carrier_radius,
+                    )? => {}
+                Ok(_) => {
+                    let pair = bound_pair_ordinal(first.topology_index, second.topology_index)
+                        .ok_or(SkewCylinderOpenSpanFailure::InconsistentTopology)?;
+                    let chart = match first.bracket.chart {
+                        SkewCylinderHalfAngleChart::Tangent => 0,
+                        SkewCylinderHalfAngleChart::Cotangent => 1,
+                    };
+                    bits |= 1_u16 << (2 * pair + chart);
+                }
                 Err(SkewCylinderOpenSpanFailure::CoincidentOrOverlappingRoots) => {
                     let pair = bound_pair_ordinal(first.topology_index, second.topology_index)
                         .ok_or(SkewCylinderOpenSpanFailure::InconsistentTopology)?;
@@ -497,6 +537,14 @@ fn build_root_cluster_query_plan(
         }
     }
     Ok(SkewCylinderRootClusterQueryPlan { bits })
+}
+
+fn validate_coincidence_tolerance(tolerance: f64) -> Result<(), SkewCylinderOpenSpanFailure> {
+    if tolerance.is_finite() && tolerance >= 0.0 {
+        Ok(())
+    } else {
+        Err(SkewCylinderOpenSpanFailure::InvalidRange)
+    }
 }
 
 fn bound_pair_ordinal(first: usize, second: usize) -> Option<usize> {
@@ -700,13 +748,21 @@ fn validate_root_bracket(
 fn sort_and_cluster_projective_roots(
     topologies: &[&SkewCylinderAxialBoundTopology; 4],
     cuts: &mut [RootCut],
+    coincidence_tolerance: f64,
+    carrier_radius: f64,
 ) -> Result<Vec<RootCluster>, SkewCylinderOpenSpanFailure> {
     // At most sixteen cuts exist. Insertion sort keeps fallible exact-root
     // comparison explicit rather than hiding a refusal in an infallible sort.
     for index in 1..cuts.len() {
         let mut cursor = index;
         while cursor > 0 {
-            match compare_projective_roots(topologies, cuts[cursor - 1], cuts[cursor])? {
+            match compare_projective_roots(
+                topologies,
+                cuts[cursor - 1],
+                cuts[cursor],
+                coincidence_tolerance,
+                carrier_radius,
+            )? {
                 Ordering::Less => break,
                 Ordering::Equal => {
                     if cut_identity(cuts[cursor - 1]) <= cut_identity(cuts[cursor]) {
@@ -729,7 +785,13 @@ fn sort_and_cluster_projective_roots(
             clusters.push(RootCluster { cuts: vec![cut] });
             continue;
         };
-        match compare_projective_roots(topologies, previous.cuts[0], cut)? {
+        match compare_projective_roots(
+            topologies,
+            previous.cuts[0],
+            cut,
+            coincidence_tolerance,
+            carrier_radius,
+        )? {
             Ordering::Less => clusters.push(RootCluster { cuts: vec![cut] }),
             Ordering::Equal => {
                 if previous
@@ -753,8 +815,13 @@ fn compare_projective_roots(
     topologies: &[&SkewCylinderAxialBoundTopology; 4],
     lhs: RootCut,
     rhs: RootCut,
+    coincidence_tolerance: f64,
+    carrier_radius: f64,
 ) -> Result<Ordering, SkewCylinderOpenSpanFailure> {
+    let tolerance_coincident =
+        tolerance_coincident_root_cuts(lhs, rhs, coincidence_tolerance, carrier_radius)?;
     match compare_projective_corridors(lhs.bracket, rhs.bracket) {
+        Ok(_) if tolerance_coincident => Ok(Ordering::Equal),
         Ok(order) => Ok(order),
         Err(SkewCylinderOpenSpanFailure::CoincidentOrOverlappingRoots) => {
             let lhs_polynomial = topologies[lhs.topology_index]
@@ -778,6 +845,7 @@ fn compare_projective_roots(
             .map_err(|_| SkewCylinderOpenSpanFailure::ExactRootRelationIndeterminate)?;
             match relation {
                 ExactRootRelation::Same => Ok(Ordering::Equal),
+                ExactRootRelation::Distinct if tolerance_coincident => Ok(Ordering::Equal),
                 ExactRootRelation::Distinct => {
                     Err(SkewCylinderOpenSpanFailure::CoincidentOrOverlappingRoots)
                 }
@@ -785,6 +853,40 @@ fn compare_projective_roots(
         }
         Err(failure) => Err(failure),
     }
+}
+
+/// Certify a sub-tolerance root-cut separation in the first cylinder's
+/// projective carrier coordinate. The half-angle derivative is bounded by
+/// two, so `2 r Δt` bounds displacement of the topology-owning source circle.
+/// A later persistent isolated-point certificate independently verifies the
+/// full two-surface carrier residual before publication.
+fn tolerance_coincident_root_cuts(
+    lhs: RootCut,
+    rhs: RootCut,
+    tolerance: f64,
+    carrier_radius: f64,
+) -> Result<bool, SkewCylinderOpenSpanFailure> {
+    if tolerance == 0.0
+        || !tolerance.is_finite()
+        || tolerance < 0.0
+        || !carrier_radius.is_finite()
+        || carrier_radius <= 0.0
+        || lhs.bracket.chart != rhs.bracket.chart
+        || !(0..2).any(|sheet| lhs.events[sheet].is_some() && rhs.events[sheet].is_some())
+    {
+        return Ok(false);
+    }
+    if root_sector(lhs.bracket)? != root_sector(rhs.bracket)? {
+        return Ok(false);
+    }
+    let gap = if lhs.bracket.hi < rhs.bracket.lo {
+        rhs.bracket.lo - lhs.bracket.hi
+    } else if rhs.bracket.hi < lhs.bracket.lo {
+        lhs.bracket.lo - rhs.bracket.hi
+    } else {
+        0.0
+    };
+    Ok(gap.is_finite() && 2.0 * carrier_radius * gap <= tolerance)
 }
 
 const fn cut_identity(cut: RootCut) -> (usize, usize) {
@@ -1291,6 +1393,7 @@ mod tests {
             topologies,
             ranges,
             canonical_to_source: [0, 1],
+            coincidence_tolerance: 0.0,
         })
     }
 
@@ -1373,6 +1476,7 @@ mod tests {
             topologies: &source,
             ranges,
             canonical_to_source: [0, 1],
+            coincidence_tolerance: 0.0,
         })
         .unwrap();
         assert_eq!(plan.bits(), 0);
@@ -1384,6 +1488,7 @@ mod tests {
                 topologies: &source,
                 ranges,
                 canonical_to_source: [0, 1],
+                coincidence_tolerance: 0.0,
             })
             .unwrap(),
             plan
@@ -1459,6 +1564,7 @@ mod tests {
             topologies: &source,
             ranges,
             canonical_to_source: [0, 1],
+            coincidence_tolerance: 0.0,
         })
         .unwrap();
         assert_eq!(plan.query_count(), 1);
@@ -1474,6 +1580,7 @@ mod tests {
                 topologies: &source,
                 ranges,
                 canonical_to_source: [0, 1],
+                coincidence_tolerance: 0.0,
             })
             .unwrap(),
             plan

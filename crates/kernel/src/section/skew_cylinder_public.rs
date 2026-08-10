@@ -15,10 +15,119 @@ use kgraph::{
     SkewCylinderBranchCarrier, SkewCylinderBranchPcurve, SkewCylinderBranchPcurveCellCertificate,
     SkewCylinderBranchPcurveEnclosure, SkewCylinderBranchPcurveRootCorridorCertificate,
 };
-use kops::intersect::SkewCylinderOpenSpanBranchCertificate;
+use kops::intersect::{SkewCylinderIsolatedContact, SkewCylinderOpenSpanBranchCertificate};
 
 use super::{SectionEdgeParameterInterval, SectionSourceParameterKey};
 use crate::{FaceId, FinId, LoopId};
+
+/// One exact authored-bound root carried by a zero-dimensional skew-cylinder
+/// finite-window contact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionIsolatedContactRoot {
+    pub(super) operand: usize,
+    pub(super) axial_boundary: SectionSkewCylinderAxialBoundary,
+    pub(super) authored_bound: f64,
+    pub(super) face: FaceId,
+    pub(super) loop_id: LoopId,
+    pub(super) fin: FinId,
+    pub(super) source_parameter: SectionSourceParameterKey,
+    pub(super) edge_parameter: SectionEdgeParameterInterval,
+    pub(super) carrier_root: SectionSkewCylinderCarrierRootEnclosure,
+}
+
+impl SectionIsolatedContactRoot {
+    /// Operand slot whose cylindrical source ring owns this root.
+    pub const fn operand(&self) -> usize {
+        self.operand
+    }
+
+    /// Authored lower/upper axial side that owns this root.
+    pub const fn axial_boundary(&self) -> SectionSkewCylinderAxialBoundary {
+        self.axial_boundary
+    }
+
+    /// Bit-exact caller-authored axial bound used by the root equation.
+    pub const fn authored_bound(&self) -> f64 {
+        self.authored_bound
+    }
+
+    /// Cylindrical side face whose cap ring owns this root.
+    pub fn face(&self) -> FaceId {
+        self.face.clone()
+    }
+
+    /// Topology-owned cap-ring loop.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+
+    /// Source fin carrying the cap ring's whole-period pcurve.
+    pub fn fin(&self) -> FinId {
+        self.fin.clone()
+    }
+
+    /// Stable source-edge/root identity and scalar materialization authority.
+    pub const fn source_parameter(&self) -> &SectionSourceParameterKey {
+        &self.source_parameter
+    }
+
+    /// Intrinsic source-edge enclosure of the exact physical root.
+    pub const fn edge_parameter(&self) -> SectionEdgeParameterInterval {
+        self.edge_parameter
+    }
+
+    /// Exact projective graph-root enclosure.
+    pub const fn carrier_root(&self) -> SectionSkewCylinderCarrierRootEnclosure {
+        self.carrier_root
+    }
+}
+
+/// First-class zero-dimensional member of a body section.
+///
+/// The contact owns an exact analytic point carrier and exact source-ring
+/// roots. It is deliberately not a [`super::SectionVertex`] and has no curve
+/// range. `endpoint` links only to the proof-keyed curved-fragment join table
+/// so the mixed stitcher can attach this point member without manufacturing a
+/// degenerate edge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionIsolatedContact {
+    pub(super) faces: [FaceId; 2],
+    pub(super) endpoint: usize,
+    pub(super) source: SkewCylinderIsolatedContact,
+    pub(super) roots: Vec<SectionIsolatedContactRoot>,
+}
+
+impl SectionIsolatedContact {
+    /// Source faces in section operand order.
+    pub const fn faces(&self) -> &[FaceId; 2] {
+        &self.faces
+    }
+
+    /// Exact analytic zero-dimensional carrier.
+    pub fn point(&self) -> Point3 {
+        self.source.point()
+    }
+
+    /// Parameters on the two source cylinder surfaces, in operand order.
+    pub fn surface_parameters(&self) -> [[f64; 2]; 2] {
+        self.source.surface_parameters()
+    }
+
+    /// Deterministic graph carrier-chart representative of the exact event.
+    pub fn carrier_parameter(&self) -> f64 {
+        self.source.certificate().carrier_parameter()
+    }
+
+    /// Index into [`super::BodySectionGraph::curve_endpoints`].
+    pub const fn endpoint(&self) -> usize {
+        self.endpoint
+    }
+
+    /// Exact source-ring roots grouped into this physical point.
+    pub fn roots(&self) -> &[SectionIsolatedContactRoot] {
+        &self.roots
+    }
+}
 
 /// Projective chart retaining one exact skew-cylinder axial root enclosure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -72,6 +72,7 @@ fn finite_topology(
         topologies: &topologies,
         ranges,
         canonical_to_source: formula_to_source,
+        coincidence_tolerance: 0.0,
     })
     .unwrap()
 }
@@ -241,11 +242,103 @@ fn exact_corner_clusters_are_persisted_and_accounted_without_zero_length_members
     assert_eq!(family.work(), 896 + 32 + 260 * 2);
     assert_eq!(family.root_event_count(SkewCylinderSheet::Upper), 6);
     let isolated = (0..family.root_event_count(SkewCylinderSheet::Upper))
-        .filter_map(|ordinal| family.root_event(SkewCylinderSheet::Upper, ordinal))
-        .filter(|event| event.kind() == PersistentSkewCylinderFiniteWindowRootEventKind::Isolated)
+        .filter_map(|ordinal| family.root_event_certificate(SkewCylinderSheet::Upper, ordinal))
+        .filter(|certificate| {
+            certificate.event().kind() == PersistentSkewCylinderFiniteWindowRootEventKind::Isolated
+        })
         .collect::<Vec<_>>();
     assert_eq!(isolated.len(), 2);
-    assert!(isolated.iter().all(|event| event.root_count() == 2));
+    assert!(isolated.iter().all(|certificate| {
+        certificate.family() == family
+            && certificate.sheet() == SkewCylinderSheet::Upper
+            && certificate.event().root_count() == 2
+            && certificate.root(0).is_some()
+            && certificate.root(1).is_some()
+            && certificate.root(2).is_none()
+    }));
+    let mut isolated_points = isolated
+        .iter()
+        .map(|event| {
+            family
+                .isolated_point_certificate(event.sheet(), event.ordinal())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    isolated_points.sort_by(|first, second| first.point().y.total_cmp(&second.point().y));
+    assert_eq!(isolated_points.len(), 2);
+    for (certificate, expected_y) in isolated_points.into_iter().zip([-12.0, 12.0]) {
+        let point = certificate.point();
+        assert!((point.x - 5.0).abs() <= TEST_TOLERANCE);
+        assert!((point.y - expected_y).abs() <= TEST_TOLERANCE);
+        assert!((point.z - 16.0).abs() <= TEST_TOLERANCE);
+        assert_eq!(certificate.event_certificate().event().root_count(), 2);
+        assert!(certificate.root(0).is_some());
+        assert!(certificate.root(1).is_some());
+        assert!(certificate.root(2).is_none());
+        assert!(
+            certificate
+                .source_surface_points()
+                .into_iter()
+                .all(|source| { source.dist(point) <= TEST_TOLERANCE })
+        );
+    }
+    assert!(
+        family
+            .root_event_certificate(
+                SkewCylinderSheet::Upper,
+                family.root_event_count(SkewCylinderSheet::Upper),
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn isolated_only_family_mints_event_carriers_without_curve_members() {
+    let frame = Frame::world();
+    let cylinders = [
+        Cylinder::new(frame, 13.0).unwrap(),
+        Cylinder::new(
+            Frame::new(frame.origin(), frame.x(), frame.y()).unwrap(),
+            20.0,
+        )
+        .unwrap(),
+    ];
+    let ranges = [
+        [ParamRange::new(0.0, TAU), ParamRange::new(16.0, 17.0)],
+        [ParamRange::new(0.0, TAU), ParamRange::new(4.0, 5.0)],
+    ];
+    let fixture = family_fixture_for(cylinders, ranges, TEST_TOLERANCE);
+    assert!(fixture.members.is_empty());
+    let family = certify_fixture(&fixture).unwrap();
+
+    assert_eq!(family.member_count(), 0);
+    assert_eq!(
+        family.work(),
+        PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK
+            + family.root_cluster_query_plan().work()
+    );
+    assert_eq!(family.root_event_count(SkewCylinderSheet::Upper), 2);
+    for ordinal in 0..2 {
+        let certificate = family
+            .root_event_certificate(SkewCylinderSheet::Upper, ordinal)
+            .unwrap();
+        assert_eq!(
+            certificate.event().kind(),
+            PersistentSkewCylinderFiniteWindowRootEventKind::Isolated
+        );
+        assert_eq!(certificate.event().root_count(), 2);
+        assert!(certificate.root(0).is_some());
+        assert!(certificate.root(1).is_some());
+        let point = family
+            .isolated_point_certificate(SkewCylinderSheet::Upper, ordinal)
+            .unwrap();
+        assert!(
+            point
+                .source_surface_points()
+                .into_iter()
+                .all(|source| source.dist(point.point()) <= TEST_TOLERANCE)
+        );
+    }
 }
 
 #[test]
