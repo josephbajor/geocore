@@ -369,6 +369,7 @@ struct PeriodicComponentSpec {
 struct PeriodicBoundaryRootSpec {
     key: PeriodicSourceRootKey,
     source_loop_ordinal: usize,
+    isolated_contact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -998,20 +999,7 @@ fn adapt_boundary_traces(
     ),
     MixedPeriodicArrangementError,
 > {
-    let mut expected_root_counts = [0_usize; 2];
-    for trace in evidence_traces {
-        for terminal in trace.terminals() {
-            let Some(count) = expected_root_counts.get_mut(terminal.source_loop_ordinal()) else {
-                return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
-                    terminal.endpoint(),
-                ));
-            };
-            *count = count
-                .checked_add(1)
-                .ok_or(MixedPeriodicArrangementError::TopologyArithmeticOverflow)?;
-        }
-    }
-    let roots = adapt_boundary_roots(graph, evidence_roots, expected_root_counts)?;
+    let roots = adapt_boundary_roots(graph, evidence_roots)?;
     let mut seen_traces = BTreeSet::new();
     let mut covered = BTreeMap::<PeriodicBoundaryTraceOwner, BTreeMap<usize, usize>>::new();
     let mut seen_fragments = BTreeSet::new();
@@ -1120,6 +1108,10 @@ fn adapt_boundary_traces(
             .map(|terminal| PeriodicBoundaryRootSpec {
                 key: boundary_root_key(terminal),
                 source_loop_ordinal: terminal.source_loop_ordinal(),
+                isolated_contact: graph
+                    .isolated_contacts()
+                    .iter()
+                    .any(|contact| contact.endpoint() == terminal.endpoint()),
             });
         let expected_endpoints = [
             fragments[0].endpoints[0],
@@ -1171,18 +1163,10 @@ fn adapt_boundary_traces(
 fn adapt_boundary_roots(
     graph: &BodySectionGraph,
     roots: &[Vec<crate::SectionPeriodicBoundaryRootEmbedding>; 2],
-    expected_counts: [usize; 2],
 ) -> Result<[Vec<PeriodicBoundaryRootSpec>; 2], MixedPeriodicArrangementError> {
     let mut seen_endpoints = BTreeSet::new();
     let mut result: [Vec<PeriodicBoundaryRootSpec>; 2] = core::array::from_fn(|_| Vec::new());
     for source_loop in 0..2 {
-        if roots[source_loop].len() != expected_counts[source_loop] {
-            return Err(MixedPeriodicArrangementError::BoundaryRootCountMismatch {
-                source_loop,
-                expected: expected_counts[source_loop],
-                actual: roots[source_loop].len(),
-            });
-        }
         for (expected_order, root) in roots[source_loop].iter().enumerate() {
             if root.source_loop_ordinal() != source_loop {
                 return Err(MixedPeriodicArrangementError::BoundaryRootLoopMismatch {
@@ -1208,6 +1192,10 @@ fn adapt_boundary_roots(
             result[source_loop].push(PeriodicBoundaryRootSpec {
                 key: boundary_root_key(root),
                 source_loop_ordinal: source_loop,
+                isolated_contact: graph
+                    .isolated_contacts()
+                    .iter()
+                    .any(|contact| contact.endpoint() == root.endpoint()),
             });
         }
     }
@@ -1249,6 +1237,7 @@ fn validate_boundary_trace_matching(
     roots: &[Vec<PeriodicBoundaryRootSpec>; 2],
     traces: &[PeriodicBoundaryTraceSpec],
 ) -> Result<(), MixedPeriodicArrangementError> {
+    validate_boundary_root_cut_incidence(roots, traces)?;
     let returning = traces
         .iter()
         .filter(|trace| {
@@ -1266,7 +1255,7 @@ fn validate_boundary_trace_matching(
     match (returning, transverse) {
         (None, None) => Ok(()),
         (Some(_), None) => validate_returning_trace_matching(roots, traces),
-        (None, Some(_)) => validate_transverse_trace_matching(roots, traces),
+        (None, Some(_)) => validate_transverse_trace_matching(traces),
         (Some(returning), Some(transverse)) => Err(
             MixedPeriodicArrangementError::MixedBoundaryTraceFamiliesUnsupported {
                 returning,
@@ -1290,11 +1279,6 @@ fn validate_returning_trace_matching(
                 );
             }
         }
-    }
-    if used.len() != roots.iter().map(Vec::len).sum() {
-        return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
-            used.len(),
-        ));
     }
     for source_loop in 0..2 {
         let on_loop = traces
@@ -1328,50 +1312,104 @@ fn terminal_pairs_alternate(
 }
 
 fn validate_transverse_trace_matching(
+    traces: &[PeriodicBoundaryTraceSpec],
+) -> Result<(), MixedPeriodicArrangementError> {
+    let ordered = [0, 1].map(|source_loop| {
+        let mut values = traces
+            .iter()
+            .map(|trace| {
+                let terminals = trace
+                    .terminals
+                    .iter()
+                    .filter(|terminal| terminal.source_loop_ordinal == source_loop)
+                    .collect::<Vec<_>>();
+                let [terminal] = terminals.as_slice() else {
+                    return Err(
+                        MixedPeriodicArrangementError::BoundaryTraceMatchingMismatch(trace.key),
+                    );
+                };
+                Ok((terminal.key.cyclic_order, trace.key))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        values.sort_unstable();
+        if values.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
+                source_loop,
+            ));
+        }
+        Ok(values.into_iter().map(|(_, key)| key).collect::<Vec<_>>())
+    });
+    let [first, second] = ordered;
+    let first = first?;
+    let second = second?;
+    let Some(rotation) = second.iter().position(|key| Some(key) == first.first()) else {
+        return Err(MixedPeriodicArrangementError::BoundaryTraceMatchingMismatch(traces[0].key));
+    };
+    for (offset, key) in first.iter().enumerate() {
+        if second[(rotation + offset) % second.len()] != *key {
+            return Err(MixedPeriodicArrangementError::BoundaryTraceMatchingMismatch(*key));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryRootCutIncidence {
+    Terminal { trace: usize, terminal: usize },
+    Internal { trace: usize, join: usize },
+}
+
+fn boundary_root_cut_incidence(
+    traces: &[PeriodicBoundaryTraceSpec],
+    endpoint: usize,
+) -> Result<Option<BoundaryRootCutIncidence>, MixedPeriodicArrangementError> {
+    let mut retained = None;
+    for (trace_index, trace) in traces.iter().enumerate() {
+        for (terminal, root) in trace.terminals.iter().enumerate() {
+            if root.key.endpoint == endpoint
+                && retained
+                    .replace(BoundaryRootCutIncidence::Terminal {
+                        trace: trace_index,
+                        terminal,
+                    })
+                    .is_some()
+            {
+                return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
+                    endpoint,
+                ));
+            }
+        }
+        for (join, pair) in trace.fragments.windows(2).enumerate() {
+            if pair[0].endpoints[1] == endpoint
+                && pair[1].endpoints[0] == endpoint
+                && retained
+                    .replace(BoundaryRootCutIncidence::Internal {
+                        trace: trace_index,
+                        join,
+                    })
+                    .is_some()
+            {
+                return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
+                    endpoint,
+                ));
+            }
+        }
+    }
+    Ok(retained)
+}
+
+fn validate_boundary_root_cut_incidence(
     roots: &[Vec<PeriodicBoundaryRootSpec>; 2],
     traces: &[PeriodicBoundaryTraceSpec],
 ) -> Result<(), MixedPeriodicArrangementError> {
-    let mut by_first_order = traces.iter().collect::<Vec<_>>();
-    by_first_order.sort_unstable_by_key(|trace| {
-        trace
-            .terminals
-            .iter()
-            .find(|terminal| terminal.source_loop_ordinal == 0)
-            .map(|terminal| terminal.key.cyclic_order)
-    });
-    for (expected, trace) in by_first_order.iter().enumerate() {
-        let actual = trace
-            .terminals
-            .iter()
-            .find(|terminal| terminal.source_loop_ordinal == 0)
-            .map(|terminal| terminal.key.cyclic_order);
-        if actual != Some(expected) {
-            return Err(MixedPeriodicArrangementError::BoundaryTraceMatchingMismatch(trace.key));
+    for root in roots.iter().flatten() {
+        if boundary_root_cut_incidence(traces, root.key.endpoint)?.is_none()
+            && !root.isolated_contact
+        {
+            return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
+                root.key.endpoint,
+            ));
         }
-    }
-    let first_second_order = by_first_order[0]
-        .terminals
-        .iter()
-        .find(|terminal| terminal.source_loop_ordinal == 1)
-        .expect("transverse trace has one terminal on each source loop")
-        .key
-        .cyclic_order;
-    for (offset, trace) in by_first_order.iter().enumerate() {
-        let actual = trace
-            .terminals
-            .iter()
-            .find(|terminal| terminal.source_loop_ordinal == 1)
-            .expect("transverse trace has one terminal on each source loop")
-            .key
-            .cyclic_order;
-        if actual != (first_second_order + offset) % traces.len() {
-            return Err(MixedPeriodicArrangementError::BoundaryTraceMatchingMismatch(trace.key));
-        }
-    }
-    if roots.iter().any(|source| source.len() != traces.len()) {
-        return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
-            traces.len(),
-        ));
     }
     Ok(())
 }
@@ -1566,8 +1604,13 @@ fn returning_trace_arrangement_inputs(
     let mut source_spans = Vec::new();
     let mut cuts = Vec::new();
     let mut rotations = Vec::new();
+    let root_endpoints = roots
+        .iter()
+        .flatten()
+        .map(|root| root.key.endpoint)
+        .collect::<BTreeSet<_>>();
     for trace in traces {
-        append_trace_cuts(trace, &mut cuts, &mut rotations);
+        append_trace_cuts(trace, &root_endpoints, &mut cuts, &mut rotations);
     }
     for (source_loop, source_direction) in source_directions.into_iter().enumerate() {
         if roots[source_loop].is_empty() {
@@ -1586,7 +1629,7 @@ fn returning_trace_arrangement_inputs(
             );
         }
     }
-    append_trace_terminal_rotations(
+    append_boundary_root_rotations(
         traces,
         roots,
         &source_spans,
@@ -1798,6 +1841,7 @@ fn returning_cycle_winding(
 
 fn append_trace_cuts(
     trace: &PeriodicBoundaryTraceSpec,
+    boundary_roots: &BTreeSet<usize>,
     cuts: &mut Vec<DirectedCutFragment<PeriodicCutFragmentKey, PeriodicArrangementVertexKey>>,
     rotations: &mut Vec<
         CertifiedEndpointRotation<
@@ -1814,14 +1858,17 @@ fn append_trace_cuts(
             PeriodicArrangementVertexKey::SectionEndpoint(fragment.endpoints[1]),
         )
     }));
-    rotations.extend(trace.fragments.windows(2).map(|pair| {
-        CertifiedEndpointRotation::new(
-            PeriodicArrangementVertexKey::SectionEndpoint(pair[0].endpoints[1]),
-            vec![
-                ArrangementDartKey::cut(pair[1].key, ArrangementDirection::Forward),
-                ArrangementDartKey::cut(pair[0].key, ArrangementDirection::Reverse),
-            ],
-        )
+    rotations.extend(trace.fragments.windows(2).filter_map(|pair| {
+        let endpoint = pair[0].endpoints[1];
+        (!boundary_roots.contains(&endpoint)).then(|| {
+            CertifiedEndpointRotation::new(
+                PeriodicArrangementVertexKey::SectionEndpoint(endpoint),
+                vec![
+                    ArrangementDartKey::cut(pair[1].key, ArrangementDirection::Forward),
+                    ArrangementDartKey::cut(pair[0].key, ArrangementDirection::Reverse),
+                ],
+            )
+        })
     }));
 }
 
@@ -1900,7 +1947,7 @@ fn source_span_key(
         .key()
 }
 
-fn append_trace_terminal_rotations(
+fn append_boundary_root_rotations(
     traces: &[PeriodicBoundaryTraceSpec],
     roots: &[Vec<PeriodicBoundaryRootSpec>; 2],
     source_spans: &[DirectedSourceSpan<PeriodicSourceLoopKey, PeriodicArrangementVertexKey>],
@@ -1922,33 +1969,43 @@ fn append_trace_terminal_rotations(
                 source_directions[source_loop],
                 roots[source_loop].len(),
             );
-            let (trace, terminal) = traces
-                .iter()
-                .find_map(|trace| {
-                    trace
-                        .terminals
-                        .iter()
-                        .position(|terminal| terminal.key.endpoint == root.key.endpoint)
-                        .map(|terminal| (trace, terminal))
-                })
-                .ok_or(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
-                    root.key.endpoint,
-                ))?;
-            let cut = if terminal == 0 {
-                ArrangementDartKey::cut(trace.fragments[0].key, ArrangementDirection::Forward)
-            } else {
-                ArrangementDartKey::cut(
-                    trace.fragments[trace.fragments.len() - 1].key,
-                    ArrangementDirection::Reverse,
-                )
+            let cuts = match boundary_root_cut_incidence(traces, root.key.endpoint)? {
+                Some(BoundaryRootCutIncidence::Terminal { trace, terminal }) => {
+                    let trace = &traces[trace];
+                    vec![if terminal == 0 {
+                        ArrangementDartKey::cut(
+                            trace.fragments[0].key,
+                            ArrangementDirection::Forward,
+                        )
+                    } else {
+                        ArrangementDartKey::cut(
+                            trace.fragments[trace.fragments.len() - 1].key,
+                            ArrangementDirection::Reverse,
+                        )
+                    }]
+                }
+                Some(BoundaryRootCutIncidence::Internal { trace, join }) => {
+                    let pair = &traces[trace].fragments[join..=join + 1];
+                    vec![
+                        ArrangementDartKey::cut(pair[1].key, ArrangementDirection::Forward),
+                        ArrangementDartKey::cut(pair[0].key, ArrangementDirection::Reverse),
+                    ]
+                }
+                None if root.isolated_contact => Vec::new(),
+                None => {
+                    return Err(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
+                        root.key.endpoint,
+                    ));
+                }
             };
+            let mut outgoing = vec![
+                ArrangementDartKey::source(previous_span, ArrangementDirection::Reverse),
+                ArrangementDartKey::source(current_span, ArrangementDirection::Forward),
+            ];
+            outgoing.extend(cuts);
             rotations.push(CertifiedEndpointRotation::new(
                 PeriodicArrangementVertexKey::SectionEndpoint(root.key.endpoint),
-                vec![
-                    ArrangementDartKey::source(previous_span, ArrangementDirection::Reverse),
-                    ArrangementDartKey::source(current_span, ArrangementDirection::Forward),
-                    cut,
-                ],
+                outgoing,
             ));
         }
     }
@@ -1961,19 +2018,27 @@ fn boundary_trace_arrangement_inputs(
     source_directions: [ArrangementDirection; 2],
 ) -> Result<PeriodicArrangementInputs, MixedPeriodicArrangementError> {
     let trace_count = traces.len();
-    let mut source_spans = Vec::with_capacity(2 * trace_count);
-    let mut rotations = Vec::with_capacity(2 * trace_count);
+    let source_count = roots.iter().map(Vec::len).sum::<usize>();
+    let mut source_spans = Vec::with_capacity(source_count);
+    let mut rotations = Vec::with_capacity(source_count);
     let mut assignments = Vec::with_capacity(trace_count + 2);
+    let mut assigned_trace_cells = BTreeSet::new();
     let mut cuts = Vec::new();
+    let root_endpoints = roots
+        .iter()
+        .flatten()
+        .map(|root| root.key.endpoint)
+        .collect::<BTreeSet<_>>();
     for trace in traces {
-        append_trace_cuts(trace, &mut cuts, &mut rotations);
+        append_trace_cuts(trace, &root_endpoints, &mut cuts, &mut rotations);
     }
 
     for (source_loop, source_direction) in source_directions.into_iter().enumerate() {
-        for cyclic_span in 0..trace_count {
+        let root_count = roots[source_loop].len();
+        for cyclic_span in 0..root_count {
             let canonical = [
                 roots[source_loop][cyclic_span].key,
-                roots[source_loop][(cyclic_span + 1) % trace_count].key,
+                roots[source_loop][(cyclic_span + 1) % root_count].key,
             ];
             let terminal_roots = if source_direction == ArrangementDirection::Forward {
                 canonical
@@ -1992,12 +2057,13 @@ fn boundary_trace_arrangement_inputs(
                 PeriodicArrangementVertexKey::SectionEndpoint(terminal_roots[1].endpoint),
             ));
             if source_loop == 0 {
-                assignments.push(CertifiedCycleAssignment::new(
-                    ArrangementDartKey::source(key, ArrangementDirection::Forward),
-                    CertifiedCycleSide::Cell(PeriodicArrangementCellKey::TraceCell(
-                        traces[cyclic_span].key,
-                    )),
-                ));
+                let cell = trace_cell_for_source_span(traces, source_loop, cyclic_span)?;
+                if assigned_trace_cells.insert(cell) {
+                    assignments.push(CertifiedCycleAssignment::new(
+                        ArrangementDartKey::source(key, ArrangementDirection::Forward),
+                        CertifiedCycleSide::Cell(PeriodicArrangementCellKey::TraceCell(cell)),
+                    ));
+                }
             }
         }
         let exterior_key = source_spans
@@ -2014,7 +2080,7 @@ fn boundary_trace_arrangement_inputs(
         ));
     }
 
-    append_trace_terminal_rotations(
+    append_boundary_root_rotations(
         traces,
         roots,
         &source_spans,
@@ -2040,11 +2106,11 @@ fn source_incident_spans(
     source_loop: usize,
     root_order: usize,
     source_direction: ArrangementDirection,
-    trace_count: usize,
+    root_count: usize,
 ) -> (PeriodicSourceLoopKey, PeriodicSourceLoopKey) {
     let (previous_ordinal, current_ordinal) = match source_direction {
-        ArrangementDirection::Forward => ((root_order + trace_count - 1) % trace_count, root_order),
-        ArrangementDirection::Reverse => (root_order, (root_order + trace_count - 1) % trace_count),
+        ArrangementDirection::Forward => ((root_order + root_count - 1) % root_count, root_order),
+        ArrangementDirection::Reverse => (root_order, (root_order + root_count - 1) % root_count),
     };
     let find = |ordinal| {
         *source_spans
@@ -2057,6 +2123,27 @@ fn source_incident_spans(
             .key()
     };
     (find(previous_ordinal), find(current_ordinal))
+}
+
+fn trace_cell_for_source_span(
+    traces: &[PeriodicBoundaryTraceSpec],
+    source_loop: usize,
+    cyclic_span: usize,
+) -> Result<PeriodicBoundaryTraceKey, MixedPeriodicArrangementError> {
+    let mut terminals = traces
+        .iter()
+        .map(|trace| (root_on_loop(trace, source_loop).key.cyclic_order, trace.key))
+        .collect::<Vec<_>>();
+    terminals.sort_unstable();
+    terminals
+        .iter()
+        .rev()
+        .find(|(order, _)| *order <= cyclic_span)
+        .or_else(|| terminals.last())
+        .map(|(_, key)| *key)
+        .ok_or(MixedPeriodicArrangementError::BoundaryRootCoverageMismatch(
+            source_loop,
+        ))
 }
 
 fn root_on_loop(
@@ -2122,17 +2209,20 @@ fn validate_boundary_trace_contract(
             ));
         }
     }
-    validate_boundary_trace_conservation(arrangement, traces.len(), cut_count)
+    validate_boundary_trace_conservation(
+        arrangement,
+        arrangement.source_spans().len(),
+        traces.len(),
+        cut_count,
+    )
 }
 
 fn validate_boundary_trace_conservation(
     arrangement: &MixedPeriodicFaceArrangement,
+    source_count: usize,
     trace_count: usize,
     cut_count: usize,
 ) -> Result<(), MixedPeriodicArrangementError> {
-    let source_count = trace_count
-        .checked_mul(2)
-        .ok_or(MixedPeriodicArrangementError::TopologyArithmeticOverflow)?;
     let expected_darts = source_count
         .checked_add(cut_count)
         .and_then(|count| count.checked_mul(2))
@@ -2540,6 +2630,7 @@ mod tests {
                             cylinder_chart_shift: i64::try_from(source_loop).unwrap(),
                         },
                         source_loop_ordinal: source_loop,
+                        isolated_contact: false,
                     }
                 })
                 .collect::<Vec<_>>()
@@ -2615,6 +2706,7 @@ mod tests {
                         cylinder_chart_shift: chart_shifts[cyclic_order],
                     },
                     source_loop_ordinal: source_loop,
+                    isolated_contact: false,
                 }
             })
             .collect();

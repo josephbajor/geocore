@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use kcore::interval::Interval;
 use ktopo::entity::{EdgeId as RawEdgeId, FinId as RawFinId, LoopId as RawLoopId, Sense};
 use ktopo::geom::{CurveGeom, SurfaceGeom};
 use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
@@ -32,7 +33,8 @@ use super::face_arrangement::{
 use crate::{
     BodySectionGraph, FaceId, SectionBranch, SectionBranchTopology, SectionCarrier,
     SectionCompletion, SectionCurveEndpointTopology, SectionCurveFragmentEnd,
-    SectionCurveFragmentSpan, SectionRulingFragmentEnd, SectionSite, SectionUvCurve,
+    SectionCurveFragmentSpan, SectionRulingFragmentEnd, SectionSite, SectionSourceParameterKey,
+    SectionUvCurve,
 };
 
 /// Whether Section proved that every cap-ring/cutter root was published.
@@ -46,6 +48,7 @@ pub(crate) enum DiskBoundaryCoverage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiskRootContact {
     Transverse,
+    IsolatedJunction,
     Tangent,
     Indeterminate,
 }
@@ -154,6 +157,8 @@ pub(crate) struct CertifiedDiskBoundary {
     sense: Sense,
     coverage: DiskBoundaryCoverage,
     roots: Vec<DiskBoundaryRootEvidence>,
+    interior_vertices: Vec<usize>,
+    subdivided_path_certified: bool,
 }
 
 impl CertifiedDiskBoundary {
@@ -170,7 +175,15 @@ impl CertifiedDiskBoundary {
             sense,
             coverage,
             roots,
+            interior_vertices: Vec::new(),
+            subdivided_path_certified: false,
         }
+    }
+
+    fn with_subdivided_path(mut self, interior_vertices: Vec<usize>) -> Self {
+        self.interior_vertices = interior_vertices;
+        self.subdivided_path_certified = true;
+        self
     }
 
     pub(crate) const fn edge(&self) -> RawEdgeId {
@@ -232,15 +245,22 @@ struct CertifiedDiskCircularCut {
     endpoints: [usize; 2],
     topology: DiskCircularCutTopology,
     wraps_pcurve_seam: bool,
+    isolated_contact_endpoints: bool,
 }
 
 impl CertifiedDiskCircularCut {
-    const fn simple(fragment: usize, endpoints: [usize; 2], wraps_pcurve_seam: bool) -> Self {
+    const fn simple(
+        fragment: usize,
+        endpoints: [usize; 2],
+        wraps_pcurve_seam: bool,
+        isolated_contact_endpoints: bool,
+    ) -> Self {
         Self {
             key: DiskChordKey::new(fragment),
             endpoints,
             topology: DiskCircularCutTopology::Simple,
             wraps_pcurve_seam,
+            isolated_contact_endpoints,
         }
     }
 
@@ -251,6 +271,7 @@ impl CertifiedDiskCircularCut {
             endpoints,
             topology: DiskCircularCutTopology::CoincidentBoundary,
             wraps_pcurve_seam: false,
+            isolated_contact_endpoints: false,
         }
     }
 }
@@ -490,6 +511,13 @@ struct DiskCapTopology {
     sense: Sense,
 }
 
+type CollectedSectionCapCuts = (
+    Vec<UnorderedSectionRoot>,
+    Vec<CertifiedDiskCut>,
+    f64,
+    Vec<usize>,
+);
+
 #[derive(Debug, Clone, Copy)]
 struct UnorderedSectionRoot {
     endpoint: usize,
@@ -561,7 +589,7 @@ fn arrange_section_disk_face_impl(
     }
 
     let topology = disk_cap_topology(store, cap.raw())?;
-    let (mut roots, cuts, tolerance) =
+    let (mut roots, cuts, tolerance, interior_vertices) =
         collect_section_cap_cuts(graph, cap, operand, topology, selected_fragments)?;
     if certify_whole_fin_incidence(store, cap.raw(), topology.loop_id, topology.fin, tolerance)
         != WholeFinIncidence::Certified
@@ -572,6 +600,7 @@ fn arrange_section_disk_face_impl(
     // Sorting only proposes an interval order. The strict separation check
     // below is the proof that the proposal is a complete intrinsic order;
     // no point or scalar representative is promoted to ordering authority.
+    roots = coalesce_section_roots(roots)?;
     roots.sort_by(|left, right| {
         left.enclosure[0]
             .total_cmp(&right.enclosure[0])
@@ -590,24 +619,37 @@ fn arrange_section_disk_face_impl(
         .into_iter()
         .enumerate()
         .map(|(circular_ordinal, root)| {
-            DiskBoundaryRootEvidence::transverse(
-                DiskRootKey::new(root.endpoint, circular_ordinal, root.source_root_ordinal),
-                root.parameter,
-                root.enclosure,
-            )
+            let key = DiskRootKey::new(root.endpoint, circular_ordinal, root.source_root_ordinal);
+            if graph
+                .isolated_contacts()
+                .iter()
+                .any(|contact| contact.endpoint() == root.endpoint)
+            {
+                DiskBoundaryRootEvidence::with_contact(
+                    key,
+                    root.parameter,
+                    root.enclosure,
+                    DiskRootContact::IsolatedJunction,
+                )
+            } else {
+                DiskBoundaryRootEvidence::transverse(key, root.parameter, root.enclosure)
+            }
         })
         .collect();
-    arrange_disk_face_cuts(
-        CertifiedDiskBoundary::new(
-            topology.edge,
-            topology.fin,
-            topology.sense,
-            DiskBoundaryCoverage::Complete,
-            roots,
-        ),
-        cuts,
-    )
-    .map_err(SectionDiskArrangementError::Arrangement)
+    let boundary = CertifiedDiskBoundary::new(
+        topology.edge,
+        topology.fin,
+        topology.sense,
+        DiskBoundaryCoverage::Complete,
+        roots,
+    );
+    let boundary = if interior_vertices.is_empty() {
+        boundary
+    } else {
+        certify_subdivided_chord_path(graph, &cuts, &interior_vertices)?;
+        boundary.with_subdivided_path(interior_vertices)
+    };
+    arrange_disk_face_cuts(boundary, cuts).map_err(SectionDiskArrangementError::Arrangement)
 }
 
 fn disk_cap_topology(
@@ -672,7 +714,7 @@ fn collect_section_cap_cuts(
     operand: usize,
     topology: DiskCapTopology,
     selected_fragments: Option<&[usize]>,
-) -> Result<(Vec<UnorderedSectionRoot>, Vec<CertifiedDiskCut>, f64), SectionDiskArrangementError> {
+) -> Result<CollectedSectionCapCuts, SectionDiskArrangementError> {
     let mut roots = Vec::new();
     let mut cuts = Vec::new();
     let mut tolerance_bits = None;
@@ -718,18 +760,19 @@ fn collect_section_cap_cuts(
                             &branch.faces()[1 - operand],
                             operand,
                             topology,
+                            certified_isolated_cap_contact(
+                                graph,
+                                end.endpoint(),
+                                operand,
+                                topology,
+                            ),
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let [start, end]: [UnorderedSectionRoot; 2] = bound.try_into().map_err(|_| {
-                    SectionDiskArrangementError::UnsupportedCapFragment(fragment_index)
-                })?;
+                let cut_endpoints = endpoints.each_ref().map(|end| end.endpoint());
                 (
-                    [start, end],
-                    CertifiedDiskCut::Chord(CertifiedDiskChord::new(
-                        fragment_index,
-                        [start.endpoint, end.endpoint],
-                    )),
+                    bound.into_iter().flatten().collect::<Vec<_>>(),
+                    CertifiedDiskCut::Chord(CertifiedDiskChord::new(fragment_index, cut_endpoints)),
                 )
             }
             SectionCurveFragmentSpan::Arc {
@@ -753,7 +796,13 @@ fn collect_section_cap_cuts(
                             &branch.faces()[1 - operand],
                             operand,
                             topology,
-                            selected_fragments.is_some(),
+                            selected_fragments.is_some()
+                                || certified_isolated_cap_contact(
+                                    graph,
+                                    end.endpoint(),
+                                    operand,
+                                    topology,
+                                ),
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -761,11 +810,14 @@ fn collect_section_cap_cuts(
                     SectionDiskArrangementError::UnsupportedCapFragment(fragment_index)
                 })?;
                 (
-                    [start, end],
+                    vec![start, end],
                     CertifiedDiskCut::Circular(CertifiedDiskCircularCut::simple(
                         fragment_index,
                         [start.endpoint, end.endpoint],
                         *wraps_pcurve_seam,
+                        endpoints.iter().all(|end| {
+                            certified_isolated_cap_contact(graph, end.endpoint(), operand, topology)
+                        }),
                     )),
                 )
             }
@@ -783,8 +835,7 @@ fn collect_section_cap_cuts(
                 ));
             }
         };
-        let [start, end] = bound;
-        roots.extend([start, end]);
+        roots.extend(bound);
         cuts.push(cut);
     }
     if selected_fragments.is_some_and(|selected| selected.len() != cuts.len()) {
@@ -793,7 +844,237 @@ fn collect_section_cap_cuts(
     let tolerance = tolerance_bits
         .map(f64::from_bits)
         .ok_or(SectionDiskArrangementError::MissingCapChord)?;
-    Ok((roots, cuts, tolerance))
+    let boundary_endpoints = roots
+        .iter()
+        .map(|root| root.endpoint)
+        .collect::<BTreeSet<_>>();
+    let interior_vertices = cuts
+        .iter()
+        .flat_map(|cut| cut.endpoints())
+        .filter(|endpoint| !boundary_endpoints.contains(endpoint))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok((roots, cuts, tolerance, interior_vertices))
+}
+
+fn coalesce_section_roots(
+    roots: Vec<UnorderedSectionRoot>,
+) -> Result<Vec<UnorderedSectionRoot>, SectionDiskArrangementError> {
+    let mut retained = BTreeMap::<usize, UnorderedSectionRoot>::new();
+    for root in roots {
+        if let Some(previous) = retained.get(&root.endpoint) {
+            if previous.source_root_ordinal != root.source_root_ordinal
+                || previous.parameter.to_bits() != root.parameter.to_bits()
+                || previous.enclosure.map(f64::to_bits) != root.enclosure.map(f64::to_bits)
+            {
+                return Err(SectionDiskArrangementError::IncompatibleRootEnclosures {
+                    previous: previous.endpoint,
+                    next: root.endpoint,
+                });
+            }
+            continue;
+        }
+        retained.insert(root.endpoint, root);
+    }
+    Ok(retained.into_values().collect())
+}
+
+fn certify_subdivided_chord_path(
+    graph: &BodySectionGraph,
+    cuts: &[CertifiedDiskCut],
+    interior_vertices: &[usize],
+) -> Result<(), SectionDiskArrangementError> {
+    let first_fragment = cuts
+        .first()
+        .map(|cut| cut.key().fragment())
+        .ok_or(SectionDiskArrangementError::MissingCapChord)?;
+    if cuts
+        .iter()
+        .any(|cut| !matches!(cut, CertifiedDiskCut::Chord(_)))
+    {
+        return Err(SectionDiskArrangementError::UnsupportedCapFragment(
+            first_fragment,
+        ));
+    }
+    let interior = interior_vertices.iter().copied().collect::<BTreeSet<_>>();
+    let mut incoming = BTreeMap::<usize, usize>::new();
+    let mut outgoing = BTreeMap::<usize, usize>::new();
+    let mut successor = BTreeMap::<usize, usize>::new();
+    let mut endpoints = BTreeSet::new();
+    for (index, cut) in cuts.iter().enumerate() {
+        let [start, end] = cut.endpoints();
+        endpoints.extend([start, end]);
+        *outgoing.entry(start).or_default() += 1;
+        *incoming.entry(end).or_default() += 1;
+        if successor.insert(start, index).is_some() {
+            return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+                cut.key().fragment(),
+            ));
+        }
+    }
+    if interior.iter().any(|vertex| {
+        incoming.get(vertex).copied() != Some(1) || outgoing.get(vertex).copied() != Some(1)
+    }) {
+        return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+            first_fragment,
+        ));
+    }
+    let boundary = endpoints.difference(&interior).copied().collect::<Vec<_>>();
+    let starts = boundary
+        .iter()
+        .copied()
+        .filter(|vertex| {
+            incoming.get(vertex).copied().unwrap_or(0) == 0
+                && outgoing.get(vertex).copied() == Some(1)
+        })
+        .collect::<Vec<_>>();
+    let ends = boundary
+        .iter()
+        .copied()
+        .filter(|vertex| {
+            incoming.get(vertex).copied() == Some(1)
+                && outgoing.get(vertex).copied().unwrap_or(0) == 0
+        })
+        .collect::<Vec<_>>();
+    let ([start], [end]) = (starts.as_slice(), ends.as_slice()) else {
+        return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+            first_fragment,
+        ));
+    };
+    if boundary.len() != 2 {
+        return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+            first_fragment,
+        ));
+    }
+    let mut path = Vec::with_capacity(cuts.len());
+    let mut at = *start;
+    while let Some(&index) = successor.get(&at) {
+        if path.contains(&index) {
+            return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+                cuts[index].key().fragment(),
+            ));
+        }
+        path.push(index);
+        at = cuts[index].endpoints()[1];
+    }
+    if at != *end || path.len() != cuts.len() {
+        return Err(SectionDiskArrangementError::FragmentComponentMismatch(
+            first_fragment,
+        ));
+    }
+    for first in 0..path.len() {
+        for second in first + 2..path.len() {
+            let left = cuts[path[first]].key().fragment();
+            let right = cuts[path[second]].key().fragment();
+            if !certify_distinct_parallel_line_carriers(graph, left, right) {
+                return Err(SectionDiskArrangementError::UnsupportedCapFragment(right));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn certify_distinct_parallel_line_carriers(
+    graph: &BodySectionGraph,
+    first: usize,
+    second: usize,
+) -> bool {
+    let carriers = [first, second].map(|fragment| {
+        graph
+            .curve_fragments()
+            .get(fragment)
+            .and_then(|fragment| graph.branches().get(fragment.branch()))
+            .map(SectionBranch::carrier)
+    });
+    let [
+        Some(SectionCarrier::Line {
+            origin: first_origin,
+            direction: first_direction,
+        }),
+        Some(SectionCarrier::Line {
+            origin: second_origin,
+            direction: second_direction,
+        }),
+    ] = carriers
+    else {
+        return false;
+    };
+    let first_direction = [first_direction.x, first_direction.y, first_direction.z];
+    let second_direction = [second_direction.x, second_direction.y, second_direction.z];
+    let parallel = first_direction == second_direction
+        || first_direction
+            .into_iter()
+            .zip(second_direction)
+            .all(|(first, second)| first == -second);
+    if !parallel {
+        return false;
+    }
+    let delta = [
+        Interval::point(second_origin.x - first_origin.x),
+        Interval::point(second_origin.y - first_origin.y),
+        Interval::point(second_origin.z - first_origin.z),
+    ];
+    let direction = first_direction.map(Interval::point);
+    let cross = [
+        delta[1] * direction[2] - delta[2] * direction[1],
+        delta[2] * direction[0] - delta[0] * direction[2],
+        delta[0] * direction[1] - delta[1] * direction[0],
+    ];
+    cross
+        .into_iter()
+        .any(|component| !component.contains_zero())
+}
+
+fn certified_isolated_cap_contact(
+    graph: &BodySectionGraph,
+    endpoint: usize,
+    operand: usize,
+    topology: DiskCapTopology,
+) -> bool {
+    let endpoint_index = endpoint;
+    let Some(endpoint) = graph.curve_endpoints().get(endpoint_index) else {
+        return false;
+    };
+    let SectionCurveEndpointTopology::Trim {
+        source_parameters, ..
+    } = endpoint.topology()
+    else {
+        return false;
+    };
+    let mut matches = graph
+        .isolated_contacts()
+        .iter()
+        .filter(|contact| contact.endpoint() == endpoint_index)
+        .filter(|contact| {
+            contact.roots().len() == 2
+                && (0..2).all(|candidate| {
+                    let Some(source) = source_parameters[candidate].as_ref() else {
+                        return false;
+                    };
+                    let roots = contact
+                        .roots()
+                        .iter()
+                        .filter(|root| root.operand() == candidate)
+                        .collect::<Vec<_>>();
+                    matches!(roots.as_slice(), [root]
+                        if root.source_parameter() == source
+                            && same_source_materialization(root.source_parameter(), source))
+                })
+                && source_parameters[operand]
+                    .as_ref()
+                    .is_some_and(|source| source.edge().raw() == topology.edge)
+        });
+    matches.next().is_some() && matches.next().is_none()
+}
+
+fn parameter_intervals_overlap(
+    first_lo: f64,
+    first_hi: f64,
+    second_lo: f64,
+    second_hi: f64,
+) -> bool {
+    first_lo <= second_hi && second_lo <= first_hi
 }
 
 fn require_one_closed_component(
@@ -882,6 +1163,7 @@ fn supports_simple_circular_cut(
         && points.into_iter().all(f64::is_finite)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bind_section_cap_root(
     graph: &BodySectionGraph,
     end: &SectionRulingFragmentEnd,
@@ -890,7 +1172,8 @@ fn bind_section_cap_root(
     opposing_face: &FaceId,
     operand: usize,
     topology: DiskCapTopology,
-) -> Result<UnorderedSectionRoot, SectionDiskArrangementError> {
+    admit_dual_boundary_root: bool,
+) -> Result<Option<UnorderedSectionRoot>, SectionDiskArrangementError> {
     let endpoint_index = end.endpoint();
     let endpoint = graph.curve_endpoints().get(endpoint_index).ok_or(
         SectionDiskArrangementError::MissingEndpoint {
@@ -906,7 +1189,16 @@ fn bind_section_cap_root(
         return Err(root_mismatch(fragment, endpoint_index));
     };
     let Some(source) = source_parameters[operand].as_ref() else {
-        return Err(root_mismatch(fragment, endpoint_index));
+        let interior = matches!(
+            &sites[operand],
+            SectionSite::FaceInterior(face) if face == cap
+        ) && endpoint.edge_parameters()[operand].is_none()
+            && end.trims()[operand].is_none();
+        return if interior {
+            Ok(None)
+        } else {
+            Err(root_mismatch(fragment, endpoint_index))
+        };
     };
     let Some(trim) = end.trims()[operand].as_ref() else {
         return Err(root_mismatch(fragment, endpoint_index));
@@ -931,11 +1223,38 @@ fn bind_section_cap_root(
                 .root_parameter_enclosure()
                 .hi()
                 .to_bits();
+    let ordinary_opposing_site = matches!(
+        &sites[other],
+        SectionSite::FaceInterior(face) if face == opposing_face
+    ) && source_parameters[other].is_none()
+        && endpoint.edge_parameters()[other].is_none()
+        && end.trims()[other].is_none();
+    let dual_opposing_boundary = admit_dual_boundary_root
+        && matches!(
+            (
+                &sites[other],
+                source_parameters[other].as_ref(),
+                endpoint.edge_parameters()[other],
+                end.trims()[other].as_ref(),
+            ),
+            (SectionSite::EdgeInterior(edge), Some(peer), Some(peer_common), Some(peer_trim))
+                if edge.raw() == peer.edge().raw()
+                    && (peer_common.contains(peer.root_parameter())
+                        || parameter_intervals_overlap(
+                            peer_common.lo(),
+                            peer_common.hi(),
+                            peer.root_parameter_enclosure().lo(),
+                            peer.root_parameter_enclosure().hi(),
+                        ))
+                    && peer == peer_trim.source_parameter()
+                    && same_source_materialization(peer, peer_trim.source_parameter())
+                    && peer_trim.operand() == other
+                    && peer_trim.face() == opposing_face.clone()
+                    && peer_trim.edge_parameter().lo() <= peer_common.lo()
+                    && peer_common.hi() <= peer_trim.edge_parameter().hi()
+        );
     if !matches!(&sites[operand], SectionSite::EdgeInterior(edge) if edge.raw() == topology.edge)
-        || !matches!(&sites[other], SectionSite::FaceInterior(face) if face == opposing_face)
-        || source_parameters[other].is_some()
-        || endpoint.edge_parameters()[other].is_some()
-        || end.trims()[other].is_some()
+        || (!ordinary_opposing_site && !dual_opposing_boundary)
         || source.edge().raw() != topology.edge
         || trim.operand() != operand
         || trim.face() != cap.clone()
@@ -943,18 +1262,25 @@ fn bind_section_cap_root(
         || trim.fin().raw() != topology.fin
         || trim.source_parameter().edge().raw() != topology.edge
         || !same_materialization
-        || !common.contains(source.root_parameter())
+        || !(common.contains(source.root_parameter())
+            || (admit_dual_boundary_root
+                && parameter_intervals_overlap(
+                    common.lo(),
+                    common.hi(),
+                    enclosure.lo(),
+                    enclosure.hi(),
+                )))
         || observed.lo() > common.lo()
         || common.hi() > observed.hi()
     {
         return Err(root_mismatch(fragment, endpoint_index));
     }
-    Ok(UnorderedSectionRoot {
+    Ok(Some(UnorderedSectionRoot {
         endpoint: endpoint_index,
         source_root_ordinal: source.root_ordinal(),
         parameter: source.root_parameter(),
         enclosure: [enclosure.lo(), enclosure.hi()],
-    })
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1076,6 +1402,18 @@ const fn root_mismatch(fragment: usize, endpoint: usize) -> SectionDiskArrangeme
     SectionDiskArrangementError::EndpointProvenanceMismatch { fragment, endpoint }
 }
 
+fn same_source_materialization(
+    first: &SectionSourceParameterKey,
+    second: &SectionSourceParameterKey,
+) -> bool {
+    let first_enclosure = first.root_parameter_enclosure();
+    let second_enclosure = second.root_parameter_enclosure();
+    first == second
+        && first.root_parameter().to_bits() == second.root_parameter().to_bits()
+        && first_enclosure.lo().to_bits() == second_enclosure.lo().to_bits()
+        && first_enclosure.hi().to_bits() == second_enclosure.hi().to_bits()
+}
+
 /// Arrange any certified noncrossing chord set on one circular disk.
 pub(crate) fn arrange_disk_face(
     boundary: CertifiedDiskBoundary,
@@ -1101,6 +1439,8 @@ fn arrange_disk_face_cuts(
         return Err(DiskArrangementError::BoundaryRootsRequired);
     }
 
+    let interior_vertices = boundary.interior_vertices;
+    let subdivided_path_certified = boundary.subdivided_path_certified;
     let mut roots = boundary.roots;
     validate_roots(&roots)?;
     roots.sort_by_key(|root| root.key.circular_ordinal);
@@ -1121,7 +1461,7 @@ fn arrange_disk_face_cuts(
 
     let mut cuts = cuts.into_iter().collect::<Vec<_>>();
     cuts.sort_by_key(|cut| cut.key());
-    validate_cuts(&roots, &cuts)?;
+    validate_cuts(&roots, &cuts, &interior_vertices, subdivided_path_certified)?;
 
     let source_arcs = build_source_arcs(boundary.edge, boundary.fin, boundary.sense, &roots);
     let source_spans = source_arcs
@@ -1138,7 +1478,7 @@ fn arrange_disk_face_cuts(
             DirectedCutFragment::new(cut.key(), endpoints[0], endpoints[1])
         })
         .collect::<Vec<_>>();
-    let rotations = build_rotations(&source_arcs, &cuts);
+    let rotations = build_rotations(&source_arcs, &cuts, &roots, &interior_vertices);
     let arrangement = arrange_bounded_face(FaceArrangementInput::new(
         source_spans,
         cut_fragments,
@@ -1148,6 +1488,8 @@ fn arrange_disk_face_cuts(
 
     let expected_cells = cuts
         .len()
+        .checked_sub(interior_vertices.len())
+        .ok_or(DiskArrangementError::ConservationMismatch)?
         .checked_add(1)
         .ok_or(DiskArrangementError::ConservationMismatch)?;
     let core = arrangement.proof();
@@ -1179,7 +1521,7 @@ fn validate_roots(roots: &[DiskBoundaryRootEvidence]) -> Result<(), DiskArrangem
     let mut circular_ordinals = BTreeSet::new();
     for root in roots {
         match root.contact {
-            DiskRootContact::Transverse => {}
+            DiskRootContact::Transverse | DiskRootContact::IsolatedJunction => {}
             DiskRootContact::Tangent => {
                 return Err(DiskArrangementError::TangentialRoot(root.key));
             }
@@ -1214,11 +1556,19 @@ fn validate_roots(roots: &[DiskBoundaryRootEvidence]) -> Result<(), DiskArrangem
 fn validate_cuts(
     roots: &[DiskBoundaryRootEvidence],
     cuts: &[CertifiedDiskCut],
+    interior_vertices: &[usize],
+    subdivided_path_certified: bool,
 ) -> Result<(), DiskArrangementError> {
+    let mixed_digon = certified_mixed_digon(cuts);
     let order = roots
         .iter()
         .map(|root| (root.key.endpoint, root.key.circular_ordinal))
         .collect::<BTreeMap<_, _>>();
+    let contact = roots
+        .iter()
+        .map(|root| (root.key.endpoint, root.contact))
+        .collect::<BTreeMap<_, _>>();
+    let interior = interior_vertices.iter().copied().collect::<BTreeSet<_>>();
     let mut cut_keys = BTreeSet::new();
     let mut incidence = BTreeMap::<usize, usize>::new();
     for cut in cuts {
@@ -1231,7 +1581,7 @@ fn validate_cuts(
             return Err(DiskArrangementError::DegenerateChord(key));
         }
         for endpoint in endpoints {
-            if !order.contains_key(&endpoint) {
+            if !order.contains_key(&endpoint) && !interior.contains(&endpoint) {
                 return Err(DiskArrangementError::UnknownChordEndpoint {
                     chord: key,
                     endpoint,
@@ -1239,16 +1589,57 @@ fn validate_cuts(
             }
             let degree = incidence.entry(endpoint).or_default();
             *degree += 1;
-            if *degree > 1 {
+            let admitted_degree = if mixed_digon.is_some()
+                || interior.contains(&endpoint)
+                || contact.get(&endpoint) == Some(&DiskRootContact::IsolatedJunction)
+            {
+                2
+            } else {
+                1
+            };
+            if *degree > admitted_degree {
                 return Err(DiskArrangementError::BranchedRoot(endpoint));
             }
         }
     }
-    if let Some(root) = roots
-        .iter()
-        .find(|root| incidence.get(&root.key.endpoint).copied() != Some(1))
-    {
-        return Err(DiskArrangementError::UnpairedRoot(root.key.endpoint));
+    for root in roots {
+        let degree = incidence.get(&root.key.endpoint).copied().unwrap_or(0);
+        let admitted = if mixed_digon.is_some() || root.contact == DiskRootContact::IsolatedJunction
+        {
+            1..=2
+        } else {
+            1..=1
+        };
+        if !admitted.contains(&degree) {
+            return Err(DiskArrangementError::UnpairedRoot(root.key.endpoint));
+        }
+        if root.contact == DiskRootContact::IsolatedJunction && degree == 2 {
+            let departures = cuts
+                .iter()
+                .filter(|cut| cut.endpoints()[0] == root.key.endpoint)
+                .count();
+            let arrivals = cuts
+                .iter()
+                .filter(|cut| cut.endpoints()[1] == root.key.endpoint)
+                .count();
+            if departures != 1 || arrivals != 1 {
+                return Err(DiskArrangementError::BranchedRoot(root.key.endpoint));
+            }
+        }
+    }
+    for vertex in &interior {
+        let degree = incidence.get(vertex).copied().unwrap_or(0);
+        let departures = cuts
+            .iter()
+            .filter(|cut| cut.endpoints()[0] == *vertex)
+            .count();
+        let arrivals = cuts
+            .iter()
+            .filter(|cut| cut.endpoints()[1] == *vertex)
+            .count();
+        if !subdivided_path_certified || degree != 2 || departures != 1 || arrivals != 1 {
+            return Err(DiskArrangementError::BranchedRoot(*vertex));
+        }
     }
     let circular = cuts
         .iter()
@@ -1261,7 +1652,7 @@ fn validate_cuts(
         return Err(DiskArrangementError::MultipleCircularCuts);
     }
     if let Some(arc) = circular.first().copied() {
-        if cuts.len() != 1 {
+        if cuts.len() != 1 && mixed_digon.is_none() {
             return Err(DiskArrangementError::MixedCircularAndChordCuts);
         }
         match (arc.topology, arc.wraps_pcurve_seam) {
@@ -1272,7 +1663,9 @@ fn validate_cuts(
             // Crossing the planar pcurve seam changes no disk incidence.
             (DiskCircularCutTopology::Simple, false) | (DiskCircularCutTopology::Simple, true) => {}
         }
-        return Ok(());
+        if cuts.len() == 1 || mixed_digon.is_some() {
+            return Ok(());
+        }
     }
     let chords = cuts
         .iter()
@@ -1281,6 +1674,9 @@ fn validate_cuts(
             CertifiedDiskCut::Circular(_) => None,
         })
         .collect::<Vec<_>>();
+    if subdivided_path_certified {
+        return Ok(());
+    }
     for (left_index, left) in chords.iter().enumerate() {
         for right in &chords[(left_index + 1)..] {
             if chords_cross(*left, *right, &order) {
@@ -1292,6 +1688,30 @@ fn validate_cuts(
         }
     }
     Ok(())
+}
+
+fn certified_mixed_digon(
+    cuts: &[CertifiedDiskCut],
+) -> Option<(CertifiedDiskCircularCut, CertifiedDiskChord)> {
+    if cuts.len() != 2 {
+        return None;
+    }
+    let arc = cuts.iter().find_map(|cut| match cut {
+        CertifiedDiskCut::Circular(arc) => Some(*arc),
+        CertifiedDiskCut::Chord(_) => None,
+    })?;
+    let chord = cuts.iter().find_map(|cut| match cut {
+        CertifiedDiskCut::Chord(chord) => Some(*chord),
+        CertifiedDiskCut::Circular(_) => None,
+    })?;
+    let mut arc_endpoints = arc.endpoints;
+    let mut chord_endpoints = chord.endpoints;
+    arc_endpoints.sort_unstable();
+    chord_endpoints.sort_unstable();
+    (arc.topology == DiskCircularCutTopology::Simple
+        && arc.isolated_contact_endpoints
+        && arc_endpoints == chord_endpoints)
+        .then_some((arc, chord))
 }
 
 fn chords_cross(
@@ -1345,38 +1765,117 @@ fn build_source_arcs(
 fn build_rotations(
     arcs: &[DiskSourceArcLineage],
     cuts: &[CertifiedDiskCut],
+    roots: &[DiskBoundaryRootEvidence],
+    interior_vertices: &[usize],
 ) -> Vec<CertifiedEndpointRotation<DiskSourceArcKey, DiskChordKey, usize>> {
-    let outgoing = cuts
+    let mut rotations = arcs
         .iter()
-        .flat_map(|cut| {
-            let endpoints = cut.endpoints();
-            [
-                (
-                    endpoints[0],
-                    ArrangementDartKey::cut(cut.key(), ArrangementDirection::Forward),
-                ),
-                (
-                    endpoints[1],
-                    ArrangementDartKey::cut(cut.key(), ArrangementDirection::Reverse),
-                ),
-            ]
-        })
-        .collect::<BTreeMap<_, _>>();
-    arcs.iter()
         .enumerate()
         .map(|(index, arc)| {
             let endpoint = arc.key.start_endpoint;
             let previous = arcs[(index + arcs.len() - 1) % arcs.len()].key;
-            CertifiedEndpointRotation::new(
+            let mut outgoing = vec![ArrangementDartKey::source(
+                arc.key,
+                ArrangementDirection::Forward,
+            )];
+            let isolated_junction = roots.iter().any(|root| {
+                root.key.endpoint == endpoint && root.contact == DiskRootContact::IsolatedJunction
+            });
+            outgoing.extend(ordered_cut_darts(
+                cuts,
                 endpoint,
-                vec![
-                    ArrangementDartKey::source(arc.key, ArrangementDirection::Forward),
-                    outgoing[&endpoint].clone(),
-                    ArrangementDartKey::source(previous, ArrangementDirection::Reverse),
-                ],
-            )
+                isolated_junction,
+                arc.key.end_endpoint,
+                previous.start_endpoint,
+            ));
+            outgoing.push(ArrangementDartKey::source(
+                previous,
+                ArrangementDirection::Reverse,
+            ));
+            CertifiedEndpointRotation::new(endpoint, outgoing)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    rotations.extend(interior_vertices.iter().map(|&vertex| {
+        let departure = cuts
+            .iter()
+            .find(|cut| cut.endpoints()[0] == vertex)
+            .expect("certified interior path vertex retains one departure");
+        let arrival = cuts
+            .iter()
+            .find(|cut| cut.endpoints()[1] == vertex)
+            .expect("certified interior path vertex retains one arrival");
+        CertifiedEndpointRotation::new(
+            vertex,
+            vec![
+                ArrangementDartKey::cut(departure.key(), ArrangementDirection::Forward),
+                ArrangementDartKey::cut(arrival.key(), ArrangementDirection::Reverse),
+            ],
+        )
+    }));
+    rotations
+}
+
+fn ordered_cut_darts(
+    cuts: &[CertifiedDiskCut],
+    endpoint: usize,
+    isolated_junction: bool,
+    next_source_endpoint: usize,
+    previous_source_endpoint: usize,
+) -> Vec<ArrangementDartKey<DiskSourceArcKey, DiskChordKey>> {
+    let dart = |cut: CertifiedDiskCut| {
+        let endpoints = cut.endpoints();
+        (endpoints[0] == endpoint)
+            .then(|| ArrangementDartKey::cut(cut.key(), ArrangementDirection::Forward))
+            .or_else(|| {
+                (endpoints[1] == endpoint)
+                    .then(|| ArrangementDartKey::cut(cut.key(), ArrangementDirection::Reverse))
+            })
+    };
+    if let Some((arc, chord)) = certified_mixed_digon(cuts) {
+        let ordered = if arc.endpoints[0] == endpoint {
+            [
+                CertifiedDiskCut::Circular(arc),
+                CertifiedDiskCut::Chord(chord),
+            ]
+        } else {
+            [
+                CertifiedDiskCut::Chord(chord),
+                CertifiedDiskCut::Circular(arc),
+            ]
+        };
+        return ordered.into_iter().filter_map(dart).collect();
+    }
+    if isolated_junction {
+        let mut incident = cuts
+            .iter()
+            .copied()
+            .filter_map(|cut| {
+                let endpoints = cut.endpoints();
+                let other = if endpoints[0] == endpoint {
+                    endpoints[1]
+                } else if endpoints[1] == endpoint {
+                    endpoints[0]
+                } else {
+                    return None;
+                };
+                let order = if other == next_source_endpoint {
+                    0
+                } else if other == previous_source_endpoint {
+                    1
+                } else {
+                    2
+                };
+                Some((
+                    order,
+                    cut.key(),
+                    dart(cut).expect("incident cut retains its dart"),
+                ))
+            })
+            .collect::<Vec<_>>();
+        incident.sort_unstable_by_key(|(order, key, _)| (*order, *key));
+        return incident.into_iter().map(|(_, _, dart)| dart).collect();
+    }
+    cuts.iter().copied().filter_map(dart).collect()
 }
 
 /// Constant open-set relation of one cap cell to the other body.
@@ -1563,6 +2062,7 @@ mod tests {
             fragment,
             [100 + start, 100 + end],
             wraps_pcurve_seam,
+            false,
         ))
     }
 

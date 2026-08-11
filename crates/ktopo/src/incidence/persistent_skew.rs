@@ -158,7 +158,7 @@ fn certify_edge_context(
     let Some(SurfaceGeom::Cylinder(live_source)) = store.surface(surface).ok() else {
         return Err(PersistentSkewIncidence::Indeterminate);
     };
-    if *live_source != certificate.carrier().cylinders()[source_slot] {
+    if *live_source != certificate.residual_certificate().traces()[source_slot].surface() {
         return Err(PersistentSkewIncidence::Indeterminate);
     }
     Ok((descriptor, source_slot))

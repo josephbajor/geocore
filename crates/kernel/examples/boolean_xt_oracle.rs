@@ -34,7 +34,9 @@ const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT: &str =
 const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION: &str =
     "nonconvex_star_plane_cylinder_intersection.x_t";
 const CAP_CROSSING_PLANE_CYLINDER_INTERSECT: &str = "cap_crossing_plane_cylinder_intersect.x_t";
-const EXPECTED_FILES: [&str; 16] = [
+const CORNER_CONTACT_FIRST_MINUS_SECOND: &str = "corner_contact_first_minus_second.x_t";
+const CORNER_CONTACT_SECOND_MINUS_FIRST: &str = "corner_contact_second_minus_first.x_t";
+const EXPECTED_FILES: [&str; 18] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -51,6 +53,8 @@ const EXPECTED_FILES: [&str; 16] = [
     SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT,
     NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION,
     CAP_CROSSING_PLANE_CYLINDER_INTERSECT,
+    CORNER_CONTACT_FIRST_MINUS_SECOND,
+    CORNER_CONTACT_SECOND_MINUS_FIRST,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -81,6 +85,12 @@ const CAP_CROSSING_OUTER_X: f64 = 2.5;
 const CAP_CROSSING_BLOCK_Y: f64 = 6.0;
 const CAP_CROSSING_BLOCK_Z: f64 = 4.0;
 const CAP_CROSSING_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
+const CORNER_FIRST_RADIUS: f64 = 13.0;
+const CORNER_FIRST_LOWER: f64 = 16.0;
+const CORNER_FIRST_UPPER: f64 = 17.0;
+const CORNER_SECOND_RADIUS: f64 = 20.0;
+const CORNER_SECOND_LOWER: f64 = -14.0;
+const CORNER_SECOND_UPPER: f64 = 5.0;
 
 const SIN_047: f64 = 0.452_886_285_379_068_3;
 const COS_047: f64 = 0.891_568_288_195_329;
@@ -275,6 +285,24 @@ const CAP_CROSSING_PLANE_CYLINDER_INTERSECT_COUNTS: TopologyCounts = TopologyCou
     edges: 6,
     vertices: 4,
 };
+const CORNER_CONTACT_FIRST_MINUS_SECOND_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 8,
+    loops: 8,
+    fins: 28,
+    edges: 14,
+    vertices: 8,
+};
+const CORNER_CONTACT_SECOND_MINUS_FIRST_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 7,
+    loops: 8,
+    fins: 26,
+    edges: 13,
+    vertices: 8,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct MeshSummary {
@@ -467,7 +495,50 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
     artifacts.push(build_seam_crossing_five_portal_subtract()?);
     artifacts.push(build_nonconvex_star_plane_cylinder_intersection()?);
     artifacts.push(build_cap_crossing_plane_cylinder_intersection()?);
+    artifacts.push(build_corner_contact_subtract(false)?);
+    artifacts.push(build_corner_contact_subtract(true)?);
     Ok(artifacts)
+}
+
+fn build_corner_contact_subtract(swapped: bool) -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = create_corner_contact_operands(&mut session, &part)?;
+    let (left, right, file, counts) = if swapped {
+        (
+            second.clone(),
+            first.clone(),
+            CORNER_CONTACT_SECOND_MINUS_FIRST,
+            CORNER_CONTACT_SECOND_MINUS_FIRST_COUNTS,
+        )
+    } else {
+        (
+            first.clone(),
+            second.clone(),
+            CORNER_CONTACT_FIRST_MINUS_SECOND,
+            CORNER_CONTACT_FIRST_MINUS_SECOND_COUNTS,
+        )
+    };
+    let bodies = run_boolean(&mut session, &part, left, right, BooleanOperation::Subtract)?;
+    require(
+        bodies.len() == 1,
+        format!(
+            "{file} expected one point-contact result body, got {}",
+            bodies.len()
+        ),
+    )?;
+    assert_sources_retained(&session, &part, &first, &second, 3)?;
+
+    // These payloads are queued for licensed-host replay, so their volume is
+    // deliberately not presented as an independent host-conformance oracle.
+    // Local export/import still has to preserve the exact topology before the
+    // files enter the queue. Mesh/volume conformance remains a replay outcome.
+    let (_, actual_counts) = inspect_body_topology(&session, &part, bodies[0].clone())?;
+    require(
+        actual_counts == counts,
+        format!("{file} topology changed before queueing"),
+    )?;
+    make_queued_corner_artifact(&mut session, &part, bodies[0].clone(), file, counts)
 }
 
 fn build_bounded_arc_intersection() -> OracleResult<Artifact> {
@@ -896,6 +967,36 @@ fn create_cap_crossing_operands(
     Ok((block, cylinder))
 }
 
+fn create_corner_contact_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let frame = Frame::world();
+    let mut edit = session.edit_part(part.clone())?;
+    let first = edit
+        .create_cylinder(CylinderRequest::new(
+            frame.with_origin(frame.point_at(0.0, 0.0, CORNER_FIRST_LOWER)),
+            CORNER_FIRST_RADIUS,
+            CORNER_FIRST_UPPER - CORNER_FIRST_LOWER,
+        ))?
+        .into_result()?
+        .body();
+    let second_frame = Frame::new(
+        frame.point_at(CORNER_SECOND_LOWER, 0.0, 0.0),
+        frame.x(),
+        frame.y(),
+    )?;
+    let second = edit
+        .create_cylinder(CylinderRequest::new(
+            second_frame,
+            CORNER_SECOND_RADIUS,
+            CORNER_SECOND_UPPER - CORNER_SECOND_LOWER,
+        ))?
+        .into_result()?
+        .body();
+    Ok((first, second))
+}
+
 fn bounded_arc_disk_strip_volume() -> f64 {
     let half_width = BOUNDED_ARC_HALF_STRIP_WIDTH;
     let radius = BOUNDED_ARC_RADIUS;
@@ -1106,6 +1207,68 @@ fn make_artifact(
     )
 }
 
+fn make_queued_corner_artifact(
+    session: &mut Session,
+    part: &PartId,
+    body: BodyId,
+    file: &'static str,
+    expected_counts: TopologyCounts,
+) -> OracleResult<Artifact> {
+    let (body_kind, counts) = inspect_body_topology(session, part, body.clone())?;
+    require(body_kind == "solid", format!("{file} was not a solid body"))?;
+    require(
+        counts == expected_counts,
+        format!("{file} topology changed: expected {expected_counts:?}, got {counts:?}"),
+    )?;
+
+    let bytes = session
+        .part(part.clone())?
+        .export_xt(ExportXtRequest::new(body))?
+        .into_result()?
+        .bytes()
+        .to_vec();
+    let imported_part = session.create_part();
+    let imported = session
+        .edit_part(imported_part.clone())?
+        .import_xt(ImportXtRequest::new(&bytes))?
+        .into_result()?;
+    let skipped = imported
+        .skipped()
+        .iter()
+        .map(|entry| (entry.node_type_code(), entry.count()))
+        .collect::<Vec<_>>();
+    require(
+        skipped == vec![(141, 8)],
+        format!("{file} skipped unexpected X_T schema nodes: {skipped:?}"),
+    )?;
+    require(
+        imported.bodies().len() == 1,
+        format!("{file} local import did not reconstruct exactly one body"),
+    )?;
+    let (imported_kind, imported_counts) =
+        inspect_body_topology(session, &imported_part, imported.bodies()[0].clone())?;
+    require(
+        imported_kind == body_kind,
+        format!("{file} body kind changed on import"),
+    )?;
+    require(
+        imported_counts == counts,
+        format!("{file} topology counts changed on import"),
+    )?;
+
+    Ok(Artifact {
+        file,
+        body_kind,
+        counts,
+        mesh: MeshSummary {
+            positions: 0,
+            triangles: 0,
+            volume: 0.0,
+        },
+        bytes,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn make_artifact_with_volume_tolerance(
     session: &mut Session,
@@ -1186,6 +1349,33 @@ fn inspect_body(
     body: BodyId,
     chord_tolerance: f64,
 ) -> OracleResult<(&'static str, TopologyCounts, MeshSummary)> {
+    let (body_kind, counts) = inspect_body_topology(session, part, body.clone())?;
+    let part = session.part(part.clone())?;
+    let mesh = part
+        .tessellate_body(TessellateBodyRequest::new(
+            body,
+            TessOptions {
+                chord_tol: chord_tolerance,
+                max_edge_len: None,
+            },
+        ))?
+        .into_result()?;
+    Ok((
+        body_kind,
+        counts,
+        MeshSummary {
+            positions: mesh.positions().len(),
+            triangles: mesh.triangles().len(),
+            volume: mesh_volume(mesh.positions(), mesh.triangles()),
+        },
+    ))
+}
+
+fn inspect_body_topology(
+    session: &Session,
+    part: &PartId,
+    body: BodyId,
+) -> OracleResult<(&'static str, TopologyCounts)> {
     let part = session.part(part.clone())?;
     let body_view = part.body(body.clone())?;
     let body_kind = body_kind(body_view.kind())?;
@@ -1237,24 +1427,7 @@ fn inspect_body(
             check.gaps().len()
         ),
     )?;
-    let mesh = part
-        .tessellate_body(TessellateBodyRequest::new(
-            body,
-            TessOptions {
-                chord_tol: chord_tolerance,
-                max_edge_len: None,
-            },
-        ))?
-        .into_result()?;
-    Ok((
-        body_kind,
-        counts,
-        MeshSummary {
-            positions: mesh.positions().len(),
-            triangles: mesh.triangles().len(),
-            volume: mesh_volume(mesh.positions(), mesh.triangles()),
-        },
-    ))
+    Ok((body_kind, counts))
 }
 
 fn body_kind(kind: BodyKind) -> OracleResult<&'static str> {

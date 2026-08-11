@@ -2648,6 +2648,7 @@ fn assemble_graph(
         &curve_endpoints,
         &curve_fragments,
         &curve_components,
+        &isolated_contacts,
         linear,
         scope,
     )?;

@@ -27,7 +27,7 @@ use ktopo::tolerance::EntityTolerance;
 struct PcurveTransport {
     nurbs: NurbsCurve2d,
     lift_error: f64,
-    operand: usize,
+    source_slot: usize,
 }
 
 struct Segment {
@@ -63,12 +63,12 @@ pub(super) fn validate_edge(store: &Store, edge: &Edge) -> Result<()> {
     let mut seen = [false; 2];
     for &fin in edge.fins() {
         let transport = pcurve_transport(store, fin, descriptor)?;
-        if seen[transport.operand] {
+        if seen[transport.source_slot] {
             return Err(XtError::InvalidModel {
                 what: "persistent skew-cylinder edge repeats one source pcurve",
             });
         }
-        seen[transport.operand] = true;
+        seen[transport.source_slot] = true;
     }
     if !seen.into_iter().all(core::convert::identity) {
         return Err(XtError::InvalidModel {
@@ -108,7 +108,7 @@ pub(super) fn edge_tolerance(store: &Store, edge: &Edge) -> Result<Option<f64>> 
     let mut approximation = [None; 2];
     for &fin in edge.fins() {
         let transport = pcurve_transport(store, fin, descriptor)?;
-        approximation[transport.operand] = Some(transport.lift_error);
+        approximation[transport.source_slot] = Some(transport.lift_error);
     }
     let [Some(first), Some(second)] = approximation else {
         return Err(XtError::InvalidModel {
@@ -165,18 +165,21 @@ fn pcurve_transport(
         .ok_or(XtError::InvalidModel {
             what: "persistent skew-cylinder fin lost its procedural pcurve",
         })?;
-    let operand = pcurve.operand();
+    let source_slot = descriptor
+        .pcurves()
+        .into_iter()
+        .position(|candidate| candidate == use_.curve())
+        .ok_or(XtError::InvalidModel {
+            what: "persistent skew-cylinder fin pcurve is not bound to its edge proof",
+        })?;
     let certificate = descriptor.certificate();
-    if operand >= 2
-        || descriptor.pcurves()[operand] != use_.curve()
-        || certificate.pcurves()[operand] != pcurve
-    {
+    if certificate.pcurves()[source_slot] != pcurve {
         return Err(XtError::InvalidModel {
             what: "persistent skew-cylinder fin pcurve is not bound to its edge proof",
         });
     }
     let face = store.get(store.get(fin.parent())?.face())?;
-    if descriptor.source_surfaces()[operand] != face.surface() {
+    if descriptor.source_surfaces()[source_slot] != face.surface() {
         return Err(XtError::InvalidModel {
             what: "persistent skew-cylinder fin is attached to the wrong source surface",
         });
@@ -189,13 +192,13 @@ fn pcurve_transport(
             .ok_or(XtError::InvalidModel {
                 what: "persistent skew-cylinder fin source is not a cylinder",
             })?;
-    if cylinder != certificate.carrier().cylinders()[operand] {
+    if cylinder != certificate.residual_certificate().traces()[source_slot].surface() {
         return Err(XtError::InvalidModel {
             what: "persistent skew-cylinder fin source changed after certification",
         });
     }
 
-    let mut segments = certified_segments(certificate, operand)?;
+    let mut segments = certified_segments(certificate, source_slot)?;
     if certificate.orientation() == PersistentSkewCylinderOpenSpanOrientation::Reversed {
         segments.reverse();
     }
@@ -242,7 +245,7 @@ fn pcurve_transport(
     Ok(PcurveTransport {
         nurbs,
         lift_error,
-        operand,
+        source_slot,
     })
 }
 

@@ -302,6 +302,10 @@ fn directed_chart_integral(
         source,
         stored_ordinate_delta,
         source_ordinate_delta,
+        stored_longitude_increasing: pcurve.stored_derivative[0].lo() > 0.0,
+        stored_longitude_decreasing: pcurve.stored_derivative[0].hi() < 0.0,
+        source_longitude_increasing: pcurve.source_derivative[0].lo() > 0.0,
+        source_longitude_decreasing: pcurve.source_derivative[0].hi() < 0.0,
     })
 }
 
@@ -560,6 +564,10 @@ fn certify_pair_metric_proof(
             source: Interval::point(0.0),
             stored_ordinate_delta: Interval::point(0.0),
             source_ordinate_delta: Interval::point(0.0),
+            stored_longitude_increasing: false,
+            stored_longitude_decreasing: false,
+            source_longitude_increasing: false,
+            source_longitude_decreasing: false,
         }; 2],
     };
     let second_residual = paired_residual_bound(algebra, proof).ok_or(

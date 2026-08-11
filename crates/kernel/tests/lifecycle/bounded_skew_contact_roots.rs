@@ -232,11 +232,10 @@ fn finite_window_contact_corner_sections_completely_read_only_in_both_orders() {
 }
 
 #[test]
-fn finite_window_contact_corner_boolean_still_refuses_assembly_atomically_in_both_orders() {
+fn finite_window_contact_corner_boolean_commits_full_valid_in_both_orders_and_frames() {
     for placement in [Placement::World, Placement::Oblique] {
         for swapped in [false, true] {
             let mut fixture = fixture(placement);
-            let before = PartCounts::from_fixture(&fixture);
             let (first, second) = if swapped {
                 (fixture.second.clone(), fixture.first.clone())
             } else {
@@ -253,17 +252,69 @@ fn finite_window_contact_corner_boolean_still_refuses_assembly_atomically_in_bot
                 ))
                 .unwrap();
             let result = outcome.into_result().unwrap();
-            assert!(
-                matches!(
-                    result,
-                    BooleanOutcome::Refused(BooleanRefusal::AssemblyRejected)
-                ),
-                "{placement:?} swapped={swapped}: {result:?}"
-            );
-            assert_eq!(PartCounts::from_fixture(&fixture), before);
+            let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+                panic!("{placement:?} swapped={swapped}: {result:#?}")
+            };
+            assert_eq!(created.bodies().len(), 1);
+            assert_eq!(created.reports().len(), 1);
+            assert_eq!(created.reports()[0].body(), created.bodies()[0]);
+            assert_eq!(created.reports()[0].report().level(), CheckLevel::Full);
+            assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
+            assert!(created.reports()[0].report().faults().is_empty());
+            assert!(created.reports()[0].report().gaps().is_empty());
+
             let part = fixture.session.part(fixture.part.clone()).unwrap();
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
+            let body = part.body(created.bodies()[0].clone()).unwrap();
+            assert_eq!(body.faces().unwrap().len(), if swapped { 7 } else { 8 });
+            assert_eq!(body.edges().unwrap().len(), if swapped { 13 } else { 14 });
+            assert_eq!(body.vertices().unwrap().len(), 8);
+
+            let vertices = body.vertices().unwrap().collect::<Vec<_>>();
+            let edges = body.edges().unwrap().collect::<Vec<_>>();
+            let mut degrees = vertices
+                .iter()
+                .map(|vertex| {
+                    edges
+                        .iter()
+                        .filter(|edge| {
+                            part.edge((*edge).clone())
+                                .unwrap()
+                                .vertices()
+                                .into_iter()
+                                .flatten()
+                                .any(|candidate| candidate == *vertex)
+                        })
+                        .count()
+                })
+                .collect::<Vec<_>>();
+            degrees.sort_unstable();
+            assert_eq!(
+                degrees,
+                if swapped {
+                    vec![3, 3, 3, 3, 3, 3, 3, 3]
+                } else {
+                    vec![3, 3, 3, 3, 3, 3, 5, 5]
+                }
+            );
+            for y in [-12.0, 12.0] {
+                let expected = shared_frame(placement).point_at(SECOND_UPPER, y, FIRST_LOWER);
+                assert_eq!(
+                    vertices
+                        .iter()
+                        .filter(|vertex| {
+                            part.vertex((*vertex).clone())
+                                .unwrap()
+                                .position()
+                                .unwrap()
+                                .dist(expected)
+                                <= 1.0e-8
+                        })
+                        .count(),
+                    1
+                );
+            }
         }
     }
 }

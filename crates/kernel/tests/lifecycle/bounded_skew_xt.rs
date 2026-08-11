@@ -1,4 +1,4 @@
-//! Facade-only X_T lifecycle evidence for bounded-skew four-face lobes.
+//! Facade-only X_T lifecycle evidence for bounded-skew lobes and corner contact.
 //! Wall-time budget: less than 60 seconds for two rigid placements and replay.
 
 use super::*;
@@ -8,6 +8,12 @@ const BOUNDED_LOWER: f64 = 1.8;
 const BOUNDED_UPPER: f64 = 1.9;
 const TRANSVERSE_HALF_HEIGHT: f64 = 1.25;
 const TRANSVERSE_RADIUS: f64 = 2.0;
+const CORNER_FIRST_RADIUS: f64 = 13.0;
+const CORNER_FIRST_LOWER: f64 = 16.0;
+const CORNER_FIRST_UPPER: f64 = 17.0;
+const CORNER_SECOND_RADIUS: f64 = 20.0;
+const CORNER_SECOND_LOWER: f64 = -14.0;
+const CORNER_SECOND_UPPER: f64 = 5.0;
 
 struct Fixture {
     session: Session,
@@ -253,6 +259,205 @@ fn part_shape(session: &Session, part: PartId) -> [usize; 8] {
     ]
 }
 
+fn corner_fixture(frame: Frame, preseed: bool) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (bounded, transverse) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        if preseed {
+            edit.create_block(BlockRequest::new(
+                Frame::world().with_origin(Point3::new(40.0, -30.0, 20.0)),
+                [1.0, 2.0, 3.0],
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        }
+        let bounded = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, CORNER_FIRST_LOWER)),
+                CORNER_FIRST_RADIUS,
+                CORNER_FIRST_UPPER - CORNER_FIRST_LOWER,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let transverse_frame = Frame::new(
+            frame.point_at(CORNER_SECOND_LOWER, 0.0, 0.0),
+            frame.x(),
+            frame.y(),
+        )
+        .unwrap();
+        let transverse = edit
+            .create_cylinder(CylinderRequest::new(
+                transverse_frame,
+                CORNER_SECOND_RADIUS,
+                CORNER_SECOND_UPPER - CORNER_SECOND_LOWER,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (bounded, transverse)
+    };
+    Fixture {
+        session,
+        part,
+        bounded,
+        transverse,
+    }
+}
+
+fn subtract_corner(fixture: &mut Fixture, swapped: bool) -> BodyId {
+    let (first, second) = if swapped {
+        (fixture.transverse.clone(), fixture.bounded.clone())
+    } else {
+        (fixture.bounded.clone(), fixture.transverse.clone())
+    };
+    let result = fixture
+        .session
+        .edit_part(fixture.part.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            BooleanOperation::Subtract,
+            first,
+            second,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+        panic!("corner-contact subtraction did not create a result: {result:#?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.reports().len(), 1);
+    let report = created.reports()[0].report();
+    assert_eq!(report.level(), CheckLevel::Full);
+    assert_eq!(report.outcome(), CheckOutcome::Valid);
+    assert!(report.faults().is_empty());
+    assert!(report.gaps().is_empty());
+    created.bodies()[0].clone()
+}
+
+fn assert_corner_topology(session: &Session, part_id: PartId, body_id: BodyId, swapped: bool) {
+    let part = session.part(part_id).unwrap();
+    let body = part.body(body_id).unwrap();
+    let faces = body.faces().unwrap().collect::<Vec<_>>();
+    let edges = body.edges().unwrap().collect::<Vec<_>>();
+    let vertices = body.vertices().unwrap().collect::<Vec<_>>();
+    assert_eq!(
+        (faces.len(), edges.len(), vertices.len()),
+        if swapped { (7, 13, 8) } else { (8, 14, 8) }
+    );
+
+    let mut cylinders = 0;
+    let mut planes = 0;
+    for face in faces {
+        match part
+            .surface(part.face(face).unwrap().surface())
+            .unwrap()
+            .class_key()
+            .as_str()
+        {
+            "kernel.surface.cylinder.v1" => cylinders += 1,
+            "kernel.surface.plane.v1" => planes += 1,
+            class => panic!("unexpected imported corner-contact surface class: {class}"),
+        }
+    }
+    assert_eq!((cylinders, planes), if swapped { (2, 5) } else { (3, 5) });
+
+    let mut endpoint_free = 0;
+    let mut degrees = vec![0_usize; vertices.len()];
+    for edge_id in edges {
+        let edge = part.edge(edge_id).unwrap();
+        assert_eq!(edge.fins().len(), 2);
+        match edge.vertices() {
+            [None, None] => endpoint_free += 1,
+            [Some(first), Some(second)] => {
+                assert_ne!(first, second, "X_T must not encode a degenerate edge");
+                for endpoint in [first, second] {
+                    let index = vertices
+                        .iter()
+                        .position(|vertex| *vertex == endpoint)
+                        .expect("edge endpoint belongs to the imported body");
+                    degrees[index] += 1;
+                }
+            }
+            endpoints => panic!("partially bounded imported edge: {endpoints:?}"),
+        }
+        if edge.curve().is_none() {
+            assert!(edge.tolerance().is_some());
+            assert!(
+                edge.fins()
+                    .all(|fin| part.fin(fin).unwrap().pcurve().is_some())
+            );
+        }
+    }
+    degrees.sort_unstable();
+    assert_eq!(endpoint_free, usize::from(swapped));
+    assert_eq!(
+        degrees,
+        if swapped {
+            vec![3, 3, 3, 3, 3, 3, 3, 3]
+        } else {
+            vec![3, 3, 3, 3, 3, 3, 5, 5]
+        }
+    );
+}
+
+fn import_corner_and_reexport(session: &mut Session, bytes: &[u8], swapped: bool) -> Vec<u8> {
+    let part = session.create_part();
+    let imported = session
+        .edit_part(part.clone())
+        .unwrap()
+        .import_xt(ImportXtRequest::new(bytes))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(
+        imported
+            .skipped()
+            .iter()
+            .map(|entry| (entry.node_type_code(), entry.count()))
+            .collect::<Vec<_>>(),
+        vec![(141, 8)],
+        "the eight shared POINT owners are the only intentionally skipped metadata"
+    );
+    assert_eq!(imported.bodies().len(), 1);
+    let body = imported.bodies()[0].clone();
+    assert_corner_topology(session, part.clone(), body.clone(), swapped);
+    let fast = session
+        .part(part.clone())
+        .unwrap()
+        .check_body(CheckBodyRequest::new(body.clone(), CheckLevel::Fast))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(fast.outcome(), CheckOutcome::Valid);
+    assert!(fast.faults().is_empty());
+    let replay = session
+        .part(part.clone())
+        .unwrap()
+        .export_xt(ExportXtRequest::new(body.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .bytes()
+        .to_vec();
+    let repeated = session
+        .part(part)
+        .unwrap()
+        .export_xt(ExportXtRequest::new(body))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .bytes()
+        .to_vec();
+    assert_eq!(replay, repeated);
+    replay
+}
+
 #[test]
 fn bounded_skew_lobes_have_stable_xt_fast_self_import_twice_and_rigid_replay() {
     let mut world_payload = None;
@@ -366,4 +571,59 @@ fn bounded_skew_lobes_have_stable_xt_fast_self_import_twice_and_rigid_replay() {
         retried_replay, accepted_replay,
         "N-1 refusal changed the canonical bytes of a later admitted import"
     );
+}
+
+#[test]
+fn corner_contact_has_stable_xt_fast_self_import_twice_in_both_orders_and_frames() {
+    for frame in placements() {
+        for swapped in [false, true] {
+            let mut baseline = corner_fixture(frame, false);
+            let body = subtract_corner(&mut baseline, swapped);
+            assert_corner_topology(
+                &baseline.session,
+                baseline.part.clone(),
+                body.clone(),
+                swapped,
+            );
+            let payload = baseline
+                .session
+                .part(baseline.part.clone())
+                .unwrap()
+                .export_xt(ExportXtRequest::new(body.clone()))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .bytes()
+                .to_vec();
+            let repeated = baseline
+                .session
+                .part(baseline.part.clone())
+                .unwrap()
+                .export_xt(ExportXtRequest::new(body))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .bytes()
+                .to_vec();
+            assert_eq!(payload, repeated);
+            let first_replay = import_corner_and_reexport(&mut baseline.session, &payload, swapped);
+            let second_replay =
+                import_corner_and_reexport(&mut baseline.session, &payload, swapped);
+            assert_eq!(first_replay, second_replay);
+
+            let mut shifted_ids = corner_fixture(frame, true);
+            let shifted_body = subtract_corner(&mut shifted_ids, swapped);
+            let shifted_payload = shifted_ids
+                .session
+                .part(shifted_ids.part.clone())
+                .unwrap()
+                .export_xt(ExportXtRequest::new(shifted_body))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .bytes()
+                .to_vec();
+            assert_eq!(payload, shifted_payload);
+        }
+    }
 }

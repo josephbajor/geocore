@@ -25,6 +25,7 @@ fn returning_specs(
                     cylinder_chart_shift: 0,
                 },
                 source_loop_ordinal: source_loop,
+                isolated_contact: false,
             }
         })
         .collect();
@@ -208,6 +209,7 @@ fn complete_mixed_returning_and_transverse_family_is_explicitly_unsupported() {
                         cylinder_chart_shift: 0,
                     },
                     source_loop_ordinal: source_loop,
+                    isolated_contact: false,
                 }
             })
             .collect()

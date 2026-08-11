@@ -13,8 +13,8 @@ use ktopo::store::Store;
 use super::{
     SECTION_WORK, SectionBranch, SectionCarrier, SectionCarrierParameterInterval,
     SectionCurveComponent, SectionCurveEndpoint, SectionCurveEndpointTopology,
-    SectionCurveFragment, SectionCurveFragmentSpan, SectionSite, SectionSourceParameterKey,
-    SectionUvCurve, SectionUvLine,
+    SectionCurveFragment, SectionCurveFragmentSpan, SectionIsolatedContact, SectionSite,
+    SectionSourceParameterKey, SectionUvCurve, SectionUvLine,
     curve_publish::carrier_point,
     source_annulus::{self, CertifiedSourceRing},
 };
@@ -334,8 +334,9 @@ impl CertifiedSectionPeriodicFaceEmbedding {
 
     /// Complete cap-ring root sets in strict canonical cylinder order.
     ///
-    /// Every root appears exactly once as a boundary-trace terminal. Empty
-    /// vectors retain the prior fully carried contractible-cycle contract.
+    /// Every root appears either as one boundary-trace terminal or as one
+    /// exact isolated internal touch of a boundary trace. Empty vectors retain
+    /// the prior fully carried contractible-cycle contract.
     pub const fn source_loop_roots(&self) -> &[Vec<SectionPeriodicBoundaryRootEmbedding>; 2] {
         &self.source_loop_roots
     }
@@ -626,6 +627,7 @@ struct PeriodicCertificationInput<'a> {
     endpoints: &'a [SectionCurveEndpoint],
     fragments: &'a [SectionCurveFragment],
     components: &'a [SectionCurveComponent],
+    isolated_contacts: &'a [SectionIsolatedContact],
     linear: f64,
 }
 
@@ -637,6 +639,7 @@ pub(super) fn certify_periodic_faces(
     endpoints: &[SectionCurveEndpoint],
     fragments: &[SectionCurveFragment],
     components: &[SectionCurveComponent],
+    isolated_contacts: &[SectionIsolatedContact],
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> KernelResult<Vec<SectionPeriodicFaceEmbeddingEvidence>> {
@@ -688,6 +691,7 @@ pub(super) fn certify_periodic_faces(
         endpoints,
         fragments,
         components,
+        isolated_contacts,
         linear,
     };
     Ok(faces
@@ -765,6 +769,7 @@ pub(crate) fn certify_periodic_face_fragment_subset(
         endpoints: graph.curve_endpoints(),
         fragments: &local_fragments,
         components: &[],
+        isolated_contacts: graph.isolated_contacts(),
         linear,
     };
     let mut certified = certify_face(input, operand, face)?;
@@ -804,6 +809,7 @@ fn certify_face(
         endpoints,
         fragments,
         components,
+        isolated_contacts,
         linear,
     } = input;
     let annulus = source_annulus::certify_source_annulus_topology(store, &face, linear)
@@ -816,7 +822,7 @@ fn certify_face(
     certify_trace_separation(&pending_traces)?;
     certify_trace_component_separation(&pending_components, &pending_traces)?;
     let (source_loop_roots, boundary_traces) =
-        finish_boundary_traces(endpoints, operand, rings, pending_traces)?;
+        finish_boundary_traces(endpoints, isolated_contacts, operand, rings, pending_traces)?;
     let certified = pending_components
         .into_iter()
         .map(|component| component.embedding)
@@ -2156,6 +2162,7 @@ fn certify_trace_component_separation(
 
 fn finish_boundary_traces(
     endpoints: &[SectionCurveEndpoint],
+    isolated_contacts: &[SectionIsolatedContact],
     operand: usize,
     rings: &[CertifiedSourceRing],
     traces: Vec<PendingBoundaryTrace>,
@@ -2166,40 +2173,47 @@ fn finish_boundary_traces(
     ),
     SectionPeriodicEmbeddingGap,
 > {
-    let mut ordered_pending: [Vec<PendingBoundaryRoot>; 2] = core::array::from_fn(|_| Vec::new());
+    let mut terminal_roots: [Vec<PendingBoundaryRoot>; 2] = core::array::from_fn(|_| Vec::new());
     for trace in &traces {
         for terminal in &trace.terminals {
-            ordered_pending[terminal.source_loop_ordinal].push(terminal.clone());
+            terminal_roots[terminal.source_loop_ordinal].push(terminal.clone());
         }
     }
+    let mut ordered_pending: [Vec<PendingBoundaryRoot>; 2] = core::array::from_fn(|_| Vec::new());
     for (loop_ordinal, ring) in rings.iter().enumerate() {
         let mut expected = Vec::new();
         for (endpoint, evidence) in endpoints.iter().enumerate() {
-            if endpoint_source_root(evidence, operand, ring)
-                .is_some_and(|source| source.edge().raw() == ring.edge())
+            if let Some(source) = endpoint_source_root(evidence, operand, ring)
+                && source.edge().raw() == ring.edge()
             {
-                expected.push(endpoint);
+                expected.push((endpoint, source));
             }
         }
-        let mut actual = ordered_pending[loop_ordinal]
-            .iter()
-            .map(|root| root.endpoint)
-            .collect::<Vec<_>>();
-        expected.sort_unstable();
-        actual.sort_unstable();
-        if expected != actual || actual.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
-                source_loop: loop_ordinal,
-            });
-        }
-        for root in &ordered_pending[loop_ordinal] {
-            let Some(source) = endpoints
-                .get(root.endpoint)
-                .and_then(|endpoint| endpoint_source_root(endpoint, operand, ring))
-            else {
-                return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
-                    source_loop: loop_ordinal,
-                });
+        for (endpoint, source) in expected {
+            let matching_terminals = terminal_roots[loop_ordinal]
+                .iter()
+                .filter(|root| root.endpoint == endpoint)
+                .collect::<Vec<_>>();
+            let root = match matching_terminals.as_slice() {
+                [root] => (*root).clone(),
+                [] => isolated_boundary_root(
+                    isolated_contacts,
+                    endpoint,
+                    operand,
+                    loop_ordinal,
+                    source,
+                    ring,
+                )?
+                .ok_or(
+                    SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
+                        source_loop: loop_ordinal,
+                    },
+                )?,
+                _ => {
+                    return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
+                        source_loop: loop_ordinal,
+                    });
+                }
             };
             if source != &root.source_parameter
                 || !source.has_same_materialization(&root.source_parameter)
@@ -2208,6 +2222,7 @@ fn finish_boundary_traces(
                     source_loop: loop_ordinal,
                 });
             }
+            ordered_pending[loop_ordinal].push(root);
         }
         let lineage_and_uv = ordered_pending[loop_ordinal]
             .iter()
@@ -2253,6 +2268,51 @@ fn finish_boundary_traces(
         source_loop_roots.each_ref().map(Vec::len),
     )?;
     Ok((source_loop_roots, boundary_traces))
+}
+
+fn isolated_boundary_root(
+    isolated_contacts: &[SectionIsolatedContact],
+    endpoint: usize,
+    operand: usize,
+    source_loop_ordinal: usize,
+    source_parameter: &SectionSourceParameterKey,
+    ring: &CertifiedSourceRing,
+) -> Result<Option<PendingBoundaryRoot>, SectionPeriodicEmbeddingGap> {
+    let mut retained = None;
+    for contact in isolated_contacts
+        .iter()
+        .filter(|contact| contact.endpoint() == endpoint)
+    {
+        let matching = contact
+            .roots()
+            .iter()
+            .filter(|root| {
+                root.operand() == operand
+                    && root.loop_id().raw() == ring.loop_id()
+                    && root.source_parameter() == source_parameter
+                    && root
+                        .source_parameter()
+                        .has_same_materialization(source_parameter)
+            })
+            .collect::<Vec<_>>();
+        let [root] = matching.as_slice() else {
+            continue;
+        };
+        let lifted_uv = contact.surface_parameters()[operand].map(Interval::point);
+        let pending = map_boundary_root(
+            endpoint,
+            source_loop_ordinal,
+            root.source_parameter(),
+            lifted_uv,
+            ring,
+        )?;
+        if retained.replace(pending).is_some() {
+            return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
+                source_loop: source_loop_ordinal,
+            });
+        }
+    }
+    Ok(retained)
 }
 
 fn endpoint_source_root<'a>(
@@ -2388,9 +2448,6 @@ fn certify_boundary_pairings(
             .and_then(integer_period_interval)
             .ok_or(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)?;
         transverse.push((pairing.source_u[first], pairing.source_u[second] + shift));
-    }
-    if covered.into_iter().flatten().any(|root| !root) {
-        return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
     }
     certify_universal_cover_matching(transverse)?;
 

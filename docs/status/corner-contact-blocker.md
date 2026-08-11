@@ -1,72 +1,51 @@
-# Corner-contact Boolean representability blocker
+# Corner-contact Boolean representation decision and resolution
 
-Stages 1–3 of the skew-cylinder corner-contact rung are complete. The exact
-four-bound `Isolated` events now flow through kgraph and kops into first-class
-Section isolated contacts, and the public corner fixture stitches one closed
-eight-fragment component with two zero-dimensional members and zero gaps in
-both operand orders under World and Oblique frames.
+The representation blocker is resolved. Parasolid's native result, observed in
+[oracle run 31433897241](https://github.com/josephbajor/geocore/actions/runs/31433897241),
+selects the point-contact representation the kernel now commits.
 
-Stage 4 remains deliberately blocked and the production Boolean continues to
-refuse atomically with `BooleanRefusal::AssemblyRejected`.
+## Parasolid oracle
 
-## Exact blocker
+For the exact `first - second` fixture, Onshape/Parasolid produced one solid
+body with one shell, 8 faces, 14 edges, and 8 vertices. The contact points are
+topologically shared vertices at `(5,-12,16)` and `(5,12,16)`. Each has degree
+five, its face link is a five-cycle, and the lower cap is split into three
+simple planar faces. Native and X_T replay structure agreed. Parasolid did not
+decompose the two point-touching lobes into separate bodies and did not encode
+the contacts as degenerate edges.
 
-An allocation-free diagnostic extension of the general cylinder-pair boundary
-pipeline consumed the two isolated contacts as source-ring split points and
-carried all eight real Section fragments through periodic and disk
-arrangements. Subtract then selected one edge-connected proposal with:
+## Kernel result
 
-- 8 faces;
-- 8 Section edges;
-- 1 physical shell component; and
-- boundary cells joined through the isolated point-contact strata.
+The exact `Isolated` events flow from the finite-window family through kgraph
+and kops into first-class Section isolated contacts. Section stitches one
+closed eight-fragment component with two zero-dimensional members and zero
+gaps in both operand orders under World and Oblique frames. The unpublished
+`Contact` stratum retains its typed fail-closed refusal.
 
-This is the known point-pinched result class, not either existing bounded-skew
-lobe class. The proposal could be allocated, but `RequireValid` Full checking
-rejected it without committing. Its single body report had no faults and the
-following unresolved proof obligations:
+Subtract now commits one Full-valid solid in both orders and frames:
 
-- three loops: `LoopOrientation` and `LoopSelfIntersection`;
-- one shell: `ShellSelfIntersection` and `ShellOrientation`.
+- `first - second` is the oracle-aligned 8-face, 14-edge, 8-vertex shell with
+  two degree-five contact vertices;
+- `second - first` is a 7-face, 13-edge, 8-vertex shell with one two-loop
+  cylinder face and one endpoint-free periodic ring; and
+- every bounded edge has two distinct endpoints. No isolated point is
+  disguised as a zero-length curve or legacy planar `SectionVertex`.
 
-The blocking checker invariant is that a committed solid boundary must be a
-Full-certified closed vertex-manifold shell with simple oriented face loops.
-The existing bounded-skew lobe theorem recognizes a 4-face, 6-edge, 4-vertex
-shell whose vertex links are cycles; it does not recognize the connected
-8-face point-pinched proposal. None of the other existing shell theorems
-certifies that topology. Treating the isolated contacts as ordinary loop
-vertices would therefore leave loop simplicity and the shell vertex link
-unproved. Merging through the points, duplicating them by fixture rule, or
-adding a degenerate edge would change or disguise the published topology.
+Both shapes certify through the existing bounded-skew theorem entry. Its
+discovery consumes the complete family, exact isolated roots, source supports,
+member adjacency, sheet occupancy, loop winding, and vertex-link evidence.
+The trusted shell cascade remains at eight entries; no new certifier or checker
+expectation downgrade was introduced.
 
-The trusted shell cascade and `LIVE_SHELL_CERTIFIERS` remain byte-identical at
-their existing eight entries. No ninth certifier was added, and the diagnostic
-Stage 4 experiment was discarded.
+## X_T queue
 
-## Representation decision is oracle-bound
+`corner_contact_first_minus_second.x_t` and
+`corner_contact_second_minus_first.x_t` are appended to the deterministic
+Boolean oracle bundle. Repeated export, local import, topology preservation,
+public Fast checking, and independent re-export pass in both orders and rigid
+frames. The eight shared point owners appear as the reader's expected skipped
+non-geometric type-141 metadata.
 
-Decomposing the selected set into vertex-manifold bodies and extending the
-store/checker contract for point-contact solids are hypotheses, not choices to
-make from first principles. Parasolid X_T round-trip is the representation
-contract, so Stage 4 stays blocked until licensed Parasolid shows what its own
-Subtract emits for this exact topology.
-
-The manual R5 `corner-contact` suite now constructs the two fixture cylinders
-inside Onshape from the same exact literals and evaluates `first - second`:
-
-- first cylinder: radius 13, axis `(0,0,16)` to `(0,0,17)`;
-- second cylinder: radius 20, axis `(-14,0,0)` to `(5,0,0)`; and
-- expected isolated contact positions: `(5,-12,16)` and `(5,12,16)`.
-
-The probe does not assert a body count. It retains Onshape's native body,
-face, loop, edge, and vertex structure; exports the result as raw X_T; imports
-that X_T back into Onshape; retains the replay structure and re-export; and
-compares normalized topology with host ids removed. This distinguishes at
-least separate bodies, one body with topologically shared contact vertices,
-and coincident-but-distinct vertices. The raw X_T remains authoritative for
-shell/region structure not exposed by the body-details API.
-
-The observed native and replay representation will select the implementation
-route. Until that evidence is recorded and its topology can pass Full
-validation without a new trusted certifier, `AssemblyRejected` is the required
-covenant-preserving result.
+Licensed-host R5 replay of the expanded 18-payload bundle is still pending.
+The queued files therefore establish local round-trip stability only; they are
+not yet a Parasolid X_T conformance claim.

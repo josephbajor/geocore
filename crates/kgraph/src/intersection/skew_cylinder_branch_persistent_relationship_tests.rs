@@ -351,6 +351,35 @@ fn disjoint_ranges_accept_different_sheets() {
 }
 
 #[test]
+fn strict_longitude_proof_tightens_persistent_pcurve_bounds_to_endpoints() {
+    let (cylinders, ranges) = fixture();
+    for orientation in [
+        PersistentSkewCylinderOpenSpanOrientation::Forward,
+        PersistentSkewCylinderOpenSpanOrientation::Reversed,
+    ] {
+        let certificate = ordinary_span(
+            cylinders,
+            ranges,
+            ParamRange::new(0.20, 0.45),
+            [0.15, 0.50],
+            SkewCylinderSheet::Upper,
+            orientation,
+        );
+        let pcurve = certificate.pcurves()[0];
+        let endpoints = [pcurve.eval(0.0).x, pcurve.eval(1.0).x];
+        let bounds = pcurve.bounding_box(ParamRange::new(0.0, 1.0));
+        assert_eq!(
+            bounds.min.x.to_bits(),
+            endpoints[0].min(endpoints[1]).next_down().to_bits()
+        );
+        assert_eq!(
+            bounds.max.x.to_bits(),
+            endpoints[0].max(endpoints[1]).next_up().to_bits()
+        );
+    }
+}
+
+#[test]
 fn lower_sheet_integral_applies_the_chart_lift_once_and_reflection_stays_certified() {
     let (cylinders, ranges) = fixture();
     let first_certificate = ordinary_span(

@@ -371,7 +371,134 @@ pub(super) fn select_common_periodic_window(
     Err(PeriodicChartError::NoCommonPeriodicWindow)
 }
 
-/// Shift one bounded pcurve into a selected complete-period cylinder window.
+fn periodic_rounding_slack(period: f64, window: ParamRange) -> f64 {
+    64.0 * f64::EPSILON
+        * period
+            .abs()
+            .max(window.lo.abs())
+            .max(window.hi.abs())
+            .max(1.0)
+}
+
+/// Select the proof-local rounding cover for a family-certified persistent
+/// loop whose independently rounded endpoint lifts miss an exact period.
+///
+/// Each input interval is a complete analytic pcurve enclosure.  Existing
+/// integral chart choices are stripped by centering every interval near the
+/// authored period.  The fallback is admitted only when no exact one-period
+/// window exists, every individual enclosure spans at most one period, and
+/// their joint cover exceeds one period by no more than the face-domain
+/// validator's floating-point allowance. This is not a general escape from
+/// periodic window failure and never admits a second topological turn.
+pub(super) fn select_persistent_periodic_envelope(
+    period: f64,
+    authored: ParamRange,
+    intervals: &[(f64, f64)],
+) -> Result<ParamRange, PeriodicChartError> {
+    if !period.is_finite()
+        || period <= 0.0
+        || !authored.is_finite()
+        || authored.lo >= authored.hi
+        || authored.width() != period
+        || intervals.is_empty()
+    {
+        return Err(PeriodicChartError::InvalidAnalyticGeometry);
+    }
+    let center = authored.lo + period / 2.0;
+    let mut shifted = Vec::with_capacity(intervals.len());
+    for &(lo, hi) in intervals {
+        if !lo.is_finite() || !hi.is_finite() || lo > hi || hi - lo > period {
+            return Err(PeriodicChartError::NoCommonPeriodicWindow);
+        }
+        let midpoint = lo + (hi - lo) / 2.0;
+        let turns = ((center - midpoint) / period).round();
+        if !turns.is_finite() || turns < f64::from(i32::MIN) || turns > f64::from(i32::MAX) {
+            return Err(PeriodicChartError::PeriodShiftOverflow);
+        }
+        let delta = turns * period;
+        let shifted_lo = lo + delta;
+        let shifted_hi = hi + delta;
+        if !shifted_lo.is_finite() || !shifted_hi.is_finite() {
+            return Err(PeriodicChartError::PeriodShiftOverflow);
+        }
+        shifted.push((shifted_lo, shifted_hi));
+    }
+    let lo = shifted
+        .iter()
+        .map(|interval| interval.0)
+        .min_by(f64::total_cmp)
+        .ok_or(PeriodicChartError::NoCommonPeriodicWindow)?;
+    let hi = shifted
+        .iter()
+        .map(|interval| interval.1)
+        .max_by(f64::total_cmp)
+        .ok_or(PeriodicChartError::NoCommonPeriodicWindow)?;
+    let width = hi - lo;
+    let window = ParamRange::new(lo, hi);
+    if !width.is_finite()
+        || width <= period
+        || width - period > periodic_rounding_slack(period, window)
+    {
+        return Err(PeriodicChartError::NoCommonPeriodicWindow);
+    }
+    Ok(window)
+}
+
+fn periodic_interval_shift_into_envelope(
+    period: f64,
+    window: ParamRange,
+    interval: (f64, f64),
+) -> Result<i32, PeriodicChartError> {
+    let (min, max) = interval;
+    let width = window.width();
+    if !period.is_finite()
+        || period <= 0.0
+        || !window.is_finite()
+        || window.lo >= window.hi
+        || width <= period
+        || width - period > periodic_rounding_slack(period, window)
+        || !min.is_finite()
+        || !max.is_finite()
+        || min > max
+        || max - min > period
+    {
+        return Err(PeriodicChartError::InvalidAnalyticGeometry);
+    }
+    let center = window.lo + width / 2.0;
+    let midpoint = min + (max - min) / 2.0;
+    let preferred = ((center - midpoint) / period).round();
+    if !preferred.is_finite() || preferred < f64::from(i32::MIN) || preferred > f64::from(i32::MAX)
+    {
+        return Err(PeriodicChartError::PeriodShiftOverflow);
+    }
+    let preferred = preferred as i32;
+    for shift in [
+        Some(preferred),
+        preferred.checked_sub(1),
+        preferred.checked_add(1),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let delta = f64::from(shift) * period;
+        let shifted_min = min + delta;
+        let shifted_max = max + delta;
+        if shifted_min.is_finite()
+            && shifted_max.is_finite()
+            && window.contains(shifted_min)
+            && window.contains(shifted_max)
+        {
+            return Ok(shift);
+        }
+    }
+    Err(PeriodicChartError::NoCommonPeriodicWindow)
+}
+
+/// Shift one bounded pcurve into a selected cylinder chart window.
+///
+/// Ordinary callers retain an exact one-period window. A wider window is
+/// accepted only from [`select_persistent_periodic_envelope`] and differs
+/// from one period solely by the bounded endpoint-rounding allowance.
 pub(super) fn normalize_periodic_pcurve_chart(
     surface: AnalyticShellSurface,
     window: ParamRange,
@@ -385,12 +512,41 @@ pub(super) fn normalize_periodic_pcurve_chart(
         return Err(PeriodicChartError::InvalidAnalyticGeometry);
     };
     let (min, max) = pcurve_bounds(surface, pcurve, edge_range)?;
-    let delta = periodic_interval_shift(period, window, (min.x, max.x))?;
+    let delta = if window.width() == period {
+        periodic_interval_shift(period, window, (min.x, max.x))?
+    } else {
+        periodic_interval_shift_into_envelope(period, window, (min.x, max.x))?
+    };
     let [u, v] = pcurve.chart().period_shifts();
     let u = u
         .checked_add(delta)
         .ok_or(PeriodicChartError::PeriodShiftOverflow)?;
     Ok(pcurve.with_chart(PcurveChart::shifted([u, v])))
+}
+
+/// Choose one exact complete-period edge window inside a rounding envelope.
+pub(super) fn complete_period_subwindow(
+    period: f64,
+    envelope: ParamRange,
+) -> Result<ParamRange, PeriodicChartError> {
+    if !period.is_finite()
+        || period <= 0.0
+        || !envelope.is_finite()
+        || envelope.lo >= envelope.hi
+        || envelope.width() <= period
+        || envelope.width() - period > periodic_rounding_slack(period, envelope)
+    {
+        return Err(PeriodicChartError::InvalidAnalyticGeometry);
+    }
+    for lo in [envelope.lo, envelope.hi - period] {
+        if let Some(window) = exact_period_window(lo, period)
+            && envelope.contains(window.lo)
+            && envelope.contains(window.hi)
+        {
+            return Ok(window);
+        }
+    }
+    Err(PeriodicChartError::NoCommonPeriodicWindow)
 }
 
 /// Normalize from intrinsic coordinates when bit-exact partition joins matter.
@@ -591,6 +747,40 @@ mod tests {
         let (min, max) = pcurve_bounds(cylinder(), shifted, window).unwrap();
         assert_eq!(min.x.to_bits(), window.lo.to_bits());
         assert_eq!(max.x.to_bits(), window.hi.to_bits());
+    }
+
+    #[test]
+    fn persistent_rounding_envelope_admits_only_one_period_plus_roundoff() {
+        let authored = ParamRange::new(0.0, TAU);
+        let root = 0.5;
+        let split = 3.0;
+        let lifted_root = (root + TAU).next_up();
+        let intervals = [(root, split), (split, lifted_root)];
+        let envelope = select_persistent_periodic_envelope(TAU, authored, &intervals).unwrap();
+        assert!(envelope.width() > TAU);
+        let ring_window = complete_period_subwindow(TAU, envelope).unwrap();
+        assert_eq!(ring_window.width(), TAU);
+        assert!(envelope.contains(ring_window.lo));
+        assert!(envelope.contains(ring_window.hi));
+
+        for (lo, hi) in intervals {
+            let range = ParamRange::new(lo, hi);
+            let normalized =
+                normalize_periodic_pcurve_chart(cylinder(), envelope, horizontal_use(), range)
+                    .unwrap();
+            let (min, max) = pcurve_bounds(cylinder(), normalized, range).unwrap();
+            assert!(envelope.contains(min.x));
+            assert!(envelope.contains(max.x));
+        }
+
+        assert_eq!(
+            select_persistent_periodic_envelope(
+                TAU,
+                authored,
+                &[(root, split), (split, root + TAU + 1.0e-8)],
+            ),
+            Err(PeriodicChartError::NoCommonPeriodicWindow)
+        );
     }
 
     #[test]

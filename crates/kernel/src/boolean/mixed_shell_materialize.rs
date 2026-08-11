@@ -2041,6 +2041,7 @@ fn prepare_periodic_face_windows(
         };
         let mut bounded_intervals = Vec::new();
         let mut endpoint_free_uses = Vec::new();
+        let mut family_persistent = false;
         for (loop_index, loop_) in face.loops().iter().enumerate() {
             for (use_index, use_) in loop_.uses().iter().enumerate() {
                 let location = PhysicalUse {
@@ -2061,6 +2062,21 @@ fn prepare_periodic_face_windows(
                     physical,
                     skew_pcurves,
                 )?;
+                if matches!(
+                    pcurve.curve(),
+                    AnalyticShellPcurve::PersistentSkewCylinderOpenSpan(_)
+                ) {
+                    let PhysicalCarrier::Section(fragment) = physical.carrier else {
+                        return Err(MixedShellMaterializationError::PlanVertexMismatch);
+                    };
+                    let Some(persistence) = section_edge(plan, fragment)?.skew_persistence() else {
+                        return Err(MixedShellMaterializationError::MissingPersistentSkewInput(
+                            fragment,
+                        ));
+                    };
+                    let _ = persistence.family_membership();
+                    family_persistent = true;
+                }
                 if physical.endpoints.is_none() {
                     endpoint_free_uses.push((edge_index, pcurve));
                 } else {
@@ -2072,15 +2088,40 @@ fn prepare_periodic_face_windows(
         if endpoint_free_uses.is_empty() && bounded_intervals.is_empty() {
             continue;
         }
-        let window = select_common_periodic_window(period, source_domain.u, &bounded_intervals)?;
+        let window =
+            match select_common_periodic_window(period, source_domain.u, &bounded_intervals) {
+                Ok(window) => window,
+                Err(MixedShellMaterializationError::NoCommonPeriodicWindow)
+                    if family_persistent =>
+                {
+                    periodic_chart::select_persistent_periodic_envelope(
+                        period,
+                        source_domain.u,
+                        &bounded_intervals,
+                    )
+                    .map_err(MixedShellMaterializationError::from)?
+                }
+                Err(error) => return Err(error),
+            };
         for (edge_index, pcurve) in endpoint_free_uses {
-            validate_endpoint_free_periodic_use(surface, pcurve, window)?;
-            if let Some(existing) = edge_windows[edge_index]
-                && existing != window
-            {
-                return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
+            if window.width() == period {
+                validate_endpoint_free_periodic_use(surface, pcurve, window)?;
+                if let Some(existing) = edge_windows[edge_index]
+                    && existing != window
+                {
+                    return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
+                }
+                edge_windows[edge_index] = Some(window);
+            } else {
+                let edge_window = periodic_chart::complete_period_subwindow(period, window)?;
+                validate_endpoint_free_periodic_use(surface, pcurve, edge_window)?;
+                if let Some(existing) = edge_windows[edge_index]
+                    && existing != edge_window
+                {
+                    return Err(MixedShellMaterializationError::NoCommonPeriodicWindow);
+                }
+                edge_windows[edge_index] = Some(edge_window);
             }
-            edge_windows[edge_index] = Some(window);
         }
         face_windows[face_index] = Some(window);
     }

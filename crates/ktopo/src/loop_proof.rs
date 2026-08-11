@@ -821,6 +821,11 @@ pub(crate) fn certify_face_loop_layout(
         }
         return Ok(LoopContainment::Indeterminate);
     }
+    if crate::shell_proof::bounded_skew_lobe_shell_proof::certify_bounded_skew_corner_face_layout(
+        store, face_id,
+    )? {
+        return Ok(LoopContainment::Certified);
+    }
     Ok(if certify_analytic_face_layout(store, face_id)? {
         LoopContainment::Certified
     } else {

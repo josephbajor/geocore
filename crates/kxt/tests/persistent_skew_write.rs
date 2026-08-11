@@ -103,7 +103,7 @@ fn pcurve_domain(
     chart: PcurveChart,
 ) -> FaceDomain {
     let pcurve = certificate.pcurves()[operand];
-    let cylinder = certificate.carrier().cylinders()[operand];
+    let cylinder = certificate.residual_certificate().traces()[operand].surface();
     let bounds = pcurve.bounding_box(ParamRange::new(0.0, 1.0));
     let periods = cylinder.periodicity();
     let min = chart.apply(bounds.min, periods).unwrap();
@@ -119,7 +119,10 @@ fn persistent_body(certificate: PersistentSkewCylinderOpenSpanCertificate) -> (S
     ];
     let spans = edge_keys
         .map(|edge| AnalyticShellSkewCylinderOpenSpan::new(edge, vertex_keys, certificate));
-    let cylinders = certificate.carrier().cylinders();
+    let cylinders = certificate
+        .residual_certificate()
+        .traces()
+        .map(|trace| trace.surface());
     let charts = [PcurveChart::identity(), PcurveChart::shifted([1, 0])];
     let uses = [
         spans[0].pcurves()[0].with_chart(charts[0]),
@@ -218,7 +221,7 @@ fn expected_transport(
         });
     }
 
-    let cylinder = certificate.carrier().cylinders()[operand];
+    let cylinder = certificate.residual_certificate().traces()[operand].surface();
     let pcurve = certificate.pcurves()[operand];
     let points = knots
         .iter()

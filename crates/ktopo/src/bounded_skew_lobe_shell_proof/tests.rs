@@ -301,8 +301,8 @@ fn cap_slab_u_window_replay_rejects_narrowed_source_authority() {
 
 #[test]
 fn shell_work_accepts_exact_n_and_rejects_n_minus_one() {
-    let required = proof_work_for_size(31).unwrap();
-    assert_eq!(required, 1_457);
+    let required = proof_work_for_size(67).unwrap();
+    assert_eq!(required, 5_561);
 
     let exact_policy = session_with_limit(required);
     let exact_context = kcore::operation::OperationContext::new(

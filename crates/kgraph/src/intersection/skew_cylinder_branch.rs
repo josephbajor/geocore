@@ -446,6 +446,35 @@ pub(super) struct SkewCylinderBranchDirectedChartIntegral {
     source: Interval,
     stored_ordinate_delta: Interval,
     source_ordinate_delta: Interval,
+    stored_longitude_increasing: bool,
+    stored_longitude_decreasing: bool,
+    source_longitude_increasing: bool,
+    source_longitude_decreasing: bool,
+}
+
+impl SkewCylinderBranchDirectedChartIntegral {
+    pub(super) const fn longitude_is_strictly_monotone(self) -> bool {
+        (self.stored_longitude_increasing && self.source_longitude_increasing)
+            || (self.stored_longitude_decreasing && self.source_longitude_decreasing)
+    }
+
+    fn accumulate(&mut self, cell: Self) -> Result<(), IntersectionCertificateError> {
+        self.stored = finite_interval(self.stored + cell.stored)
+            .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+        self.source = finite_interval(self.source + cell.source)
+            .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+        self.stored_ordinate_delta =
+            finite_interval(self.stored_ordinate_delta + cell.stored_ordinate_delta)
+                .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+        self.source_ordinate_delta =
+            finite_interval(self.source_ordinate_delta + cell.source_ordinate_delta)
+                .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+        self.stored_longitude_increasing &= cell.stored_longitude_increasing;
+        self.stored_longitude_decreasing &= cell.stored_longitude_decreasing;
+        self.source_longitude_increasing &= cell.source_longitude_increasing;
+        self.source_longitude_decreasing &= cell.source_longitude_decreasing;
+        Ok(())
+    }
 }
 
 /// Whole-range paired residual proof for one finite skew-cylinder sheet.
@@ -886,6 +915,10 @@ fn prove_branch_range(
         source: Interval::point(0.0),
         stored_ordinate_delta: Interval::point(0.0),
         source_ordinate_delta: Interval::point(0.0),
+        stored_longitude_increasing: true,
+        stored_longitude_decreasing: true,
+        source_longitude_increasing: true,
+        source_longitude_decreasing: true,
     };
     let mut directed_chart_integrals = [zero_integral; 2];
     let boundary_graded = algebra.carrier_range != ranges[0][0];
@@ -913,16 +946,7 @@ fn prove_branch_range(
             None,
         )?;
         for (aggregate, cell) in directed_chart_integrals.iter_mut().zip(cell_integrals) {
-            aggregate.stored = finite_interval(aggregate.stored + cell.stored)
-                .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-            aggregate.source = finite_interval(aggregate.source + cell.source)
-                .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-            aggregate.stored_ordinate_delta =
-                finite_interval(aggregate.stored_ordinate_delta + cell.stored_ordinate_delta)
-                    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-            aggregate.source_ordinate_delta =
-                finite_interval(aggregate.source_ordinate_delta + cell.source_ordinate_delta)
-                    .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+            aggregate.accumulate(cell)?;
         }
         let v = roots.stored_v;
         if v.lo() <= ranges[0][1].lo || v.hi() >= ranges[0][1].hi {

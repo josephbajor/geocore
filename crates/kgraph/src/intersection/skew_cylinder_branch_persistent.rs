@@ -198,7 +198,7 @@ fn certify_persistent_skew_cylinder_open_span_impl(
         affine: AffineParamMap1d::new(representatives[1] - representatives[0], representatives[0])?,
         endpoint_representatives: representatives,
     };
-    let (carrier, pcurves, residual_bounds) =
+    let (carrier, mut pcurves, residual_bounds) =
         build_composite_evaluators(residual, root_corridors, parameter_map)?;
     let endpoint_points = orientation.orient_pair(physical_endpoint_points);
     let directed_chart_integrals = certify_persistent_directed_chart_integrals(
@@ -207,6 +207,11 @@ fn certify_persistent_skew_cylinder_open_span_impl(
         canonical_representatives,
         orientation,
     )?;
+    for (pcurve, integral) in pcurves.iter_mut().zip(directed_chart_integrals) {
+        if integral.longitude_is_strictly_monotone() {
+            *pcurve = pcurve.with_endpoint_longitude_bounds()?;
+        }
+    }
     let required_edge_tolerance = certify_required_edge_tolerance(
         residual,
         carrier,
@@ -252,6 +257,14 @@ fn certify_persistent_directed_chart_integrals(
             integral.source = negate_interval(integral.source)?;
             integral.stored_ordinate_delta = negate_interval(integral.stored_ordinate_delta)?;
             integral.source_ordinate_delta = negate_interval(integral.source_ordinate_delta)?;
+            core::mem::swap(
+                &mut integral.stored_longitude_increasing,
+                &mut integral.stored_longitude_decreasing,
+            );
+            core::mem::swap(
+                &mut integral.source_longitude_increasing,
+                &mut integral.source_longitude_decreasing,
+            );
         }
     }
     Ok(integrals)
@@ -278,6 +291,10 @@ fn accumulate_directed_chart_integral(
     aggregate.source_ordinate_delta =
         finite_interval(aggregate.source_ordinate_delta + pcurve.source_derivative()[1] * width)
             .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    aggregate.stored_longitude_increasing &= pcurve.stored_derivative()[0].lo() > 0.0;
+    aggregate.stored_longitude_decreasing &= pcurve.stored_derivative()[0].hi() < 0.0;
+    aggregate.source_longitude_increasing &= pcurve.source_derivative()[0].lo() > 0.0;
+    aggregate.source_longitude_decreasing &= pcurve.source_derivative()[0].hi() < 0.0;
     Ok(())
 }
 
@@ -513,6 +530,16 @@ impl PersistentSkewCylinderOpenSpanPcurve {
     /// Ordered quadratic sheet.
     pub const fn sheet(self) -> SkewCylinderSheet {
         self.algebra.sheet
+    }
+
+    fn with_endpoint_longitude_bounds(mut self) -> Result<Self, IntersectionCertificateError> {
+        let endpoints = [self.eval(LOGICAL_RANGE.lo).x, self.eval(LOGICAL_RANGE.hi).x];
+        if !endpoints.into_iter().all(f64::is_finite) {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+        self.bounding_box.min.x = endpoints[0].min(endpoints[1]).next_down();
+        self.bounding_box.max.x = endpoints[0].max(endpoints[1]).next_up();
+        Ok(self)
     }
 }
 
