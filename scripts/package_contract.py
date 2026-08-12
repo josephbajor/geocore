@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+import refusal_frontier
+
 
 KERNEL_PACKAGE_FILES = {
     ".cargo_vcs_info.json",
@@ -335,7 +337,12 @@ def main() -> int:
         ).read_text(),
         ktopo_sources=ktopo_sources,
     )
-    print("package, facade-client, and spine-freeze contracts are current")
+    refusal_errors = refusal_frontier.audit()
+    if refusal_errors:
+        raise ContractError("refusal frontier census: " + "; ".join(refusal_errors))
+    print(
+        "package, facade-client, spine-freeze, and refusal-frontier contracts are current"
+    )
     return 0
 
 
