@@ -19,8 +19,9 @@ use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
 
 use crate::exact::bounded_polynomial::{
-    ExactPolynomial, ExactScalar, RootIsolation, RootIsolationFailure,
+    ExactPolynomial, ExactScalar, RootBracket, RootIsolation, RootIsolationFailure,
 };
+use crate::exact::bounded_root_relation::{ExactRootRelation, classify_exact_root_relation};
 use crate::exact::bounded_trigonometric::{
     CYCLIC_SECOND_HARMONIC_EXACT_WORK, CyclicRoot, CyclicRootBracket, CyclicSecondHarmonicFailure,
     CyclicSecondHarmonicTopology, HalfAngleChart, SecondHarmonicCoefficients, StrictSign,
@@ -394,6 +395,49 @@ impl SkewCylinderDiscriminantContactTopologyCertificate {
             (false, [root], [StrictSign::Negative]) if root.repeated() => Some(*root),
             _ => None,
         }
+    }
+
+    pub(crate) fn support_root_matches_axial_bound(
+        &self,
+        root: SkewCylinderDiscriminantRoot,
+        formula_to_source: [usize; 2],
+        provenance: SkewCylinderAxialBoundProvenance,
+    ) -> Result<bool, SkewCylinderAxialRootFailure> {
+        if self.isolated_support_root() != Some(root) {
+            return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+        }
+        let chart = root.bracket().chart;
+        let discriminant = self.exact_discriminant_root_polynomial(chart)?;
+        let canonical_operand = canonical_operand(formula_to_source, provenance.source_operand)?;
+        let axial = ExactSkewCylinderAlgebra::new(self.formula_cylinders)?
+            .axial_equation(canonical_operand, provenance.value)?
+            .coefficients()
+            .half_angle_polynomial(match chart {
+                SkewCylinderHalfAngleChart::Tangent => HalfAngleChart::Tangent,
+                SkewCylinderHalfAngleChart::Cotangent => HalfAngleChart::Cotangent,
+            })?;
+        let bracket = RootBracket {
+            lo: root.bracket().lo,
+            hi: root.bracket().hi,
+        };
+        classify_exact_root_relation(&discriminant, bracket, &axial, bracket)
+            .map(|relation| relation == ExactRootRelation::Same)
+            .map_err(|_| SkewCylinderAxialRootFailure::InconsistentTopology)
+    }
+
+    fn exact_discriminant_root_polynomial(
+        &self,
+        chart: SkewCylinderHalfAngleChart,
+    ) -> Result<ExactPolynomial, SkewCylinderAxialRootFailure> {
+        let ExactSkewCylinderDiscriminant::Harmonic { coefficients, .. } =
+            ExactSkewCylinderAlgebra::new(self.formula_cylinders)?.discriminant()?
+        else {
+            return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+        };
+        Ok(coefficients.half_angle_polynomial(match chart {
+            SkewCylinderHalfAngleChart::Tangent => HalfAngleChart::Tangent,
+            SkewCylinderHalfAngleChart::Cotangent => HalfAngleChart::Cotangent,
+        })?)
     }
 }
 

@@ -97,8 +97,8 @@ pub enum SectionIsolatedContactKind {
     /// A strict-positive sheet reduced to a point by exact finite-window
     /// boundary roots.
     FiniteWindow,
-    /// A single repeated infinite-support discriminant root strictly inside
-    /// both finite source faces.
+    /// A single repeated infinite-support discriminant root inside both finite
+    /// source faces or exactly on an authored source ring.
     SupportTangency,
 }
 

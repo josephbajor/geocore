@@ -15,7 +15,7 @@ use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError,
-    SkewCylinderSheet,
+    SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK, SkewCylinderAxialBoundary, SkewCylinderSheet,
 };
 use kops::intersect::{
     ContactKind, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
@@ -1242,6 +1242,134 @@ fn exact_perpendicular_support_contact_publishes_while_rooted_ulp_neighbor_refus
         "one-ulp-rooted-neighbor",
     );
     assert!(rooted.skew_cylinder_support_contacts().is_empty());
+}
+
+#[test]
+fn exact_boundary_support_contact_retains_authored_bound_identity_in_both_orders() {
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 3.0, 2.0);
+    let windows = [
+        cylinder_window(range(0.0, 2.25)),
+        cylinder_window(range(-1.25, 1.25)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let forward = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        second_handle,
+        windows[1],
+        first_handle,
+        windows[0],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    for (result, expected) in [
+        (&forward, [Some(SkewCylinderAxialBoundary::Lower), None]),
+        (&reversed, [None, Some(SkewCylinderAxialBoundary::Lower)]),
+    ] {
+        assert!(result.raw.is_complete(), "{result:#?}");
+        assert_eq!(result.raw.points.len(), 1);
+        assert!(result.raw.curves.is_empty());
+        let [contact] = result.skew_cylinder_support_contacts() else {
+            panic!("expected one boundary support contact")
+        };
+        assert_eq!(contact.certificate().source_axial_boundaries(), expected);
+        assert_eq!(contact.certificate().boundary_plan().query_count(), 1);
+        assert_eq!(
+            contact.certificate().boundary_plan().work(),
+            SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK
+        );
+        assert!(contact.point().dist(Point3::new(0.0, 1.0, 0.0)) <= 1.0e-12);
+    }
+    assert_eq!(reversed.raw, forward.raw.clone().swapped());
+}
+
+#[test]
+fn boundary_support_contact_root_relation_work_is_exact_and_atomic() {
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 3.0, 2.0);
+    let windows = [
+        cylinder_window(range(0.0, 2.25)),
+        cylinder_window(range(-1.25, 1.25)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+    let context = |allowed| {
+        OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(
+                BudgetPlan::new([LimitSpec::new(
+                    kops::intersect::SKEW_CYLINDER_ROOT_CLUSTER_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            )
+    };
+
+    let exact_context = context(SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        &exact_context,
+    );
+    assert_eq!(
+        exact
+            .result()
+            .unwrap()
+            .skew_cylinder_support_contacts()
+            .len(),
+        1
+    );
+    assert_eq!(
+        observed_work(
+            exact.report(),
+            kops::intersect::SKEW_CYLINDER_ROOT_CLUSTER_WORK
+        ),
+        SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK
+    );
+
+    let denied_context = context(SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK - 1);
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: kops::intersect::SKEW_CYLINDER_ROOT_CLUSTER_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK,
+        allowed: SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(
+            denied.report(),
+            kops::intersect::SKEW_CYLINDER_ROOT_CLUSTER_WORK
+        ),
+        0
+    );
 }
 
 #[test]

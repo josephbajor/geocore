@@ -179,6 +179,10 @@ pub(super) fn collect_certified_curved_branches(
                                 ruling_publish::RulingEndpointCoincidenceProof::from_isolated_contacts(
                                     &acc.isolated_contacts,
                                 );
+                            let support_boundary_proof =
+                                ruling_publish::SupportBoundaryPointProof::from_isolated_contacts(
+                                    &acc.isolated_contacts,
+                                );
                             let through_contact_proof = tangent.then(|| {
                                 ruling_publish::ThroughContactEndpointProof::from_contacts(
                                     &acc.through_contacts,
@@ -188,6 +192,18 @@ pub(super) fn collect_certified_curved_branches(
                                 let endpoint_proof = endpoint_proof.clone();
                                 if let Some(Some(proof)) = through_contact_proof.as_ref() {
                                     ruling_publish::append_tangent_branch_with_through_contacts(
+                                        store,
+                                        [raw_a, raw_b],
+                                        &facades,
+                                        branch,
+                                        |_, _, _| Ok(endpoint_proof),
+                                        proof,
+                                        root_identity,
+                                        scope,
+                                        acc,
+                                    )?;
+                                } else if let Some(proof) = support_boundary_proof.as_ref() {
+                                    ruling_publish::append_branch_with_support_boundary_proof(
                                         store,
                                         [raw_a, raw_b],
                                         &facades,
@@ -386,6 +402,21 @@ fn append_plane_cylinder_branch(
                 branch,
                 |_, _, _| Ok(endpoint_proof),
                 &through_contact_proof,
+                root_identity,
+                scope,
+                acc,
+            );
+        }
+        if let Some(proof) = ruling_publish::SupportBoundaryPointProof::from_isolated_contacts(
+            &acc.isolated_contacts,
+        ) {
+            return ruling_publish::append_branch_with_support_boundary_proof(
+                store,
+                raw_faces,
+                facades,
+                branch,
+                |_, _, _| Ok(endpoint_proof),
+                &proof,
                 root_identity,
                 scope,
                 acc,

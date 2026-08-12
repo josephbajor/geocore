@@ -350,14 +350,14 @@ pub use section::{
     SectionPeriodicCycleOrientation, SectionPeriodicEmbeddingGap,
     SectionPeriodicFaceEmbeddingEvidence, SectionPeriodicFragmentEmbedding,
     SectionProjectiveParameterInterval, SectionRing, SectionRulingFragmentEnd,
-    SectionRulingTrimProvenance, SectionSite, SectionSkewCylinderBranchCarrier,
-    SectionSkewCylinderBranchPcurve, SectionSkewCylinderCarrierRootEnclosure,
-    SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
-    SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
-    SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
-    SectionSkewCylinderStrictDiscriminantMiss, SectionSourceParameterKey, SectionThroughContact,
-    SectionThroughContactRoot, SectionUvCircle, SectionUvCurve, SectionUvLine,
-    SectionUvParameterInterval, SectionVertex,
+    SectionRulingTrimProvenance, SectionSite, SectionSkewCylinderAxialBoundary,
+    SectionSkewCylinderBranchCarrier, SectionSkewCylinderBranchPcurve,
+    SectionSkewCylinderCarrierRootEnclosure, SectionSkewCylinderEmbeddingCertificate,
+    SectionSkewCylinderInterval, SectionSkewCylinderPcurveCellCertificate,
+    SectionSkewCylinderPcurveEnclosure, SectionSkewCylinderRootChart,
+    SectionSkewCylinderRootCorridorCertificate, SectionSkewCylinderStrictDiscriminantMiss,
+    SectionSourceParameterKey, SectionThroughContact, SectionThroughContactRoot, SectionUvCircle,
+    SectionUvCurve, SectionUvLine, SectionUvParameterInterval, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

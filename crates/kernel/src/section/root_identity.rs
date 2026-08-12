@@ -24,9 +24,10 @@ use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
 use kcore::predicates::{Orientation, affine_dot3};
-use kgeom::curve::{Circle, Line};
+use kgeom::curve::{Circle, Curve, Line};
 use kgeom::surface::{Cylinder, Plane};
 use kgeom::vec::Vec3;
+use kgraph::PersistentSkewCylinderSupportContactCertificate;
 use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId};
 use ktopo::geom::{CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
@@ -284,6 +285,93 @@ impl RootIdentityAuthority {
             RootOrderOutcome::Certified(order) => order.resolve(observed),
             RootOrderOutcome::Indeterminate(gap) => RootResolution::Indeterminate(gap),
         })
+    }
+
+    /// Install the complete singleton root order proved by one isolated skew
+    /// support-contact certificate on an authored cap ring.
+    ///
+    /// The generic Circle/Cylinder authority deliberately rejects multiple
+    /// roots. Here the discriminant theorem proves a unique global support
+    /// point, its exact axial-bound relation proves ring incidence, and its
+    /// exact-source longitude enclosure supplies the intrinsic root interval.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn certify_skew_support_singleton(
+        &mut self,
+        store: &Store,
+        query: SourceRootQuery,
+        certificate: &PersistentSkewCylinderSupportContactCertificate,
+        operand: usize,
+        intrinsic_root: Interval,
+        scope: &mut OperationScope<'_, '_>,
+    ) -> Result<RootOrderOutcome> {
+        charge(scope, 1)?;
+        if operand > 1
+            || certificate.source_axial_boundaries()[operand].is_none()
+            || !finite(intrinsic_root)
+            || intrinsic_root.lo() <= 0.0
+            || intrinsic_root.hi() >= core::f64::consts::TAU
+        {
+            return Ok(RootOrderOutcome::Indeterminate(
+                RootIdentityGap::InvalidObservation,
+            ));
+        }
+        if let Some(RootOrderOutcome::Certified(order)) = self.orders.get(&query) {
+            return Ok(if order.roots() == [intrinsic_root] {
+                RootOrderOutcome::Certified(order.clone())
+            } else {
+                RootOrderOutcome::Indeterminate(RootIdentityGap::AmbiguousObservation)
+            });
+        }
+
+        let edge = read(store.get(query.edge))?;
+        let face = read(store.get(query.opposing_face))?;
+        let Some(curve_id) = edge.curve() else {
+            return Ok(RootOrderOutcome::Indeterminate(
+                RootIdentityGap::MalformedSourceEdge,
+            ));
+        };
+        let (CurveGeom::Circle(circle), SurfaceGeom::Cylinder(opposing)) = (
+            read(store.curve(curve_id))?,
+            read(store.surface(face.surface()))?,
+        ) else {
+            return Ok(RootOrderOutcome::Indeterminate(
+                RootIdentityGap::UnsupportedGeometry,
+            ));
+        };
+        let sources = certificate.source_cylinders();
+        let windows = certificate.source_windows();
+        let boundary =
+            certificate.source_axial_boundaries()[operand].expect("boundary was checked above");
+        let bound = match boundary {
+            kgraph::SkewCylinderAxialBoundary::Lower => windows[operand][1].lo,
+            kgraph::SkewCylinderAxialBoundary::Upper => windows[operand][1].hi,
+        };
+        let source = sources[operand];
+        let expected_origin = source.frame().origin() + source.frame().z() * bound;
+        let representative = 0.5 * intrinsic_root.lo() + 0.5 * intrinsic_root.hi();
+        if edge.tolerance().is_some()
+            || edge.bounds().is_some()
+            || edge.vertices() != [None, None]
+            || circle.radius().to_bits() != source.radius().to_bits()
+            || circle.frame().origin() != expected_origin
+            || circle.frame().z() != source.frame().z()
+            || circle.frame().x() != source.frame().x()
+            || *opposing != sources[1 - operand]
+            || !certificate.source_surface_parameters()[operand][0].is_finite()
+            || circle.eval(representative).dist(certificate.point()) > certificate.tolerance()
+        {
+            return Ok(RootOrderOutcome::Indeterminate(
+                RootIdentityGap::UnsupportedGeometry,
+            ));
+        }
+
+        let order = CertifiedSourceRootOrder {
+            query,
+            roots: vec![intrinsic_root],
+        };
+        let outcome = RootOrderOutcome::Certified(order);
+        self.orders.insert(query, outcome.clone());
+        Ok(outcome)
     }
 }
 

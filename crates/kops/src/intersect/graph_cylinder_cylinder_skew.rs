@@ -40,7 +40,8 @@ use kgraph::{
     certify_paired_skew_cylinder_branch_subrange_residuals,
     certify_persistent_skew_cylinder_finite_window_family,
     certify_persistent_skew_cylinder_support_contact, classify_skew_cylinder_exact_discriminant,
-    classify_skew_cylinder_open_spans, plan_skew_cylinder_root_clusters,
+    classify_skew_cylinder_open_spans, plan_persistent_skew_cylinder_support_contact_boundaries,
+    plan_skew_cylinder_root_clusters,
 };
 
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
@@ -274,7 +275,8 @@ pub struct SkewCylinderThroughContact {
 }
 
 /// Exact projective-root-owned isolated tangency of two skew cylinder
-/// supports, proven strictly inside both finite source windows.
+/// supports, proven inside or on an exact authored boundary of both finite
+/// source windows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkewCylinderSupportContact {
     certificate: PersistentSkewCylinderSupportContactCertificate,
@@ -517,11 +519,35 @@ fn intersect_isolated_support_contact(
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
     let formula_to_source = if source_reversed { [1, 0] } else { [0, 1] };
+    let boundary_plan = match plan_persistent_skew_cylinder_support_contact_boundaries(
+        &contact,
+        formula_ranges,
+        formula_to_source,
+        tolerance,
+    ) {
+        Ok(plan) => plan,
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: contact_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+                isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
+            });
+        }
+    };
+    if boundary_plan.work() > 0 {
+        scope
+            .ledger_mut()
+            .charge(SKEW_CYLINDER_ROOT_CLUSTER_WORK, boundary_plan.work())?;
+    }
     let certificate = match certify_persistent_skew_cylinder_support_contact(
         contact,
         formula_ranges,
         formula_to_source,
         tolerance,
+        boundary_plan.work(),
     ) {
         Ok(certificate) => certificate,
         Err(_) => {

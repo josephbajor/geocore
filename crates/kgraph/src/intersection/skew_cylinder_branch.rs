@@ -99,8 +99,11 @@ pub use axial_bound::{
 #[path = "skew_cylinder_support_contact.rs"]
 mod support_contact;
 pub use support_contact::{
+    PersistentSkewCylinderSupportContactAxialLocation,
+    PersistentSkewCylinderSupportContactBoundaryPlan,
     PersistentSkewCylinderSupportContactCertificate,
     certify_persistent_skew_cylinder_support_contact,
+    plan_persistent_skew_cylinder_support_contact_boundaries,
 };
 
 #[path = "skew_cylinder_finite_window_topology.rs"]

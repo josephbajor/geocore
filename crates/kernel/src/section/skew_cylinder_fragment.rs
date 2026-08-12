@@ -12,8 +12,8 @@ use kgeom::curve::Curve;
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     PairedSkewCylinderBranchResidualCertificate, PersistentSkewCylinderAxialBoundary,
-    PersistentSkewCylinderHalfAngleChart, SkewCylinderBranchGuardedEnd,
-    SkewCylinderBranchPcurveRootCorridorCertificate,
+    PersistentSkewCylinderHalfAngleChart, SkewCylinderAxialBoundary, SkewCylinderBranchGuardedEnd,
+    SkewCylinderBranchPcurveRootCorridorCertificate, SkewCylinderHalfAngleChart,
 };
 use kops::intersect::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
@@ -173,14 +173,24 @@ pub(super) fn append_face_pair_branches(
             return Ok(());
         }
     };
-    let Some(support_contacts) =
-        prepare_support_contacts(raw_faces, facades, support_contacts, &annuli, surfaces)
-    else {
-        acc.gaps.push(SectionGap {
-            reason: GAP_PAIR_UNRESOLVED,
-            faces: facades.to_vec(),
-        });
-        return Ok(());
+    let support_contacts = match prepare_support_contacts(
+        store,
+        raw_faces,
+        facades,
+        support_contacts,
+        &annuli,
+        surfaces,
+        root_identity,
+        scope,
+    )? {
+        Some(contacts) => contacts,
+        None => {
+            acc.gaps.push(SectionGap {
+                reason: GAP_PAIR_UNRESOLVED,
+                faces: facades.to_vec(),
+            });
+            return Ok(());
+        }
     };
     isolated_contacts.extend(support_contacts);
     let through_contacts = match super::skew_cylinder_through_contact::prepare(
@@ -396,64 +406,167 @@ fn prepare_isolated_contacts(
     Ok(Some(prepared))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_support_contacts(
+    store: &Store,
     raw_faces: [RawFaceId; 2],
     facades: &[FaceId; 2],
     contacts: &[SkewCylinderSupportContact],
     annuli: &[CertifiedSourceAnnulus; 2],
     surfaces: [&SurfaceGeom; 2],
-) -> Option<Vec<CertifiedSectionIsolatedContact>> {
+    roots: &mut RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<Option<Vec<CertifiedSectionIsolatedContact>>> {
     let source_cylinders = surfaces.map(|surface| match surface {
         SurfaceGeom::Cylinder(cylinder) => Some(*cylinder),
         _ => None,
     });
     let [Some(first_cylinder), Some(second_cylinder)] = source_cylinders else {
-        return None;
+        return Ok(None);
     };
     let mut prepared = Vec::with_capacity(contacts.len());
     for contact in contacts {
         let certificate = contact.certificate();
         if certificate.source_cylinders() != [first_cylinder, second_cylinder] {
-            return None;
+            return Ok(None);
         }
         let windows = certificate.source_windows();
         let parameters = contact.surface_parameters();
+        let boundaries = certificate.source_axial_boundaries();
+        let longitude_enclosures = certificate.source_longitude_enclosures();
         if !finite_point(contact.point())
             || parameters
                 .into_iter()
                 .flatten()
                 .any(|value| !value.is_finite())
         {
-            return None;
+            return Ok(None);
         }
         for operand in 0..2 {
             if windows[operand][1].lo.to_bits()
                 != annuli[operand].lower().authored_height().to_bits()
                 || windows[operand][1].hi.to_bits()
                     != annuli[operand].upper().authored_height().to_bits()
-                || parameters[operand][1] <= windows[operand][1].lo
-                || parameters[operand][1] >= windows[operand][1].hi
+                || (boundaries[operand].is_none()
+                    && (parameters[operand][1] <= windows[operand][1].lo
+                        || parameters[operand][1] >= windows[operand][1].hi))
             {
-                return None;
+                return Ok(None);
             }
+        }
+
+        let mut sites = raw_faces.map(stitch::SiteKey::Face);
+        let mut root_keys = [None, None];
+        let mut edge_parameters = [None, None];
+        let mut root_scalars = [None, None];
+        let mut root_evidence = [None, None];
+        let mut public_roots = Vec::with_capacity(boundaries.iter().flatten().count());
+        for operand in 0..2 {
+            let Some(boundary) = boundaries[operand] else {
+                continue;
+            };
+            let (ring, axial_boundary, authored_bound) = match boundary {
+                SkewCylinderAxialBoundary::Lower => (
+                    annuli[operand].lower(),
+                    SectionSkewCylinderAxialBoundary::Lower,
+                    windows[operand][1].lo,
+                ),
+                SkewCylinderAxialBoundary::Upper => (
+                    annuli[operand].upper(),
+                    SectionSkewCylinderAxialBoundary::Upper,
+                    windows[operand][1].hi,
+                ),
+            };
+            if ring.face() != raw_faces[operand]
+                || ring.authored_height().to_bits() != authored_bound.to_bits()
+            {
+                return Ok(None);
+            }
+            let Some(edge_parameter) =
+                ring.intrinsic_edge_parameter_for_longitude(longitude_enclosures[operand])
+            else {
+                return Ok(None);
+            };
+            let query = SourceRootQuery::new(ring.edge(), raw_faces[1 - operand]);
+            let order = match roots.certify_skew_support_singleton(
+                store,
+                query,
+                certificate,
+                operand,
+                edge_parameter,
+                scope,
+            )? {
+                RootOrderOutcome::Certified(order) => order,
+                RootOrderOutcome::Indeterminate(_) => return Ok(None),
+            };
+            let root = SourceRootKey::new(ring.edge(), 0);
+            let Some(source_root_scalar) = order.materialize(root) else {
+                return Ok(None);
+            };
+            let root_point = ring.circle().eval(source_root_scalar.parameter());
+            if !finite_point(root_point)
+                || root_point.dist(contact.point()) > certificate.tolerance()
+            {
+                return Ok(None);
+            }
+            let projective = certificate.root().bracket();
+            let chart = match projective.chart {
+                SkewCylinderHalfAngleChart::Tangent => {
+                    SectionSkewCylinderRootChart::TangentHalfAngle
+                }
+                SkewCylinderHalfAngleChart::Cotangent => {
+                    SectionSkewCylinderRootChart::CotangentHalfAngle
+                }
+            };
+            sites[operand] = stitch::SiteKey::Edge(ring.edge());
+            root_keys[operand] = Some(closed_stitch::CertifiedSourceParameterKey::new(
+                root.edge(),
+                root.ordinal(),
+            ));
+            edge_parameters[operand] = Some(edge_parameter);
+            root_scalars[operand] = Some(source_root_scalar);
+            root_evidence[operand] = Some(CertifiedIsolatedRootEvidence {
+                edge: ring.edge(),
+                root,
+                edge_parameter,
+            });
+            public_roots.push(SectionIsolatedContactRoot {
+                operand,
+                axial_boundary,
+                authored_bound,
+                face: facades[operand].clone(),
+                loop_id: LoopId::new(facades[operand].part().clone(), ring.loop_id()),
+                fin: FinId::new(facades[operand].part().clone(), ring.fin()),
+                source_parameter: SectionSourceParameterKey::from_certified_root(
+                    facades[operand].part(),
+                    root,
+                    source_root_scalar,
+                ),
+                edge_parameter: SectionEdgeParameterInterval::from_interval(edge_parameter),
+                carrier_root: SectionSkewCylinderCarrierRootEnclosure {
+                    chart,
+                    lo: projective.lo,
+                    hi: projective.hi,
+                },
+            });
         }
         prepared.push(CertifiedSectionIsolatedContact {
             faces: facades.clone(),
             source: SectionIsolatedContactSource::SupportTangency(Box::new(contact.clone())),
             endpoint: closed_stitch::CertifiedClosedEndpoint::trim_site(
                 stitch::VertexKey {
-                    a: stitch::SiteKey::Face(raw_faces[0]),
-                    b: stitch::SiteKey::Face(raw_faces[1]),
+                    a: sites[0],
+                    b: sites[1],
                 },
-                [None, None],
-                [None, None],
+                root_keys,
+                edge_parameters,
             ),
-            root_scalars: [None, None],
-            roots: Vec::new(),
-            root_evidence: [None, None],
+            root_scalars,
+            roots: public_roots,
+            root_evidence,
         });
     }
-    Some(prepared)
+    Ok(Some(prepared))
 }
 
 #[allow(clippy::too_many_arguments)]

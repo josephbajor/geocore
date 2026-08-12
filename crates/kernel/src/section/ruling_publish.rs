@@ -61,6 +61,101 @@ pub(super) struct ThroughContactEndpointProof {
     roots: Vec<ExactThroughContactRoot>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ExactSupportBoundaryPoint {
+    edge: RawEdgeId,
+    opposing_side_face: RawFaceId,
+    point: Point3,
+    tolerance: f64,
+}
+
+/// Already-published support points that prove a Plane/Cylinder ruling only
+/// touches a source cap disk and contributes no positive-length fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SupportBoundaryPointProof {
+    points: Vec<ExactSupportBoundaryPoint>,
+}
+
+impl SupportBoundaryPointProof {
+    pub(super) fn from_isolated_contacts(
+        contacts: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
+    ) -> Option<Self> {
+        let points = contacts
+            .iter()
+            .filter_map(|contact| {
+                let super::skew_cylinder_public::SectionIsolatedContactSource::SupportTangency(
+                    source,
+                ) = &contact.source
+                else {
+                    return None;
+                };
+                let mut roots = contact
+                    .root_evidence
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(operand, root)| root.map(|root| (operand, root)));
+                let (operand, root) = roots.next()?;
+                if roots.next().is_some() {
+                    return None;
+                }
+                Some(ExactSupportBoundaryPoint {
+                    edge: root.edge,
+                    opposing_side_face: contact.faces[1 - operand].raw(),
+                    point: source.point(),
+                    tolerance: source.certificate().tolerance(),
+                })
+            })
+            .collect::<Vec<_>>();
+        (!points.is_empty()).then_some(Self { points })
+    }
+
+    fn proves_point_only_trim(
+        &self,
+        store: &Store,
+        raw_faces: [RawFaceId; 2],
+        branch: &SectionBranch,
+    ) -> bool {
+        let SectionCarrier::Line { origin, direction } = branch.carrier else {
+            return false;
+        };
+        let denominator = direction.dot(direction);
+        if !denominator.is_finite() || denominator <= 0.0 {
+            return false;
+        }
+        let mut matches = self.points.iter().filter(|proof| {
+            let Some(opposing_operand) = raw_faces
+                .iter()
+                .position(|face| *face == proof.opposing_side_face)
+            else {
+                return false;
+            };
+            let cap_face = raw_faces[1 - opposing_operand];
+            if !face_uses_edge(store, cap_face, proof.edge) {
+                return false;
+            }
+            let parameter = (proof.point - origin).dot(direction) / denominator;
+            parameter.is_finite()
+                && branch.range.contains(parameter)
+                && (origin + direction * parameter).dist(proof.point) <= proof.tolerance
+        });
+        matches.next().is_some() && matches.next().is_none()
+    }
+}
+
+fn face_uses_edge(store: &Store, face: RawFaceId, edge: RawEdgeId) -> bool {
+    let Ok(face) = store.get(face) else {
+        return false;
+    };
+    face.loops().iter().any(|loop_id| {
+        store.get(*loop_id).is_ok_and(|loop_| {
+            loop_
+                .fins()
+                .iter()
+                .any(|fin_id| store.get(*fin_id).is_ok_and(|fin| fin.edge() == edge))
+        })
+    })
+}
+
 impl ThroughContactEndpointProof {
     pub(super) fn from_contacts(contacts: &[super::SectionThroughContact]) -> Option<Self> {
         let roots = contacts
@@ -202,6 +297,42 @@ where
         branch,
         endpoint_proof,
         None,
+        None,
+        root_identity,
+        scope,
+        acc,
+    )
+}
+
+/// Publish a ruling while allowing an exact isolated support point to
+/// discharge one point-only cap-disk tangency.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn append_branch_with_support_boundary_proof<F>(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    branch: SectionBranch,
+    endpoint_proof: F,
+    support_boundary_proof: &SupportBoundaryPointProof,
+    root_identity: &mut RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+    acc: &mut super::SectionAccumulator,
+) -> Result<()>
+where
+    F: FnOnce(
+        &[RulingClipSpan],
+        &[RulingClipSpan],
+        &mut OperationScope<'_, '_>,
+    ) -> Result<Option<RulingEndpointCoincidenceProof>>,
+{
+    append_branch_impl(
+        store,
+        raw_faces,
+        facades,
+        branch,
+        endpoint_proof,
+        None,
+        Some(support_boundary_proof),
         root_identity,
         scope,
         acc,
@@ -236,6 +367,7 @@ where
         branch,
         endpoint_proof,
         Some(through_contact_proof),
+        None,
         root_identity,
         scope,
         acc,
@@ -250,6 +382,7 @@ fn append_branch_impl<F>(
     branch: SectionBranch,
     endpoint_proof: F,
     through_contact_proof: Option<&ThroughContactEndpointProof>,
+    support_boundary_proof: Option<&SupportBoundaryPointProof>,
     root_identity: &mut RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
     acc: &mut super::SectionAccumulator,
@@ -273,6 +406,18 @@ where
         super::ruling_clip::clip_ruling_to_face(store, raw_faces[0], trace_a, branch.range, scope)?,
         super::ruling_clip::clip_ruling_to_face(store, raw_faces[1], trace_b, branch.range, scope)?,
     ];
+    let point_only_support = clipped.iter().any(|outcome| {
+        matches!(
+            outcome,
+            super::ruling_clip::RulingClipOutcome::Indeterminate(
+                super::ruling_clip::RulingClipGap::TangentialContact
+            )
+        )
+    }) && support_boundary_proof
+        .is_some_and(|proof| proof.proves_point_only_trim(store, raw_faces, &branch));
+    if point_only_support {
+        return Ok(());
+    }
     let branch_index = acc.branches.len();
     acc.branches.push(branch);
     let spans = match (&clipped[0], &clipped[1]) {
