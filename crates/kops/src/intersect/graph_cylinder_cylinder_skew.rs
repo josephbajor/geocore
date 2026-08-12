@@ -9,7 +9,7 @@
 //! certificates for every retained procedural carrier and both pcurves. Four
 //! exact axial-bound queries admit root-free whole sheets and simple
 //! non-wrapping open spans with exact source-root endpoint evidence. Contact,
-//! coincident, seam-wrapping, and failed exact classifications remain typed
+//! coincident and failed exact classifications remain typed
 //! indeterminate. A parameterization-local projection fold may retry the
 //! reverse chart, but only a strict-positive
 //! reverse proof can supersede Contact; no sampled marcher may claim completion.
@@ -28,13 +28,14 @@ use kgraph::{
     PersistentSkewCylinderFiniteWindowIsolatedPointCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput,
     PersistentSkewCylinderFiniteWindowThroughContactCertificate,
-    PersistentSkewCylinderFoldedSupportCertificate,
+    PersistentSkewCylinderFoldedSupportCertificate, PersistentSkewCylinderFoldedSupportEndpoint,
     PersistentSkewCylinderSupportContactCertificate, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
     SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK,
-    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
-    SkewCylinderFiniteWindowRootEventKind, SkewCylinderFiniteWindowTopologyCertificate,
-    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
+    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowRootEventKind,
+    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
+    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
     SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide, SkewCylinderSheet,
     SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     certify_paired_skew_cylinder_branch_residuals,
@@ -56,8 +57,8 @@ use super::graph_branch_certificate::{
 use super::graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
-    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderHalfAngleChartProof,
-    SkewCylinderRootInsideSideProof,
+    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderFoldedSupportSeamEndpointProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
 };
 use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult};
 use super::result::{
@@ -69,7 +70,7 @@ use super::skew_cylinder_sheet_occupancy::{
 };
 use kgraph::{
     SkewCylinderAxialBoundary, SkewCylinderAxialRelation, SkewCylinderAxialRootFailure,
-    SkewCylinderHalfAngleChart,
+    SkewCylinderFoldedSupportCellLocation, SkewCylinderHalfAngleChart,
 };
 
 const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires certified contained full-cycle branch carriers";
@@ -288,8 +289,8 @@ pub struct SkewCylinderSupportContact {
     raw_point: SurfaceSurfacePoint,
 }
 
-/// One exact two-root folded support component represented by its lower and
-/// upper guarded sheet members and their two shared support joins.
+/// One exact two-root folded support component represented by guarded sheet
+/// members and their exact support-root and optional authored-seam joins.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkewCylinderFoldedSupportCurve {
     certificate: PersistentSkewCylinderFoldedSupportCertificate,
@@ -302,15 +303,19 @@ impl SkewCylinderFoldedSupportCurve {
         &self.certificate
     }
 
-    /// Lower/upper guarded residual members in caller source order.
-    pub fn residuals(&self) -> [PairedSkewCylinderBranchResidualCertificate; 2] {
-        self.certificate.formula_residuals().map(|residual| {
-            if self.source_reversed {
-                residual.swapped()
-            } else {
-                residual
-            }
-        })
+    /// Guarded residual members in caller source order.
+    pub fn residuals(&self) -> Vec<PairedSkewCylinderBranchResidualCertificate> {
+        self.certificate
+            .formula_residuals()
+            .iter()
+            .map(|residual| {
+                if self.source_reversed {
+                    residual.swapped()
+                } else {
+                    *residual
+                }
+            })
+            .collect()
     }
 
     /// The two exact support joins in increasing formula-longitude order.
@@ -497,6 +502,17 @@ pub(super) fn intersect_certified_skew_cylinders(
             // a contradictory reverse miss cannot supersede retained contact.
             match reversed {
                 DiscriminantAdmission::StrictPositive(_) => (reversed, true),
+                DiscriminantAdmission::Contact(reversed_contact)
+                    if cylinders[0].radius() > cylinders[1].radius() =>
+                {
+                    // Folded/contact publication uses the smaller-radius
+                    // cylinder as its ruling carrier whenever both exact
+                    // parameterizations retain Contact. Radius order is
+                    // invariant under operand swap and rigid motion, unlike
+                    // the storage-order tie-break used by the general
+                    // canonical dispatcher.
+                    (DiscriminantAdmission::Contact(reversed_contact), true)
+                }
                 DiscriminantAdmission::StrictNegative
                 | DiscriminantAdmission::Contact(_)
                 | DiscriminantAdmission::NumericResolution => {
@@ -635,16 +651,23 @@ fn intersect_folded_support_contact(
             });
         }
     };
-    scope.ledger_mut().charge(
-        SKEW_CYLINDER_OPEN_SPAN_WORK,
-        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
-    )?;
+    let folded_work = match topology.positive_cell() {
+        SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots => {
+            SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
+        }
+        SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam => {
+            SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK
+        }
+    };
+    scope
+        .ledger_mut()
+        .charge(SKEW_CYLINDER_OPEN_SPAN_WORK, folded_work)?;
     let certificate = match certify_persistent_skew_cylinder_folded_support(
         topology,
         formula_ranges,
         formula_to_source,
         tolerance,
-        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+        folded_work,
     ) {
         Ok(certificate) => certificate,
         Err(_) => {
@@ -663,39 +686,51 @@ fn intersect_folded_support_contact(
         certificate: certificate.clone(),
         source_reversed,
     };
-    let endpoint_points = certificate.endpoint_points();
-    let endpoint_parameters = certificate.source_endpoint_parameters();
     let roots = certificate.topology().roots();
     let residuals = folded.residuals();
     let branches = residuals
         .into_iter()
-        .map(|residual| {
+        .zip(certificate.formula_branch_endpoints())
+        .map(|(residual, branch_endpoints)| {
             let range = residual.carrier_range();
-            let endpoint_proofs = [0, 1].map(|root_ordinal| {
-                let root = roots[root_ordinal].bracket();
-                Some(
-                    IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(
-                        SkewCylinderFoldedSupportRootEndpointProof {
-                            root_ordinal,
-                            half_angle_chart: match root.chart {
-                                SkewCylinderHalfAngleChart::Tangent => {
-                                    SkewCylinderHalfAngleChartProof::Tangent
-                                }
-                                SkewCylinderHalfAngleChart::Cotangent => {
-                                    SkewCylinderHalfAngleChartProof::Cotangent
-                                }
+            let endpoint_proofs = branch_endpoints.map(|endpoint| {
+                let inside_parameter = if endpoint == branch_endpoints[0] {
+                    range.lo
+                } else {
+                    range.hi
+                };
+                Some(match endpoint {
+                    PersistentSkewCylinderFoldedSupportEndpoint::Root(root_ordinal) => {
+                        let root = roots[root_ordinal].bracket();
+                        IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(
+                            SkewCylinderFoldedSupportRootEndpointProof {
+                                root_ordinal,
+                                half_angle_chart: match root.chart {
+                                    SkewCylinderHalfAngleChart::Tangent => {
+                                        SkewCylinderHalfAngleChartProof::Tangent
+                                    }
+                                    SkewCylinderHalfAngleChart::Cotangent => {
+                                        SkewCylinderHalfAngleChartProof::Cotangent
+                                    }
+                                },
+                                half_angle_bracket: [root.lo, root.hi],
+                                inside_parameter,
+                                point: certificate.endpoint_point(endpoint),
+                                surface_parameters: certificate.source_parameters(endpoint),
                             },
-                            half_angle_bracket: [root.lo, root.hi],
-                            inside_parameter: if root_ordinal == 0 {
-                                range.lo
-                            } else {
-                                range.hi
+                        )
+                    }
+                    PersistentSkewCylinderFoldedSupportEndpoint::Seam(sheet) => {
+                        IntersectionBranchEndpointProof::SkewCylinderFoldedSupportSeam(
+                            SkewCylinderFoldedSupportSeamEndpointProof {
+                                sheet,
+                                inside_parameter,
+                                point: certificate.endpoint_point(endpoint),
+                                surface_parameters: certificate.source_parameters(endpoint),
                             },
-                            point: endpoint_points[root_ordinal],
-                            surface_parameters: endpoint_parameters[root_ordinal],
-                        },
-                    ),
-                )
+                        )
+                    }
+                })
             });
             CertifiedSkewCylinderBranch {
                 proof: CertifiedSkewCylinderBranchProof::FoldedSupport(Box::new(

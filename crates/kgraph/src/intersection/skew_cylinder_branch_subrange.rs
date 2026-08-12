@@ -5,6 +5,12 @@ use super::*;
 const EDGE_PROOF_CELLS: usize = 96;
 const EDGE_BINARY_SCALES: usize = 48;
 
+pub(super) struct FoldedRadicandGuard {
+    pub(super) chart: SkewCylinderHalfAngleChart,
+    pub(super) projective: RootBracket,
+    pub(super) source_lower: f64,
+}
+
 /// Certify one strict, non-wrapping subrange of a finite skew-cylinder sheet.
 ///
 /// `carrier_range` is expressed in the canonical first cylinder's authored
@@ -46,14 +52,13 @@ pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
     carrier_range: ParamRange,
     sheet: SkewCylinderSheet,
     tolerance: f64,
-    projective_guard: RootBracket,
-    source_radicand_lower: f64,
+    radicand_guard: FoldedRadicandGuard,
 ) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
     validate_inputs(cylinders, ranges, tolerance)?;
     if !carrier_range.is_finite()
         || carrier_range.width() <= 0.0
-        || !source_radicand_lower.is_finite()
-        || source_radicand_lower <= 0.0
+        || !radicand_guard.source_lower.is_finite()
+        || radicand_guard.source_lower <= 0.0
     {
         return Err(IntersectionCertificateError::InvalidCarrierRange);
     }
@@ -65,7 +70,11 @@ pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
     }
     let algebra = build_algebra(cylinders, carrier_range, sheet)
         .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-    let stored_radicand_lower = stored_radicand_lower_bound(algebra, projective_guard)
+    let stored_radicand_lower = stored_radicand_lower_bound(
+        algebra,
+        radicand_guard.chart,
+        radicand_guard.projective,
+    )
         .ok_or_else(|| {
             unsupported(
                 "folded skew Cylinder/Cylinder evaluator radicand lacks an exact positive Bernstein margin",
@@ -77,7 +86,7 @@ pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
         tolerance,
         RadicandLowerBounds {
             stored: stored_radicand_lower,
-            source: source_radicand_lower,
+            source: radicand_guard.source_lower,
         },
     )
 }

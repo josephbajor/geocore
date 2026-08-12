@@ -707,6 +707,15 @@ impl core::hash::Hash for SectionSourceParameterKey {
     }
 }
 
+/// Ordered sheet owning a seam join of a folded skew-cylinder support curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionFoldedSupportSheet {
+    /// Negative-square-root member.
+    Lower,
+    /// Positive-square-root member.
+    Upper,
+}
+
 /// Exact combinatorial identity of one stitched section-fragment endpoint.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -742,6 +751,14 @@ pub enum SectionCurveEndpointTopology {
         root_chart: SectionSkewCylinderRootChart,
         /// Exact rational enclosure of the source support root.
         root_interval: SectionSkewCylinderInterval,
+    },
+    /// Exact authored periodic seam joining the two guarded pieces of one
+    /// folded-support sheet.
+    FoldedSupportSeamJoin {
+        /// Source faces in operand order.
+        faces: [FaceId; 2],
+        /// Ordered sheet owning the seam join.
+        sheet: SectionFoldedSupportSheet,
     },
 }
 
@@ -907,10 +924,10 @@ pub enum SectionCurveFragmentSpan {
         /// Start/end occurrences in canonical Section traversal order.
         endpoints: Box<[SectionBoundedProceduralFragmentEnd; 2]>,
     },
-    /// One guarded member of a folded support component, bounded by the two
-    /// exact support roots shared with its sibling member.
+    /// One guarded member of a folded support component, bounded by exact
+    /// support roots and, when split, a sheet-specific authored seam join.
     FoldedSupport {
-        /// Physical start/end roots and guarded interior carrier bounds.
+        /// Physical start/end events and guarded interior carrier bounds.
         endpoints: Box<[SectionFoldedSupportFragmentEnd; 2]>,
     },
 }

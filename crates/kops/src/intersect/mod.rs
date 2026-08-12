@@ -125,8 +125,8 @@ pub use graph_cylinder_cylinder_skew::{
 pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
-    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderHalfAngleChartProof,
-    SkewCylinderRootInsideSideProof,
+    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderFoldedSupportSeamEndpointProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,

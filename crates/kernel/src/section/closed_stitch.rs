@@ -198,6 +198,9 @@ pub(crate) enum CertifiedClosedEndpointKey {
         chart: u8,
         projective_bits: [u64; 2],
     },
+    /// The exact authored periodic seam shared by two guarded pieces of one
+    /// ordered folded-support sheet.
+    FoldedSupportSeam { faces: [RawFaceId; 2], sheet: u8 },
 }
 
 /// One directed fragment endpoint and its metric consistency evidence.
@@ -238,6 +241,13 @@ impl CertifiedClosedEndpoint {
                 chart,
                 projective_bits,
             },
+            edge_parameters: [None, None],
+        }
+    }
+
+    pub(crate) const fn folded_support_seam(faces: [RawFaceId; 2], sheet: u8) -> Self {
+        Self {
+            key: CertifiedClosedEndpointKey::FoldedSupportSeam { faces, sheet },
             edge_parameters: [None, None],
         }
     }
@@ -605,7 +615,8 @@ fn endpoint_is_valid(endpoint: CertifiedClosedEndpoint, source: ClosedFragmentSo
                         },
                     )
         }
-        CertifiedClosedEndpointKey::FoldedSupportRoot { faces, .. } => {
+        CertifiedClosedEndpointKey::FoldedSupportRoot { faces, .. }
+        | CertifiedClosedEndpointKey::FoldedSupportSeam { faces, .. } => {
             faces == source.faces && endpoint.edge_parameters == [None, None]
         }
     }
@@ -655,7 +666,8 @@ fn intersect_parameter_evidence(
 ) -> Option<[Option<Interval>; 2]> {
     match key {
         CertifiedClosedEndpointKey::PeriodSeam { .. }
-        | CertifiedClosedEndpointKey::FoldedSupportRoot { .. } => {
+        | CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
+        | CertifiedClosedEndpointKey::FoldedSupportSeam { .. } => {
             (current == [None, None] && incoming == [None, None]).then_some([None, None])
         }
         CertifiedClosedEndpointKey::TrimSite { site, .. } => {
@@ -971,6 +983,86 @@ mod tests {
                 && vertex.incoming == 1
                 && vertex.outgoing == 1
         }));
+    }
+
+    #[test]
+    fn seam_split_folded_members_keep_sheet_seams_distinct() {
+        let ids = ids();
+        let sources = [
+            branch(&ids, 0, [0, 1]),
+            branch(&ids, 1, [0, 1]),
+            branch(&ids, 2, [0, 1]),
+            branch(&ids, 3, [0, 1]),
+        ];
+        let root_zero = CertifiedClosedEndpoint::folded_support_root(
+            sources[0].faces,
+            0,
+            0,
+            [0.25_f64.to_bits(), 0.5_f64.to_bits()],
+        );
+        let root_one = CertifiedClosedEndpoint::folded_support_root(
+            sources[0].faces,
+            1,
+            1,
+            [2.0_f64.to_bits(), 4.0_f64.to_bits()],
+        );
+        let lower_seam = CertifiedClosedEndpoint::folded_support_seam(sources[0].faces, 0);
+        let upper_seam = CertifiedClosedEndpoint::folded_support_seam(sources[0].faces, 1);
+        let fragments = [
+            arc(
+                sources[0].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                lower_seam,
+                root_zero,
+            ),
+            arc(
+                sources[1].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_zero,
+                upper_seam,
+            ),
+            arc(
+                sources[2].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                upper_seam,
+                root_one,
+            ),
+            arc(
+                sources[3].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_one,
+                lower_seam,
+            ),
+        ];
+
+        let result = stitch_closed_fragments(&fragments);
+        assert_eq!(result.completion, ClosedStitchCompletion::Complete);
+        assert!(result.defects.is_empty());
+        assert_eq!(result.vertices.len(), 4);
+        assert_eq!(result.chains.len(), 1);
+        assert!(result.chains[0].closed);
+
+        let mut sheets = result
+            .vertices
+            .iter()
+            .filter_map(|vertex| match vertex.key {
+                CertifiedClosedEndpointKey::FoldedSupportSeam { sheet, .. } => Some(sheet),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        sheets.sort_unstable();
+        assert_eq!(sheets, vec![0, 1]);
+        assert_eq!(
+            result
+                .vertices
+                .iter()
+                .filter(|vertex| matches!(
+                    vertex.key,
+                    CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
+                ))
+                .count(),
+            2
+        );
     }
 
     #[test]

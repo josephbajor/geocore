@@ -763,33 +763,57 @@ fn prepare_folded_support_member(
         let Some(vertex) = vertices.get(edge.endpoint_vertices[graph_slot]).copied() else {
             return Ok(None);
         };
-        let IntersectionBranchVertexEvent::FoldedSupportJoin { root_ordinal } = vertex.event else {
-            return Ok(None);
+        let proof = edge.endpoint_proofs[graph_slot];
+        let closed_end = match (vertex.event, proof) {
+            (
+                IntersectionBranchVertexEvent::FoldedSupportJoin { root_ordinal },
+                Some(IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(proof)),
+            ) => {
+                if proof.root_ordinal != root_ordinal
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                {
+                    return Ok(None);
+                }
+                let chart = match proof.half_angle_chart {
+                    SkewCylinderHalfAngleChartProof::Tangent => 0,
+                    SkewCylinderHalfAngleChartProof::Cotangent => 1,
+                };
+                closed_stitch::CertifiedClosedEndpoint::folded_support_root(
+                    raw_faces,
+                    root_ordinal,
+                    chart,
+                    proof.half_angle_bracket.map(f64::to_bits),
+                )
+            }
+            (
+                IntersectionBranchVertexEvent::FoldedSupportSeamJoin { sheet },
+                Some(IntersectionBranchEndpointProof::SkewCylinderFoldedSupportSeam(proof)),
+            ) => {
+                if proof.sheet != sheet
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                {
+                    return Ok(None);
+                }
+                closed_stitch::CertifiedClosedEndpoint::folded_support_seam(
+                    raw_faces,
+                    match sheet {
+                        kgraph::SkewCylinderSheet::Lower => 0,
+                        kgraph::SkewCylinderSheet::Upper => 1,
+                    },
+                )
+            }
+            _ => return Ok(None),
         };
-        let Some(IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(proof)) =
-            edge.endpoint_proofs[graph_slot]
-        else {
-            return Ok(None);
-        };
-        if proof.root_ordinal != root_ordinal
-            || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
-            || proof.point != vertex.point
-            || proof.surface_parameters != vertex.surface_parameters
-            || section_carrier.eval(section_parameter).dist(vertex.point)
-                > folded.folded_certificate().tolerance()
+        if section_carrier.eval(section_parameter).dist(vertex.point)
+            > folded.folded_certificate().tolerance()
         {
             return Ok(None);
         }
-        let chart = match proof.half_angle_chart {
-            SkewCylinderHalfAngleChartProof::Tangent => 0,
-            SkewCylinderHalfAngleChartProof::Cotangent => 1,
-        };
-        closed_ends.push(closed_stitch::CertifiedClosedEndpoint::folded_support_root(
-            raw_faces,
-            root_ordinal,
-            chart,
-            proof.half_angle_bracket.map(f64::to_bits),
-        ));
+        closed_ends.push(closed_end);
         sites.push(SectionFragmentSite {
             point: vertex.point,
             surface_parameters: vertex.surface_parameters,
@@ -1619,6 +1643,142 @@ mod tests {
             core::mem::size_of::<Option<Box<SectionSkewCylinderEmbeddingCertificate>>>(),
             core::mem::size_of::<usize>()
         );
+    }
+
+    #[test]
+    fn seam_folded_support_face_pair_retains_four_operation_local_members() {
+        let frame = Frame::world();
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (first, second) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let first = edit
+                .create_cylinder(CylinderRequest::new(
+                    frame.with_origin(frame.origin() - frame.z() * 2.25),
+                    1.0,
+                    4.5,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let center = frame.origin() + frame.x() * 3.0_f64.next_down();
+            let second = edit
+                .create_cylinder(CylinderRequest::new(
+                    Frame::new(center - frame.y() * 1.25, frame.y(), frame.x()).unwrap(),
+                    2.0,
+                    2.5,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (first, second)
+        };
+        let part = session.part(part_id.clone()).unwrap();
+        let store = &part.state.store;
+        let raw_faces = [
+            side_face(store, first.raw()),
+            side_face(store, second.raw()),
+        ];
+        let face_data = raw_faces.map(|face| store.get(face).unwrap());
+        let domains = face_data.map(|face| {
+            let domain = face.domain().expect("primitive side face has a domain");
+            [domain.u, domain.v]
+        });
+        let policy = SessionPolicy::v1();
+        let context = OperationContext::new(&policy, Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(
+                super::super::BodySectionBudgetProfile::v1_defaults()
+                    .overlaid(&kops::intersect::GraphSurfaceBudgetProfile::v1_defaults()),
+            );
+        let mut scope = OperationScope::new(&context);
+        let intersections = kops::intersect::intersect_bounded_graph_surfaces_in_scope(
+            store.geometry(),
+            face_data[0].surface(),
+            domains[0],
+            face_data[1].surface(),
+            domains[1],
+            &mut scope,
+        )
+        .unwrap();
+        assert!(intersections.raw.is_complete(), "{:#?}", intersections.raw);
+        assert_eq!(intersections.branch_graph.edges.len(), 4);
+        assert_eq!(intersections.branch_graph.vertices.len(), 4);
+        let surfaces = face_data.map(|face| store.surface(face.surface()).unwrap());
+        let facades = raw_faces.map(|face| FaceId::new(part_id.clone(), face));
+        let mut roots = RootIdentityAuthority::new();
+        let mut acc = SectionAccumulator::default();
+        append_face_pair_branches(
+            store,
+            raw_faces,
+            &facades,
+            &intersections.branch_graph.edges,
+            intersections.skew_cylinder_isolated_contacts(),
+            intersections.skew_cylinder_through_contacts(),
+            intersections.skew_cylinder_support_contacts(),
+            &intersections.branch_graph.vertices,
+            surfaces,
+            face_data.map(|face| face.sense()),
+            context.tolerances().linear(),
+            &mut roots,
+            &mut scope,
+            &mut acc,
+        )
+        .unwrap();
+        assert!(acc.gaps.is_empty(), "{:#?}", acc.gaps);
+        assert_eq!(acc.branches.len(), 4);
+        assert_eq!(acc.closed_fragments.len(), 4);
+        let stitched = closed_stitch::stitch_closed_fragments(&acc.closed_fragments);
+        assert_eq!(
+            stitched.completion,
+            closed_stitch::ClosedStitchCompletion::Complete,
+            "{:#?}",
+            stitched.defects
+        );
+        assert_eq!(stitched.vertices.len(), 4);
+        assert_eq!(stitched.chains.len(), 1);
+        let published = super::super::curve_publish::publish_curves(
+            &part_id,
+            &acc.branches,
+            &acc.closed_fragments,
+            &acc.closed_fragment_evidence,
+            &acc.ruling_fragments,
+            &acc.disk_fragments,
+            &acc.bounded_procedural_fragments,
+            &acc.isolated_contacts,
+            &acc.through_contacts,
+            &stitched,
+        )
+        .unwrap();
+        assert_eq!(published.endpoints.len(), 4);
+        assert_eq!(published.fragments.len(), 4);
+        assert_eq!(published.components.len(), 1);
+        assert!(!published.has_mixed_stitch_defects);
+        let mut full_scope = OperationScope::new(&context);
+        let graph = super::super::section_bodies_in_scope(
+            &part,
+            &first,
+            &second,
+            context.tolerances().linear(),
+            &mut full_scope,
+        )
+        .unwrap();
+        let gap_classes = graph
+            .gaps()
+            .iter()
+            .map(|gap| {
+                gap.faces()
+                    .iter()
+                    .map(|face| {
+                        let face = store.get(face.raw()).unwrap();
+                        store.surface(face.surface()).unwrap().clone()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert!(graph.gaps().is_empty(), "{gap_classes:#?}");
     }
 
     #[test]

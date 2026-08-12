@@ -17,7 +17,7 @@ use kgraph::{
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
 };
 
-/// One lower/upper member of an exact two-root folded support component.
+/// One guarded member of an exact two-root folded support component.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkewCylinderFoldedSupportBranchCertificate {
     residual: PairedSkewCylinderBranchResidualCertificate,
@@ -29,17 +29,11 @@ impl SkewCylinderFoldedSupportBranchCertificate {
         residual: PairedSkewCylinderBranchResidualCertificate,
         folded: PersistentSkewCylinderFoldedSupportCertificate,
     ) -> Result<Self, IntersectionCertificateError> {
-        let ordinal = match residual.sheet() {
-            kgraph::SkewCylinderSheet::Lower => 0,
-            kgraph::SkewCylinderSheet::Upper => 1,
-        };
-        let formula = folded.formula_residuals()[ordinal];
-        let same_order = residual == formula;
-        let swapped_order = residual == formula.swapped();
-        if (!same_order && !swapped_order)
-            || residual.carrier_range() != folded.guarded_range()
-            || folded.required_edge_tolerance() > folded.tolerance()
-        {
+        let retained = folded
+            .formula_residuals()
+            .iter()
+            .any(|formula| residual == *formula || residual == formula.swapped());
+        if !retained || folded.required_edge_tolerance() > folded.tolerance() {
             return Err(IntersectionCertificateError::InvalidTraceFamily);
         }
         Ok(Self { residual, folded })

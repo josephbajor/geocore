@@ -287,6 +287,11 @@ pub enum IntersectionBranchVertexEvent {
         /// Ordinal in the exact canonical two-root cycle.
         root_ordinal: usize,
     },
+    /// Exact authored periodic seam joining two guarded pieces of one folded sheet.
+    FoldedSupportSeamJoin {
+        /// Ordered folded-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
 }
 
 /// End condition for one endpoint slot of an intersection branch.
@@ -307,6 +312,11 @@ pub enum IntersectionBranchEndpointEvent {
     FoldedSupportJoin {
         /// Ordinal in the exact canonical two-root cycle.
         root_ordinal: usize,
+    },
+    /// Exact authored periodic seam joining two guarded pieces of one folded sheet.
+    FoldedSupportSeamJoin {
+        /// Ordered folded-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
     },
 }
 
@@ -438,8 +448,8 @@ impl GraphSurfaceSurfaceIntersections {
         &self.skew_cylinder_support_contacts
     }
 
-    /// Exact two-root folded support components, each represented by two
-    /// guarded sheet edges sharing the same support joins.
+    /// Exact two-root folded support components, each represented by guarded
+    /// sheet edges sharing exact support-root and optional authored-seam joins.
     pub fn skew_cylinder_folded_support_curves(&self) -> &[SkewCylinderFoldedSupportCurve] {
         &self.skew_cylinder_folded_support_curves
     }
@@ -2240,6 +2250,46 @@ fn build_verified_branch_graph(
                         },
                     )
                 }
+                Some(proof @ IntersectionBranchEndpointProof::SkewCylinderFoldedSupportSeam(_)) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let sheet = match &carrier {
+                        CurveDescriptor::SkewCylinderBranch(carrier) => carrier.sheet(),
+                        _ => {
+                            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ));
+                        }
+                    };
+                    let proof = proof
+                        .validated_folded_support_seam(parameter, sheet, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let folded = certificate.as_skew_cylinder_folded_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    let endpoint = kgraph::PersistentSkewCylinderFoldedSupportEndpoint::Seam(sheet);
+                    if proof.point != folded.folded_certificate().endpoint_point(endpoint)
+                        || proof.surface_parameters
+                            != folded.folded_certificate().source_parameters(endpoint)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::FoldedSupportSeamJoin { sheet },
+                        IntersectionBranchVertexEvent::FoldedSupportSeamJoin { sheet },
+                    )
+                }
                 None => {
                     let boundary_surfaces = [
                         on_window_boundary(
@@ -2298,6 +2348,7 @@ fn build_verified_branch_graph(
             let vertex_index = if matches!(
                 vertex_event,
                 IntersectionBranchVertexEvent::FoldedSupportJoin { .. }
+                    | IntersectionBranchVertexEvent::FoldedSupportSeamJoin { .. }
             ) {
                 vertices
                     .iter()

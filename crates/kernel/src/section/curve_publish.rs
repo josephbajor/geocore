@@ -378,6 +378,25 @@ fn adapt_closed_endpoint(
                 ),
             }
         }
+        closed_stitch::CertifiedClosedEndpointKey::FoldedSupportSeam { faces, sheet } => {
+            if root_scalars != [None, None] || vertex.edge_parameters != [None, None] {
+                return Err(inconsistent_topology(
+                    "folded support seam retained source-edge scalar evidence",
+                ));
+            }
+            SectionCurveEndpointTopology::FoldedSupportSeamJoin {
+                faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                sheet: if sheet == 0 {
+                    super::SectionFoldedSupportSheet::Lower
+                } else if sheet == 1 {
+                    super::SectionFoldedSupportSheet::Upper
+                } else {
+                    return Err(inconsistent_topology(
+                        "folded support seam retained an invalid sheet",
+                    ));
+                },
+            }
+        }
     };
     Ok(SectionCurveEndpoint {
         topology,

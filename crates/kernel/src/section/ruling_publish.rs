@@ -1138,6 +1138,16 @@ fn endpoint_materializations_match(
                 && first_chart == second_chart
                 && first_interval == second_interval
         }
+        (
+            SectionCurveEndpointTopology::FoldedSupportSeamJoin {
+                faces: first_faces,
+                sheet: first_sheet,
+            },
+            SectionCurveEndpointTopology::FoldedSupportSeamJoin {
+                faces: second_faces,
+                sheet: second_sheet,
+            },
+        ) => first_faces == second_faces && first_sheet == second_sheet,
         _ => false,
     }
 }
@@ -1193,7 +1203,8 @@ fn adapt_endpoint(
                 site,
             }
         }
-        CertifiedClosedEndpointKey::FoldedSupportRoot { .. } => {
+        CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
+        | CertifiedClosedEndpointKey::FoldedSupportSeam { .. } => {
             return Err(inconsistent_topology(
                 "ruling publisher cannot author a folded support root",
             ));

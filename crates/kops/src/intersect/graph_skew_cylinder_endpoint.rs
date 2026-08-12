@@ -86,6 +86,20 @@ pub struct SkewCylinderFoldedSupportRootEndpointProof {
     pub surface_parameters: [[f64; 2]; 2],
 }
 
+/// Exact authored periodic-seam identity and metric representative for one
+/// sheet-specific join of a seam-split folded support component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderFoldedSupportSeamEndpointProof {
+    /// Ordered folded-support sheet owning this seam join.
+    pub sheet: SkewCylinderSheet,
+    /// Hidden inside-cell carrier coordinate used by the guarded evaluator.
+    pub inside_parameter: f64,
+    /// Deterministic model-space representative at canonical longitude zero.
+    pub point: Point3,
+    /// Caller-order source parameters at the exact authored seam.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
 /// Exact topological evidence attached to one branch endpoint slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -94,6 +108,8 @@ pub enum IntersectionBranchEndpointProof {
     SkewCylinderAxialRoot(SkewCylinderAxialRootEndpointProof),
     /// Simple discriminant root shared by both members of a folded component.
     SkewCylinderFoldedSupportRoot(SkewCylinderFoldedSupportRootEndpointProof),
+    /// Exact authored seam shared by the two guarded pieces of one sheet.
+    SkewCylinderFoldedSupportSeam(SkewCylinderFoldedSupportSeamEndpointProof),
 }
 
 impl IntersectionBranchEndpointProof {
@@ -147,6 +163,37 @@ impl IntersectionBranchEndpointProof {
             || !proof.half_angle_bracket[0].is_finite()
             || !proof.half_angle_bracket[1].is_finite()
             || proof.half_angle_bracket[0] > proof.half_angle_bracket[1]
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || proof
+                .surface_parameters
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            || proof
+                .surface_parameters
+                .into_iter()
+                .zip(surface_ranges)
+                .any(|(parameters, ranges)| {
+                    !ranges[0].contains(parameters[0]) || !ranges[1].contains(parameters[1])
+                })
+        {
+            None
+        } else {
+            Some(proof)
+        }
+    }
+
+    pub(super) fn validated_folded_support_seam(
+        self,
+        parameter: f64,
+        sheet: SkewCylinderSheet,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderFoldedSupportSeamEndpointProof> {
+        let Self::SkewCylinderFoldedSupportSeam(proof) = self else {
+            return None;
+        };
+        if proof.sheet != sheet
+            || proof.inside_parameter != parameter
             || !proof.point.to_array().into_iter().all(f64::is_finite)
             || proof
                 .surface_parameters

@@ -173,6 +173,9 @@ fn overlapping_windows_promote_in_both_orders_and_persist_identities() {
                     }
                     kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportJoin {
                         ..
+                    }
+                    | kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportSeamJoin {
+                        ..
                     } => {
                         panic!("an open NURBS branch cannot end at a folded-cylinder join")
                     }

@@ -4,8 +4,8 @@
 use super::*;
 use kernel::{
     BodySectionGraph, SectionBranchTopology, SectionCurveEndpointTopology,
-    SectionCurveFragmentSpan, SectionIsolatedContactKind, SectionPeriodicEmbeddingGap, SectionSite,
-    SectionSkewCylinderAxialBoundary,
+    SectionCurveFragmentSpan, SectionFoldedSupportSheet, SectionIsolatedContactKind,
+    SectionPeriodicEmbeddingGap, SectionSite, SectionSkewCylinderAxialBoundary,
 };
 
 struct Fixture {
@@ -35,6 +35,18 @@ fn folded_exact_frames() -> [Frame; 2] {
             Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap(),
+    ]
+}
+
+fn seam_folded_exact_frames() -> [Frame; 2] {
+    [
+        Frame::world(),
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-1.0, 0.0, 0.0),
         )
         .unwrap(),
     ]
@@ -151,6 +163,41 @@ fn folded_support_fixture(frame: Frame) -> Fixture {
         let second_axis_origin = frame.origin() + frame.y() * 3.0_f64.next_down();
         let second_frame =
             Frame::new(second_axis_origin + frame.x() * 1.25, -frame.x(), frame.y()).unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 2.0, 2.5))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
+fn seam_folded_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.origin() - frame.z() * 2.25),
+                1.0,
+                4.5,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_center = frame.origin() + frame.x() * 3.0_f64.next_down();
+        let second_frame =
+            Frame::new(second_center - frame.y() * 1.25, frame.y(), frame.x()).unwrap();
         let second = edit
             .create_cylinder(CylinderRequest::new(second_frame, 2.0, 2.5))
             .unwrap()
@@ -414,6 +461,80 @@ fn assert_folded_support_component(fixture: &Fixture, graph: &BodySectionGraph) 
     assert_eq!(embedding_operands, vec![0, 1]);
 }
 
+fn assert_seam_folded_support_component(fixture: &Fixture, graph: &BodySectionGraph) {
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty(), "{:#?}", graph.gaps());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
+    assert!(graph.rings().is_empty());
+    assert!(graph.isolated_contacts().is_empty());
+    assert!(graph.through_contacts().is_empty());
+    assert_eq!(graph.branches().len(), 4);
+    assert_eq!(graph.curve_fragments().len(), 4);
+    assert_eq!(graph.curve_endpoints().len(), 4);
+    assert_eq!(graph.curve_components().len(), 1);
+    let component = &graph.curve_components()[0];
+    assert!(component.closed());
+    assert_eq!(component.fragments().len(), 4);
+
+    let mut endpoint_incidence = vec![0_usize; 4];
+    for &fragment_index in component.fragments() {
+        let fragment = &graph.curve_fragments()[fragment_index];
+        let branch = &graph.branches()[fragment.branch()];
+        assert_eq!(branch.topology(), SectionBranchTopology::Open);
+        assert!(branch.embedding_certificate().is_none());
+        let SectionCurveFragmentSpan::FoldedSupport { endpoints } = fragment.span() else {
+            panic!("seam-folded support retained a non-folded fragment")
+        };
+        for endpoint in endpoints.iter() {
+            endpoint_incidence[endpoint.endpoint()] += 1;
+            let local = fixture.frame.to_local(endpoint.point());
+            assert!((local.x * local.x + local.y * local.y - 1.0).abs() <= 1.0e-12);
+            assert!((-2.25..=2.25).contains(&local.z));
+        }
+    }
+    assert_eq!(endpoint_incidence, vec![2, 2, 2, 2]);
+
+    let mut roots = Vec::new();
+    let mut seams = Vec::new();
+    for endpoint in graph.curve_endpoints() {
+        match endpoint.topology() {
+            SectionCurveEndpointTopology::FoldedSupportJoin { root_ordinal, .. } => {
+                roots.push(*root_ordinal);
+            }
+            SectionCurveEndpointTopology::FoldedSupportSeamJoin { sheet, .. } => {
+                seams.push(*sheet);
+            }
+            topology => panic!("seam-folded support acquired an unexpected endpoint: {topology:?}"),
+        }
+    }
+    roots.sort_unstable();
+    seams.sort_by_key(|sheet| match sheet {
+        SectionFoldedSupportSheet::Lower => 0,
+        SectionFoldedSupportSheet::Upper => 1,
+    });
+    assert_eq!(roots, vec![0, 1]);
+    assert_eq!(
+        seams,
+        vec![
+            SectionFoldedSupportSheet::Lower,
+            SectionFoldedSupportSheet::Upper,
+        ]
+    );
+    assert_eq!(graph.periodic_face_embeddings().len(), 2);
+    assert!(graph.periodic_face_embeddings().iter().all(|embedding| {
+        matches!(
+            embedding.gap(),
+            Some(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve { .. })
+        )
+    }));
+}
+
 #[test]
 fn isolated_support_contact_section_is_complete_replay_swap_and_frame_stable() {
     for frame in exact_frames() {
@@ -617,6 +738,69 @@ fn folded_support_boolean_refuses_distinctly_without_mutation() {
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
             assert_folded_support_component(&fixture, &section(&fixture, swapped));
+        }
+    }
+}
+
+#[test]
+fn seam_folded_support_section_is_complete_replay_swap_and_frame_stable() {
+    for (frame_index, frame) in seam_folded_exact_frames().into_iter().enumerate() {
+        let fixture = seam_folded_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay, "frame {frame_index} forward replay");
+        assert_eq!(swapped, swapped_replay, "frame {frame_index} swap replay");
+        assert_eq!(
+            forward.completion(),
+            SectionCompletion::Complete,
+            "frame {frame_index} forward: {forward:#?}"
+        );
+        assert_eq!(
+            swapped.completion(),
+            SectionCompletion::Complete,
+            "frame {frame_index} swapped: {swapped:#?}"
+        );
+        assert_seam_folded_support_component(&fixture, &forward);
+        assert_seam_folded_support_component(&fixture, &swapped);
+    }
+}
+
+#[test]
+fn seam_folded_support_boolean_refuses_distinctly_without_mutation() {
+    for frame in seam_folded_exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = seam_folded_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Intersect,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+                ),
+                "{outcome:?}"
+            );
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_seam_folded_support_component(&fixture, &section(&fixture, swapped));
         }
     }
 }

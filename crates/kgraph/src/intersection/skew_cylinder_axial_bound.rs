@@ -108,6 +108,18 @@ pub(crate) fn tangent_projective_interval(
     }
 }
 
+pub(crate) fn cotangent_projective_interval(
+    bracket: SkewCylinderHalfAngleRootBracket,
+) -> Option<kcore::interval::Interval> {
+    let interval = kcore::interval::Interval::new(bracket.lo, bracket.hi);
+    match bracket.chart {
+        SkewCylinderHalfAngleChart::Cotangent => Some(interval),
+        SkewCylinderHalfAngleChart::Tangent => {
+            kcore::interval::Interval::point(1.0).checked_div(interval)
+        }
+    }
+}
+
 /// Numeric enclosure of one source root, ordered by increasing canonical
 /// longitude in `[0, 2π)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -430,23 +442,13 @@ impl SkewCylinderFoldedSupportTopologyCertificate {
 
     pub(crate) fn positive_radicand_lower_bound(
         &self,
+        chart: SkewCylinderHalfAngleChart,
         projective: RootBracket,
     ) -> Result<f64, SkewCylinderAxialRootFailure> {
-        let roots = self.roots();
-        let projective_roots = roots.map(|root| tangent_projective_interval(root.bracket));
-        let [Some(first), Some(second)] = projective_roots else {
-            return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
-        };
-        if self.positive_cell != SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
-            || projective.lo <= first.hi()
-            || projective.hi >= second.lo()
-            || projective.lo >= projective.hi
-        {
+        if projective.lo >= projective.hi {
             return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
         }
-        let polynomial = self
-            .topology
-            .exact_discriminant_root_polynomial(SkewCylinderHalfAngleChart::Tangent)?;
+        let polynomial = self.topology.exact_discriminant_root_polynomial(chart)?;
         let numerator = polynomial
             .positive_lower_bound_on_interval(projective.lo, projective.hi)?
             .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?;

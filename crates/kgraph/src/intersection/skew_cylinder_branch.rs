@@ -85,7 +85,6 @@ pub use persistent_family::{
 
 #[path = "skew_cylinder_axial_bound.rs"]
 mod axial_bound;
-use axial_bound::tangent_projective_interval;
 pub use axial_bound::{
     ExactSkewCylinderDiscriminant, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SkewCylinderAngularRootBracket, SkewCylinderAxialBoundProvenance,
@@ -98,15 +97,16 @@ pub use axial_bound::{
     certify_skew_cylinder_folded_support_topology, classify_skew_cylinder_axial_bound,
     classify_skew_cylinder_exact_discriminant, exact_skew_cylinder_discriminant,
 };
+use axial_bound::{cotangent_projective_interval, tangent_projective_interval};
 
 #[path = "skew_cylinder_support_contact.rs"]
 mod support_contact;
 pub use support_contact::{
-    PersistentSkewCylinderFoldedSupportCertificate,
+    PersistentSkewCylinderFoldedSupportCertificate, PersistentSkewCylinderFoldedSupportEndpoint,
     PersistentSkewCylinderSupportContactAxialLocation,
     PersistentSkewCylinderSupportContactBoundaryPlan,
     PersistentSkewCylinderSupportContactCertificate, SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
-    certify_persistent_skew_cylinder_folded_support,
+    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, certify_persistent_skew_cylinder_folded_support,
     certify_persistent_skew_cylinder_support_contact,
     plan_persistent_skew_cylinder_support_contact_boundaries,
 };
@@ -877,7 +877,11 @@ struct RadicandLowerBounds {
     source: f64,
 }
 
-fn stored_radicand_lower_bound(algebra: BranchAlgebra, projective: RootBracket) -> Option<f64> {
+fn stored_radicand_lower_bound(
+    algebra: BranchAlgebra,
+    chart: SkewCylinderHalfAngleChart,
+    projective: RootBracket,
+) -> Option<f64> {
     if !projective.lo.is_finite() || !projective.hi.is_finite() || projective.lo >= projective.hi {
         return None;
     }
@@ -886,11 +890,18 @@ fn stored_radicand_lower_bound(algebra: BranchAlgebra, projective: RootBracket) 
     let constant = ExactScalar::from_f64(algebra.l.constant).ok()?;
     let cosine = ExactScalar::from_f64(algebra.l.cosine).ok()?;
     let sine = ExactScalar::from_f64(algebra.l.sine).ok()?;
-    let numerator = [
-        constant.add(&cosine).ok()?,
-        sine.scale(2.0).ok()?,
-        constant.sub(&cosine).ok()?,
-    ];
+    let numerator = match chart {
+        SkewCylinderHalfAngleChart::Tangent => [
+            constant.add(&cosine).ok()?,
+            sine.scale(2.0).ok()?,
+            constant.sub(&cosine).ok()?,
+        ],
+        SkewCylinderHalfAngleChart::Cotangent => [
+            constant.sub(&cosine).ok()?,
+            sine.scale(2.0).ok()?,
+            constant.add(&cosine).ok()?,
+        ],
+    };
     let numerator_square = [
         numerator[0].mul(&numerator[0]).ok()?,
         numerator[0].mul(&numerator[1]).ok()?.scale(2.0).ok()?,
