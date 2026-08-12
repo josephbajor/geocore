@@ -259,7 +259,7 @@ impl SectionThroughContactRoot {
 /// First-class contact stratum attached to one positive-length Section branch.
 ///
 /// This event is neither a standalone point member nor a curve endpoint. The
-/// exact root touches an authored cap while the represented whole branch stays
+/// exact root touches an authored cap while the represented branch stays
 /// inside the closed finite window on both adjacent sides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionThroughContact {

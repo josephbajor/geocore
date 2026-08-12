@@ -410,7 +410,8 @@ impl GraphSurfaceSurfaceIntersections {
         &self.skew_cylinder_isolated_contacts
     }
 
-    /// Exact-root-owned contacts attached to represented whole skew branches.
+    /// Exact-root-owned contacts attached to represented positive-length skew
+    /// branches.
     ///
     /// These events contribute neither `raw.points` nor graph vertices. Their
     /// sealed sheet identity binds each event to one positive-length edge.

@@ -141,6 +141,7 @@ KERNEL_PACKAGE_FILES = {
     "src/section/source_annulus.rs",
     "tests/lifecycle/bounded_skew_body_properties.rs",
     "tests/lifecycle/bounded_skew_contact_roots.rs",
+    "tests/lifecycle/bounded_skew_clipped_through_contacts.rs",
     "tests/lifecycle/bounded_skew_support_contact.rs",
     "tests/lifecycle/bounded_skew_through_contacts.rs",
     "tests/lifecycle/bounded_skew_xt.rs",

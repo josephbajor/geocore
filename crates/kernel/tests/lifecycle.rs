@@ -22,6 +22,8 @@ use kernel::{
 mod body_distance;
 #[path = "lifecycle/bounded_skew_body_properties.rs"]
 mod bounded_skew_body_properties;
+#[path = "lifecycle/bounded_skew_clipped_through_contacts.rs"]
+mod bounded_skew_clipped_through_contacts;
 #[path = "lifecycle/bounded_skew_contact_roots.rs"]
 mod bounded_skew_contact_roots;
 #[path = "lifecycle/bounded_skew_support_contact.rs"]

@@ -555,11 +555,13 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
         .then_some(certificate)
     }
 
-    /// Derive a branch-attached carrier for one whole-sheet Contact event.
+    /// Derive a branch-attached carrier for one Contact event.
     ///
     /// The event remains a distinct closed-set stratum even though its point
-    /// lies on an already represented positive-length branch. Boundary,
-    /// Isolated, and clipped-sheet Contact events deliberately return `None`.
+    /// lies on an already represented positive-length branch. A whole sheet
+    /// is its own branch; on an open sheet the exact event order and the
+    /// member endpoint root identities must select exactly one member.
+    /// Boundary and Isolated events deliberately return `None`.
     pub fn through_contact_certificate(
         self,
         sheet: SkewCylinderSheet,
@@ -567,8 +569,13 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
     ) -> Option<PersistentSkewCylinderFiniteWindowThroughContactCertificate> {
         let event = self.root_event_certificate(sheet, ordinal)?;
         if event.event().kind() != PersistentSkewCylinderFiniteWindowRootEventKind::Contact
-            || self.sheet_occupancy(sheet)
-                != PersistentSkewCylinderFiniteWindowSheetOccupancy::Whole
+            || match self.sheet_occupancy(sheet) {
+                PersistentSkewCylinderFiniteWindowSheetOccupancy::Whole => false,
+                PersistentSkewCylinderFiniteWindowSheetOccupancy::Open { .. } => {
+                    self.contact_member_membership(sheet, ordinal).is_none()
+                }
+                PersistentSkewCylinderFiniteWindowSheetOccupancy::Outside => true,
+            }
         {
             return None;
         }
@@ -675,6 +682,71 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
         } else {
             None
         }
+    }
+
+    fn contact_member_membership(
+        self,
+        sheet: SkewCylinderSheet,
+        event_ordinal: usize,
+    ) -> Option<PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate> {
+        let event = self.root_event(sheet, event_ordinal)?;
+        if event.kind() != PersistentSkewCylinderFiniteWindowRootEventKind::Contact {
+            return None;
+        }
+        let PersistentSkewCylinderFiniteWindowSheetOccupancy::Open {
+            first_member_ordinal,
+            member_count,
+        } = self.sheet_occupancy(sheet)
+        else {
+            return None;
+        };
+        let mut matched = None;
+        for member_ordinal in first_member_ordinal..first_member_ordinal + member_count {
+            let member = self.member(member_ordinal)?;
+            if member.sheet() != sheet {
+                return None;
+            }
+            let [start, end] = member.endpoints();
+            if start.inside_side() != PersistentSkewCylinderRootInsideSide::After
+                || end.inside_side() != PersistentSkewCylinderRootInsideSide::Before
+            {
+                return None;
+            }
+            let start_ordinal = self.boundary_event_ordinal(sheet, start)?;
+            let end_ordinal = self.boundary_event_ordinal(sheet, end)?;
+            if start_ordinal < event_ordinal && event_ordinal < end_ordinal {
+                if matched.is_some() {
+                    return None;
+                }
+                matched = self.membership(member_ordinal);
+            }
+        }
+        matched
+    }
+
+    fn boundary_event_ordinal(
+        self,
+        sheet: SkewCylinderSheet,
+        endpoint: PersistentSkewCylinderFiniteWindowEndpointProof,
+    ) -> Option<usize> {
+        if endpoint.sheet() != sheet || endpoint.root_count() == 0 {
+            return None;
+        }
+        let mut matched = None;
+        for ordinal in 0..self.root_event_count(sheet) {
+            let event = self.root_event(sheet, ordinal)?;
+            if event.kind() != PersistentSkewCylinderFiniteWindowRootEventKind::Boundary
+                || event.root_count() != endpoint.root_count()
+                || !(0..event.root_count())
+                    .all(|root| event.root_reference(root) == endpoint.root_reference(root))
+            {
+                continue;
+            }
+            if matched.replace(ordinal).is_some() {
+                return None;
+            }
+        }
+        matched
     }
 }
 
@@ -798,12 +870,14 @@ impl PersistentSkewCylinderFiniteWindowIsolatedPointCertificate {
     }
 }
 
-/// Exact-root-owned contact attached to one represented whole branch.
+/// Exact-root-owned contact attached to one represented positive-length
+/// branch.
 ///
 /// The event's point is evaluated from the same strict-positive analytic
 /// formula as the branch, but this type has no independent curve range and is
 /// never an isolated point or endpoint. It can only be minted for a `Contact`
-/// event whose sheet occupancy is `Whole`.
+/// event whose sheet occupancy is `Whole`, or whose exact cyclic event order
+/// places it strictly inside one uniquely identified open member.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PersistentSkewCylinderFiniteWindowThroughContactCertificate {
     event: PersistentSkewCylinderFiniteWindowRootEventCertificate,
@@ -823,6 +897,16 @@ impl PersistentSkewCylinderFiniteWindowThroughContactCertificate {
     /// Ordered quadratic sheet carrying this contact.
     pub const fn sheet(self) -> SkewCylinderSheet {
         self.event.sheet()
+    }
+
+    /// Exact open-member attachment when the contact lies on a clipped sheet.
+    /// Whole-sheet contacts return `None` because their sheet is already one
+    /// complete represented branch.
+    pub fn member_membership(
+        self,
+    ) -> Option<PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate> {
+        self.family()
+            .contact_member_membership(self.sheet(), self.event.ordinal())
     }
 
     /// Deterministic authored-chart representative of the exact event.
@@ -1478,7 +1562,15 @@ fn root_pcurves_contain_bound(
     root: PersistentSkewCylinderAxialRootEventInput,
 ) -> bool {
     let pcurve = corridor.root_pcurves()[root.tag.source_slot()];
-    pcurve.stored_uv()[1].contains(root.bound) && pcurve.source_uv()[1].contains(root.bound)
+    let stored = pcurve.stored_uv()[1];
+    let source = pcurve.source_uv()[1];
+    // The exact-source enclosure owns axial-bound incidence. The stored
+    // evaluator enclosure is only a rounded representative and may sit one
+    // outward-rounded sliver to one side of the authored scalar at a
+    // non-cardinal algebraic root. Requiring the two enclosures to overlap
+    // keeps that representative tied to the exact source without promoting
+    // rounded equality into topology authority.
+    source.contains(root.bound) && stored.lo() <= source.hi() && source.lo() <= stored.hi()
 }
 
 fn endpoint_root_pcurves_contain_bounds(

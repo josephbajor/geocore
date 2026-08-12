@@ -29,6 +29,31 @@ fn perpendicular_pair(offset: f64) -> [Cylinder; 2] {
     ]
 }
 
+fn quarter_turn_perpendicular_pair() -> [Cylinder; 2] {
+    [
+        Cylinder::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap(),
+        Cylinder::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap(),
+            2.0,
+        )
+        .unwrap(),
+    ]
+}
+
 fn formula_ranges() -> [[ParamRange; 2]; 2] {
     [
         [ParamRange::new(0.0, TAU), ParamRange::new(1.8, 1.9)],
@@ -102,8 +127,23 @@ fn family_fixture_for(
     let members = derived_open_members(&topology)
         .into_iter()
         .map(|span| {
+            let mut residual_ranges = ranges;
+            if topology
+                .root_events(span.sheet)
+                .iter()
+                .any(|event| event.kind() == SkewCylinderFiniteWindowRootEventKind::Contact)
+            {
+                let bound = f64::MAX / 4.0;
+                for window in &mut residual_ranges {
+                    window[1] = ParamRange::new(-bound, bound);
+                }
+            }
             let residual = certify_paired_skew_cylinder_branch_subrange_residuals(
-                cylinders, ranges, span.range, span.sheet, tolerance,
+                cylinders,
+                residual_ranges,
+                span.range,
+                span.sheet,
+                tolerance,
             )
             .unwrap_or_else(|error| panic!("span {:?} failed: {error:?}", span.range));
             let roots = span.root_longitude_intervals(ranges[0][0]).unwrap();
@@ -379,6 +419,84 @@ fn repeated_whole_sheet_contacts_mint_branch_attached_carriers() {
             .through_contact_certificate(SkewCylinderSheet::Lower, 2)
             .is_none()
     );
+}
+
+#[test]
+fn repeated_contacts_inside_open_members_bind_by_exact_event_order() {
+    let cylinders = quarter_turn_perpendicular_pair();
+    let ranges = [
+        [ParamRange::new(0.0, TAU), ParamRange::new(-3.0, 3.0)],
+        [ParamRange::new(0.0, TAU), ParamRange::new(0.25, 1.0)],
+    ];
+    let fixture = family_fixture_for(cylinders, ranges, TEST_TOLERANCE);
+    let family = certify_fixture(&fixture).unwrap();
+
+    assert_eq!(family.member_count(), 2);
+    assert_eq!(
+        family.sheet_occupancy(SkewCylinderSheet::Lower),
+        PersistentSkewCylinderFiniteWindowSheetOccupancy::Open {
+            first_member_ordinal: 0,
+            member_count: 1,
+        }
+    );
+    assert_eq!(
+        family.sheet_occupancy(SkewCylinderSheet::Upper),
+        PersistentSkewCylinderFiniteWindowSheetOccupancy::Open {
+            first_member_ordinal: 1,
+            member_count: 1,
+        }
+    );
+    let mut contacts = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
+        .into_iter()
+        .flat_map(|sheet| {
+            (0..family.root_event_count(sheet))
+                .filter_map(move |ordinal| family.through_contact_certificate(sheet, ordinal))
+        })
+        .collect::<Vec<_>>();
+    contacts.sort_by(|first, second| first.point().z.total_cmp(&second.point().z));
+    assert_eq!(contacts.len(), 2);
+    for (ordinal, (contact, expected_z)) in contacts.into_iter().zip([-2.0, 2.0]).enumerate() {
+        let membership = contact
+            .member_membership()
+            .expect("clipped contact must retain its unique open member");
+        assert_eq!(membership.family(), family);
+        assert_eq!(membership.ordinal(), ordinal);
+        assert_eq!(membership.member().sheet(), contact.sheet());
+        assert!(contact.root(0).is_some_and(|root| root.repeated));
+        assert!(contact.root(1).is_none());
+        assert!((contact.point().x - 1.0).abs() <= TEST_TOLERANCE);
+        assert!(contact.point().y.abs() <= TEST_TOLERANCE);
+        assert!((contact.point().z - expected_z).abs() <= TEST_TOLERANCE);
+        assert!(
+            contact
+                .source_surface_points()
+                .into_iter()
+                .all(|source| source.dist(contact.point()) <= TEST_TOLERANCE)
+        );
+    }
+
+    let placement = Frame::world().with_origin(Point3::new(3.0, -2.0, 1.0));
+    let transformed = family
+        .formula_cylinders()
+        .map(|cylinder| rigid_cylinder(cylinder, placement));
+    let reissue =
+        reissue_persistent_skew_cylinder_finite_window_family(family, transformed).unwrap();
+    let reissued = reissue.certificate();
+    let reissued_contacts = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
+        .into_iter()
+        .flat_map(|sheet| {
+            (0..reissued.root_event_count(sheet))
+                .filter_map(move |ordinal| reissued.through_contact_certificate(sheet, ordinal))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reissued_contacts.len(), 2);
+    for contact in reissued_contacts {
+        let membership = contact
+            .member_membership()
+            .expect("reissued clipped contact must retain its exact member");
+        assert_eq!(membership.family(), reissued);
+        assert_eq!(membership.member().sheet(), contact.sheet());
+    }
 }
 
 #[test]

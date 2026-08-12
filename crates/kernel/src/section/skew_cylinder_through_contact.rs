@@ -1,6 +1,6 @@
 //! Section publication for exact skew-cylinder branch contacts.
 //!
-//! A through-contact is retained beside its positive-length whole branch. It
+//! A through-contact is retained beside its positive-length branch. It
 //! resolves every exact axial root onto the topology-owned cap ring without
 //! manufacturing a stitch vertex, curve endpoint, or degenerate fragment.
 
@@ -24,13 +24,24 @@ pub(super) fn prepare(
     let mut prepared = Vec::with_capacity(contacts.len());
     for contact in contacts.iter().copied() {
         let family = contact.certificate().family();
+        let member_membership = contact.certificate().member_membership();
         let mut matching_branches = edges.iter().enumerate().filter(|(_, edge)| {
-            edge.certificate
-                .as_skew_cylinder_whole_contact()
-                .is_some_and(|certificate| {
-                    certificate.finite_window_family() == family
-                        && certificate.residual_certificate().sheet() == contact.sheet()
-                })
+            if let Some(membership) = member_membership {
+                edge.certificate
+                    .as_skew_cylinder_open_span_branch()
+                    .and_then(|certificate| certificate.finite_window_family_membership())
+                    == Some(membership)
+            } else {
+                family.sheet_occupancy(contact.sheet())
+                    == kgraph::PersistentSkewCylinderFiniteWindowSheetOccupancy::Whole
+                    && edge
+                        .certificate
+                        .as_skew_cylinder_whole_contact()
+                        .is_some_and(|certificate| {
+                            certificate.finite_window_family() == family
+                                && certificate.residual_certificate().sheet() == contact.sheet()
+                        })
+            }
         });
         let Some((edge_ordinal, _)) = matching_branches.next() else {
             return Ok(None);

@@ -262,7 +262,8 @@ impl SkewCylinderIsolatedContact {
     }
 }
 
-/// Exact-root-owned contact that lies on one represented whole skew branch.
+/// Exact-root-owned contact that lies on one represented positive-length skew
+/// branch.
 ///
 /// Unlike [`SkewCylinderIsolatedContact`], this carrier contributes no raw
 /// point or graph vertex. Its sealed sheet identity binds the contact to the
@@ -329,7 +330,7 @@ impl SkewCylinderThroughContact {
         self.certificate
     }
 
-    /// Exact analytic point on the represented whole branch.
+    /// Exact analytic point on the represented branch.
     pub fn point(self) -> Point3 {
         self.certificate.point()
     }
@@ -665,12 +666,7 @@ fn intersect_strict_positive_two_sheet(
         match event.kind() {
             SkewCylinderFiniteWindowRootEventKind::Boundary if event.root_count() == 1 => {}
             SkewCylinderFiniteWindowRootEventKind::Isolated if event.root_count() > 0 => {}
-            SkewCylinderFiniteWindowRootEventKind::Contact
-                if event.root_count() > 0
-                    && matches!(
-                        finite_topology.sheet(event.sheet()),
-                        SkewCylinderFiniteSheetTopology::Whole
-                    ) => {}
+            SkewCylinderFiniteWindowRootEventKind::Contact if event.root_count() > 0 => {}
             SkewCylinderFiniteWindowRootEventKind::Contact => {
                 return Ok(CertifiedSkewCylinderIntersections {
                     raw: contact_topology_incomplete(scope),
@@ -790,7 +786,7 @@ fn publish_finite_window_topology(
                     Err(_) if has_contact => {
                         match certify_paired_skew_cylinder_branch_residuals(
                             cylinders,
-                            whole_contact_residual_ranges(ranges),
+                            contact_residual_ranges(ranges),
                             sheet,
                             tolerance,
                         ) {
@@ -812,6 +808,10 @@ fn publish_finite_window_topology(
                 });
             }
             SkewCylinderFiniteSheetTopology::Open(spans) => {
+                let has_contact = finite_topology
+                    .root_events(sheet)
+                    .iter()
+                    .any(|event| event.kind() == SkewCylinderFiniteWindowRootEventKind::Contact);
                 for span in spans.iter().copied() {
                     if span.sheet != sheet {
                         return Ok(CertifiedSkewCylinderIntersections {
@@ -824,7 +824,16 @@ fn publish_finite_window_topology(
                         });
                     }
                     let open_span = match certify_open_span_pcurve_transport(
-                        cylinders, ranges, span, reversed, tolerance,
+                        cylinders,
+                        if has_contact {
+                            contact_residual_ranges(ranges)
+                        } else {
+                            ranges
+                        },
+                        ranges[0][0],
+                        span,
+                        reversed,
+                        tolerance,
                     ) {
                         Ok(certificate) => certificate,
                         Err(failure) => {
@@ -946,7 +955,7 @@ fn publish_finite_window_topology(
     publish_skew_topology(branches, isolated_contacts, through_contacts, Vec::new())
 }
 
-fn whole_contact_residual_ranges(mut ranges: [[ParamRange; 2]; 2]) -> [[ParamRange; 2]; 2] {
+fn contact_residual_ranges(mut ranges: [[ParamRange; 2]; 2]) -> [[ParamRange; 2]; 2] {
     // The existing trusted residual theorem needs strict axial enclosure. The
     // exact finite-window family separately proves closed authored-window
     // occupancy, so this auxiliary proof uses one finite universal envelope
@@ -960,20 +969,25 @@ fn whole_contact_residual_ranges(mut ranges: [[ParamRange; 2]; 2]) -> [[ParamRan
 
 fn certify_open_span_pcurve_transport(
     cylinders: [Cylinder; 2],
-    ranges: [[ParamRange; 2]; 2],
+    residual_ranges: [[ParamRange; 2]; 2],
+    authored_longitude: ParamRange,
     span: SkewCylinderOpenSpan,
     reversed: bool,
     tolerance: f64,
 ) -> Result<SkewCylinderOpenSpanBranchCertificate, IntersectionCertificateError> {
     let certificate = certify_paired_skew_cylinder_branch_subrange_residuals(
-        cylinders, ranges, span.range, span.sheet, tolerance,
+        cylinders,
+        residual_ranges,
+        span.range,
+        span.sheet,
+        tolerance,
     )?;
     let certificate = if reversed {
         certificate.swapped()
     } else {
         certificate
     };
-    let [lower_root, upper_root] = span.root_longitude_intervals(ranges[0][0]).ok_or(
+    let [lower_root, upper_root] = span.root_longitude_intervals(authored_longitude).ok_or(
         IntersectionCertificateError::UnsupportedCarrierParameterization {
             reason: ROOT_CORRIDOR_REASON,
         },

@@ -149,9 +149,20 @@ pub fn reissue_persistent_skew_cylinder_finite_window_family(
     .map_err(|_| IntersectionCertificateError::InvalidTraceFamily)?;
     let mut member_inputs = Vec::new();
     for span in derived_open_members(&finite_topology) {
+        let mut residual_windows = formula_windows;
+        if finite_topology
+            .root_events(span.sheet)
+            .iter()
+            .any(|event| event.kind() == super::SkewCylinderFiniteWindowRootEventKind::Contact)
+        {
+            let bound = f64::MAX / 4.0;
+            for window in &mut residual_windows {
+                window[1] = kgeom::param::ParamRange::new(-bound, bound);
+            }
+        }
         let residual = certify_paired_skew_cylinder_branch_subrange_residuals(
             transformed_formula_cylinders,
-            formula_windows,
+            residual_windows,
             span.range,
             span.sheet,
             source.tolerance(),

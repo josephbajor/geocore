@@ -12,7 +12,7 @@ use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
-use kgeom::vec::Point3;
+use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph,
     PERSISTENT_SKEW_CYLINDER_FINITE_WINDOW_FAMILY_BASE_WORK,
@@ -50,6 +50,31 @@ fn perpendicular_pair() -> [Cylinder; 2] {
         Cylinder::new(frame, 1.0).unwrap(),
         Cylinder::new(
             Frame::new(frame.origin(), frame.x(), frame.y()).unwrap(),
+            2.0,
+        )
+        .unwrap(),
+    ]
+}
+
+fn clipped_through_contact_pair() -> [Cylinder; 2] {
+    [
+        Cylinder::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, -3.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap(),
+        Cylinder::new(
+            Frame::new(
+                Point3::new(0.25, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap(),
             2.0,
         )
         .unwrap(),
@@ -1470,6 +1495,83 @@ fn finite_window_through_contacts_are_branch_attached_without_raw_points() {
 }
 
 #[test]
+fn clipped_through_contacts_bind_unique_open_members_without_raw_points() {
+    let cylinders = clipped_through_contact_pair();
+    let windows = [
+        cylinder_window(range(0.0, 6.0)),
+        cylinder_window(range(0.0, 0.75)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+
+    for swapped in [false, true] {
+        let order = if swapped { [1, 0] } else { [0, 1] };
+        let result = intersect_bounded_graph_surfaces(
+            &graph,
+            handles[order[0]],
+            windows[order[0]],
+            handles[order[1]],
+            windows[order[1]],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            handles[order[0]],
+            windows[order[0]],
+            handles[order[1]],
+            windows[order[1]],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(result, replay);
+        assert_eq!(
+            result.branch_graph.source_surfaces,
+            [handles[order[0]], handles[order[1]]]
+        );
+        assert!(result.raw.is_complete(), "{:#?}", result.raw);
+        assert!(result.raw.points.is_empty());
+        assert_eq!(result.raw.curves.len(), 2);
+        assert_eq!(result.branch_graph.edges.len(), 2);
+        assert_eq!(result.branch_graph.vertices.len(), 4);
+        assert!(result.skew_cylinder_isolated_contacts().is_empty());
+
+        let contacts = result.skew_cylinder_through_contacts();
+        assert_eq!(contacts.len(), 2);
+        let mut memberships = Vec::new();
+        let mut points = Vec::new();
+        for contact in contacts.iter().copied() {
+            let membership = contact
+                .certificate()
+                .member_membership()
+                .expect("clipped contact must name its unique open member");
+            assert_eq!(membership.member().sheet(), contact.sheet());
+            assert!(result.branch_graph.edges.iter().any(|edge| {
+                edge.certificate
+                    .as_skew_cylinder_open_span_branch()
+                    .and_then(|certificate| certificate.finite_window_family_membership())
+                    == Some(membership)
+            }));
+            assert!(contact.root(0).is_some_and(|root| root.repeated));
+            assert!(contact.root(1).is_none());
+            for (cylinder, uv) in order
+                .map(|index| cylinders[index])
+                .into_iter()
+                .zip(contact.surface_parameters())
+            {
+                assert!(cylinder.eval(uv).dist(contact.point()) <= Tolerances::default().linear());
+            }
+            memberships.push(membership.ordinal());
+            points.push(contact.point());
+        }
+        memberships.sort_unstable();
+        assert_eq!(memberships, vec![0, 1]);
+        points.sort_by(|first, second| first.z.total_cmp(&second.z));
+        assert!(points[0].dist(Point3::new(1.0, 0.0, -2.0)) <= 1.0e-8);
+        assert!(points[1].dist(Point3::new(1.0, 0.0, 2.0)) <= 1.0e-8);
+    }
+}
+
+#[test]
 fn through_contact_recertification_has_exact_n_and_atomic_n_minus_one_boundary() {
     assert_eq!(SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, 512);
     assert_eq!(SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK, 1024);
@@ -1656,6 +1758,98 @@ fn open_span_certificate_work_has_exact_n_and_atomic_n_minus_one_boundary() {
         ),
         graph_counts,
         "N-1 refusal must leave the source graph untouched"
+    );
+}
+
+#[test]
+fn clipped_through_contact_work_reuses_exact_open_span_atomic_boundary() {
+    let required_work = 2 * SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH;
+    let cylinders = clipped_through_contact_pair();
+    let windows = [
+        cylinder_window(range(0.0, 6.0)),
+        cylinder_window(range(0.0, 0.75)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+    let graph_counts = (
+        graph.surface_count(),
+        graph.curve_count(),
+        graph.curve2d_count(),
+    );
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                SKEW_CYLINDER_OPEN_SPAN_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                required_work,
+            )])
+            .unwrap(),
+        );
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &exact_context,
+    );
+    let exact_outcome = exact.result();
+    let exact_result = exact_outcome.as_ref().unwrap();
+    assert_eq!(exact_result.branch_graph.edges.len(), 2);
+    assert_eq!(exact_result.skew_cylinder_through_contacts().len(), 2);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        required_work
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                SKEW_CYLINDER_OPEN_SPAN_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                required_work - 1,
+            )])
+            .unwrap(),
+        );
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: required_work,
+        allowed: required_work - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0
+    );
+    assert_eq!(
+        (
+            graph.surface_count(),
+            graph.curve_count(),
+            graph.curve2d_count(),
+        ),
+        graph_counts
     );
 }
 

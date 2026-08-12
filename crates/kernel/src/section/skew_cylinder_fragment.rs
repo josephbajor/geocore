@@ -835,9 +835,12 @@ fn certify_endpoint(
 ) -> Result<Option<CertifiedBoundedSkewCylinderEnd>> {
     let source_operand = proof.source_operand;
     let traces = certificate.traces();
-    if source_operand > 1
-        || traces[source_operand].pcurve().operand() != 0
-        || traces[source_operand].surface() != certificate.carrier().cylinders()[0]
+    if source_operand > 1 {
+        return Ok(None);
+    }
+    let formula_operand = traces[source_operand].pcurve().operand();
+    if formula_operand > 1
+        || traces[source_operand].surface() != certificate.carrier().cylinders()[formula_operand]
     {
         return Ok(None);
     }
@@ -859,11 +862,12 @@ fn certify_endpoint(
     {
         return Ok(None);
     }
-    let Some(carrier_longitude) = carrier_longitude_enclosure(proof) else {
-        return Ok(None);
-    };
+    // The exact projective root is parameterized on the formula carrier, while
+    // the cap ring may belong to either source. The exact-source pcurve is the
+    // certified source-local longitude authority for resolving that ring root.
+    let source_longitude = root_corridor.root_pcurves()[source_operand].source_uv()[0];
     let Some(observed_edge_parameter) =
-        ring.intrinsic_edge_parameter_for_longitude(carrier_longitude)
+        ring.intrinsic_edge_parameter_for_longitude(source_longitude)
     else {
         return Ok(None);
     };
@@ -951,8 +955,13 @@ fn root_corridor_matches_endpoint(
         return false;
     }
     let root_height = root_pcurves[proof.source_operand];
-    if !root_height.stored_uv()[1].contains(proof.bound)
-        || !root_height.source_uv()[1].contains(proof.bound)
+    let stored_height = root_height.stored_uv()[1];
+    let source_height = root_height.source_uv()[1];
+    // Exact-source incidence owns the authored endpoint; the stored pcurve is
+    // a representative enclosure and need only overlap that exact authority.
+    if !source_height.contains(proof.bound)
+        || stored_height.lo() > source_height.hi()
+        || source_height.lo() > stored_height.hi()
     {
         return false;
     }
@@ -1017,31 +1026,6 @@ fn canonical_angle(parameter: f64) -> f64 {
     } else {
         parameter
     }
-}
-
-fn carrier_longitude_enclosure(
-    proof: kops::intersect::SkewCylinderAxialRootEndpointProof,
-) -> Option<Interval> {
-    let projective = Interval::new(proof.half_angle_bracket[0], proof.half_angle_bracket[1]);
-    if !finite_interval(projective) || projective.lo() > projective.hi() {
-        return None;
-    }
-    let principal = super::root_identity::twice_atan_interval(projective).ok()?;
-    let angle = match proof.half_angle_chart {
-        SkewCylinderHalfAngleChartProof::Tangent if principal.hi() < 0.0 => {
-            principal + Interval::point(core::f64::consts::TAU)
-        }
-        SkewCylinderHalfAngleChartProof::Tangent if principal.lo() > 0.0 => principal,
-        SkewCylinderHalfAngleChartProof::Tangent => return None,
-        SkewCylinderHalfAngleChartProof::Cotangent => {
-            Interval::point(core::f64::consts::PI) - principal
-        }
-    };
-    (finite_interval(angle)
-        && angle.lo() > 0.0
-        && angle.lo() <= angle.hi()
-        && angle.hi() < core::f64::consts::TAU)
-        .then_some(angle)
 }
 
 /// Publish staged fragments and intern their physical roots against rulings.
@@ -1197,9 +1181,14 @@ fn published_physical_root_parameter(
         return None;
     }
     let root_pcurves = source.root_pcurves();
-    if evidence.source_operand > 1
-        || !root_pcurves[evidence.source_operand].stored_uv()[1].contains(evidence.authored_height)
-        || !root_pcurves[evidence.source_operand].source_uv()[1].contains(evidence.authored_height)
+    if evidence.source_operand > 1 {
+        return None;
+    }
+    let stored_height = root_pcurves[evidence.source_operand].stored_uv()[1];
+    let source_height = root_pcurves[evidence.source_operand].source_uv()[1];
+    if !source_height.contains(evidence.authored_height)
+        || stored_height.lo() > source_height.hi()
+        || source_height.lo() > stored_height.hi()
     {
         return None;
     }
@@ -1210,10 +1199,6 @@ fn published_physical_root_parameter(
     )?;
     periodic_root_interval_matches(projective, source.root_parameter())
         .then_some(physical_parameter)
-}
-
-fn finite_interval(value: Interval) -> bool {
-    value.lo().is_finite() && value.hi().is_finite()
 }
 
 fn finite_point(point: Point3) -> bool {
