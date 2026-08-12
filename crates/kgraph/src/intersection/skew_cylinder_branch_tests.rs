@@ -64,7 +64,7 @@ fn exact_source_root_height_and_longitude_enclosures_gate_near_boundary_windows(
         let hi = ranges[0][0].lerp((index + 1) as f64 / SKEW_CYLINDER_BRANCH_PROOF_SEGMENTS as f64);
         let cosine = trig_interval(lo, hi, false);
         let sine = trig_interval(lo, hi, true);
-        let roots = cell_root_enclosures(algebra, coefficients, cosine, sine).unwrap();
+        let roots = cell_root_enclosures(algebra, coefficients, cosine, sine, None).unwrap();
         stored_root_lower = stored_root_lower.min(roots.stored_v.lo());
         exact_root_lower = exact_root_lower.min(roots.exact_v.lo());
 

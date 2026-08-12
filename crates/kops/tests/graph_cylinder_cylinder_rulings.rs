@@ -15,17 +15,18 @@ use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError,
-    SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK, SkewCylinderAxialBoundary, SkewCylinderSheet,
+    SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK,
+    SkewCylinderAxialBoundary, SkewCylinderSheet,
 };
 use kops::intersect::{
     ContactKind, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
     IntersectionBranchEndpointEvent, IntersectionBranchTopology, IntersectionBranchVertexEvent,
-    IntersectionError, SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
-    SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE, SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK,
+    IntersectionError, SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK,
     SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION, SKEW_CYLINDER_DISCRIMINANT_WORK,
-    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
-    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SKEW_CYLINDER_TWO_SHEET_WORK, SurfaceIntersectionCurve,
-    SurfaceSurfaceCurve, SurfaceSurfaceIntersections, intersect_bounded_graph_surfaces,
+    SKEW_CYLINDER_OPEN_SPAN_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+    SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
+    SKEW_CYLINDER_TWO_SHEET_WORK, SurfaceIntersectionCurve, SurfaceSurfaceCurve,
+    SurfaceSurfaceIntersections, intersect_bounded_graph_surfaces,
     intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
     persist_verified_graph_surface_intersections,
 };
@@ -291,6 +292,71 @@ fn assert_perpendicular_two_sheet_result(
                 );
             }
         }
+    }
+}
+
+fn assert_folded_support_result(
+    result: &kops::intersect::GraphSurfaceSurfaceIntersections,
+    sources: [kgraph::SurfaceHandle; 2],
+) {
+    assert_eq!(result.branch_graph.source_surfaces, sources);
+    assert!(result.raw.is_complete());
+    assert!(result.raw.points.is_empty());
+    assert_eq!(result.raw.curves.len(), 2);
+    assert_eq!(result.branch_graph.edges.len(), 2);
+    assert_eq!(result.branch_graph.vertices.len(), 2);
+    assert!(result.raw.incomplete_evidence().is_empty());
+    assert!(result.skew_cylinder_support_contacts().is_empty());
+    let [folded] = result.skew_cylinder_folded_support_curves() else {
+        panic!("expected one exact folded support component")
+    };
+    assert_eq!(folded.certificate().topology().roots().len(), 2);
+    assert!(
+        folded
+            .certificate()
+            .topology()
+            .roots()
+            .iter()
+            .all(|root| !root.repeated())
+    );
+    assert!(folded.certificate().required_edge_tolerance() <= folded.certificate().tolerance());
+    for (root_ordinal, vertex) in result.branch_graph.vertices.iter().enumerate() {
+        assert_eq!(
+            vertex.event,
+            IntersectionBranchVertexEvent::FoldedSupportJoin { root_ordinal }
+        );
+        assert_eq!(vertex.point, folded.endpoint_points()[root_ordinal]);
+        assert_eq!(
+            vertex.surface_parameters,
+            folded.source_endpoint_parameters()[root_ordinal]
+        );
+    }
+    for edge in &result.branch_graph.edges {
+        let CurveDescriptor::SkewCylinderBranch(carrier) = edge.carrier else {
+            panic!("folded support member must retain a procedural carrier")
+        };
+        assert_eq!(edge.topology, IntersectionBranchTopology::Open);
+        assert_eq!(edge.endpoint_vertices, [0, 1]);
+        assert_eq!(
+            edge.endpoint_events,
+            [
+                IntersectionBranchEndpointEvent::FoldedSupportJoin { root_ordinal: 0 },
+                IntersectionBranchEndpointEvent::FoldedSupportJoin { root_ordinal: 1 },
+            ]
+        );
+        assert!(edge.carrier_range.width() > 0.0);
+        let certificate = edge
+            .certificate
+            .as_skew_cylinder_folded_support()
+            .expect("folded member retains its shared exact topology");
+        assert_eq!(certificate.residual_certificate().carrier(), carrier);
+        assert!(
+            certificate
+                .residual_certificate()
+                .residual_bounds()
+                .into_iter()
+                .all(|bound| bound <= certificate.residual_certificate().tolerance())
+        );
     }
 }
 
@@ -1149,15 +1215,15 @@ fn non_right_skew_positive_pair_matches_independent_oracle_and_is_swap_stable() 
 }
 
 #[test]
-fn exact_perpendicular_support_contact_publishes_while_rooted_ulp_neighbor_refuses() {
-    let rotated = Frame::new(
+fn exact_perpendicular_support_contact_and_rooted_ulp_neighbor_publish() {
+    let support_rotated = Frame::new(
         Point3::new(2.0, -1.0, 3.0),
         Vec3::new(0.0, 1.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
     )
     .unwrap();
     let windows = skew_windows();
-    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+    for (name, frame) in [("world", Frame::world()), ("rotated", support_rotated)] {
         let [first, second] = perpendicular_axis_pair(frame, 3.0, 2.0);
         let (graph, first_handle, second_handle) = graph_pair(first, second);
         let forward = intersect_bounded_graph_surfaces(
@@ -1222,26 +1288,129 @@ fn exact_perpendicular_support_contact_publishes_while_rooted_ulp_neighbor_refus
         );
     }
 
+    let folded_rotated = Frame::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    for (name, frame) in [("world", Frame::world()), ("rotated", folded_rotated)] {
+        let [first, second] = perpendicular_axis_pair(frame, 3.0_f64.next_down(), 2.0);
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(forward, replay, "{name} changed across replay");
+        assert_folded_support_result(&forward, [first_handle, second_handle]);
+        assert_folded_support_result(&reversed, [second_handle, first_handle]);
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+        for (forward_edge, reversed_edge) in forward
+            .branch_graph
+            .edges
+            .iter()
+            .zip(&reversed.branch_graph.edges)
+        {
+            assert_eq!(forward_edge.carrier, reversed_edge.carrier);
+            assert_eq!(forward_edge.pcurves[0], reversed_edge.pcurves[1]);
+            assert_eq!(forward_edge.pcurves[1], reversed_edge.pcurves[0]);
+        }
+    }
+}
+
+#[test]
+fn folded_support_contact_owns_atomic_existing_open_span_work() {
     let [first, second] = perpendicular_axis_pair(Frame::world(), 3.0_f64.next_down(), 2.0);
+    let windows = skew_windows();
     let (graph, first_handle, second_handle) = graph_pair(first, second);
-    let rooted = intersect_bounded_graph_surfaces(
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                SKEW_CYLINDER_OPEN_SPAN_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+            )])
+            .unwrap(),
+        );
+    let exact = intersect_bounded_graph_surfaces_with_context(
         &graph,
         first_handle,
         windows[0],
         second_handle,
         windows[1],
-        Tolerances::default(),
-    )
-    .unwrap();
-    assert_single_skew_incomplete(
-        &rooted,
-        [first_handle, second_handle],
-        SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
-        SKEW_CYLINDER_DISCRIMINANT_WORK,
-        SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
-        "one-ulp-rooted-neighbor",
+        &exact_context,
     );
-    assert!(rooted.skew_cylinder_support_contacts().is_empty());
+    assert_folded_support_result(exact.result().unwrap(), [first_handle, second_handle]);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                SKEW_CYLINDER_OPEN_SPAN_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1,
+            )])
+            .unwrap(),
+        );
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+        allowed: SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0
+    );
 }
 
 #[test]

@@ -79,6 +79,26 @@ impl ClosedBranchSource {
         })
     }
 
+    pub(crate) fn from_folded_section_branch(
+        branch_index: usize,
+        branch: &SectionBranch,
+    ) -> Option<Self> {
+        let endpoints = branch.endpoint_sites();
+        if branch.topology() != SectionBranchTopology::Open
+            || endpoints[0] == endpoints[1]
+            || endpoints
+                .into_iter()
+                .any(|endpoint| endpoint >= branch.fragment_sites().len())
+        {
+            return None;
+        }
+        Some(Self {
+            branch: ClosedBranchKey::new(branch_index),
+            faces: [branch.faces()[0].raw(), branch.faces()[1].raw()],
+            period_seam_site: usize::MAX,
+        })
+    }
+
     /// Exact endpoint identity for the graph-owned parameter seam.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn period_seam(self) -> CertifiedClosedEndpoint {
@@ -170,6 +190,14 @@ pub(crate) enum CertifiedClosedEndpointKey {
         branch: ClosedBranchKey,
         site: usize,
     },
+    /// One exact simple discriminant root shared by both guarded members of a
+    /// folded support component.
+    FoldedSupportRoot {
+        faces: [RawFaceId; 2],
+        root_ordinal: usize,
+        chart: u8,
+        projective_bits: [u64; 2],
+    },
 }
 
 /// One directed fragment endpoint and its metric consistency evidence.
@@ -194,6 +222,23 @@ impl CertifiedClosedEndpoint {
                 edge_parameter_keys,
             },
             edge_parameters,
+        }
+    }
+
+    pub(crate) const fn folded_support_root(
+        faces: [RawFaceId; 2],
+        root_ordinal: usize,
+        chart: u8,
+        projective_bits: [u64; 2],
+    ) -> Self {
+        Self {
+            key: CertifiedClosedEndpointKey::FoldedSupportRoot {
+                faces,
+                root_ordinal,
+                chart,
+                projective_bits,
+            },
+            edge_parameters: [None, None],
         }
     }
 }
@@ -560,6 +605,9 @@ fn endpoint_is_valid(endpoint: CertifiedClosedEndpoint, source: ClosedFragmentSo
                         },
                     )
         }
+        CertifiedClosedEndpointKey::FoldedSupportRoot { faces, .. } => {
+            faces == source.faces && endpoint.edge_parameters == [None, None]
+        }
     }
 }
 
@@ -606,7 +654,8 @@ fn intersect_parameter_evidence(
     incoming: [Option<Interval>; 2],
 ) -> Option<[Option<Interval>; 2]> {
     match key {
-        CertifiedClosedEndpointKey::PeriodSeam { .. } => {
+        CertifiedClosedEndpointKey::PeriodSeam { .. }
+        | CertifiedClosedEndpointKey::FoldedSupportRoot { .. } => {
             (current == [None, None] && incoming == [None, None]).then_some([None, None])
         }
         CertifiedClosedEndpointKey::TrimSite { site, .. } => {
@@ -866,6 +915,62 @@ mod tests {
             edge_vertex.edge_parameters[0],
             Some(Interval::new(1.0, 1.25))
         );
+    }
+
+    #[test]
+    fn folded_members_close_only_through_identical_exact_root_keys() {
+        let ids = ids();
+        let lower = branch(&ids, 0, [0, 1]);
+        let upper = branch(&ids, 1, [0, 1]);
+        let root_zero = CertifiedClosedEndpoint::folded_support_root(
+            lower.faces,
+            0,
+            0,
+            [0.25_f64.to_bits(), 0.5_f64.to_bits()],
+        );
+        let root_one = CertifiedClosedEndpoint::folded_support_root(
+            lower.faces,
+            1,
+            1,
+            [2.0_f64.to_bits(), 4.0_f64.to_bits()],
+        );
+        let fragments = [
+            arc(
+                lower.fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_zero,
+                root_one,
+            ),
+            arc(
+                upper.fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_one,
+                root_zero,
+            ),
+        ];
+
+        let result = stitch_closed_fragments(&fragments);
+        assert_eq!(result.completion, ClosedStitchCompletion::Complete);
+        assert!(result.defects.is_empty());
+        assert_eq!(result.vertices.len(), 2);
+        assert_eq!(result.chains.len(), 1);
+        assert!(result.chains[0].closed);
+        assert_eq!(
+            result.chains[0]
+                .fragments
+                .iter()
+                .map(|fragment| fragment.input_fragment)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(result.vertices.iter().all(|vertex| {
+            matches!(
+                vertex.key,
+                CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
+            ) && vertex.edge_parameters == [None, None]
+                && vertex.incoming == 1
+                && vertex.outgoing == 1
+        }));
     }
 
     #[test]

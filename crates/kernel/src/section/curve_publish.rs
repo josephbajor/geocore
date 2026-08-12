@@ -12,9 +12,9 @@ use super::{
     ClosedFragmentEndEvidence, ClosedFragmentEvidence, ClosedFragmentEvidenceSpan, SectionBranch,
     SectionCarrier, SectionCurveComponent, SectionCurveEndpoint, SectionCurveEndpointTopology,
     SectionCurveFragment, SectionCurveFragmentEnd, SectionCurveFragmentSpan,
-    SectionCurveTrimProvenance, SectionEdgeParameterInterval, SectionIsolatedContact,
-    SectionProjectiveParameterInterval, SectionRing, SectionSourceParameterKey, adapt_site,
-    closed_stitch, mixed_stitch, ruling_publish,
+    SectionCurveTrimProvenance, SectionEdgeParameterInterval, SectionFoldedSupportFragmentEnd,
+    SectionIsolatedContact, SectionProjectiveParameterInterval, SectionRing,
+    SectionSourceParameterKey, adapt_site, closed_stitch, mixed_stitch, ruling_publish,
 };
 use crate::error::{Error, Result};
 use crate::{FaceId, FinId, LoopId, PartId};
@@ -245,6 +245,28 @@ fn publish_closed_fragments(
                     wraps_pcurve_seam,
                 }
             }
+            ClosedFragmentEvidenceSpan::FoldedSupport { ends } => {
+                let Some(endpoint_indices) = fragment_endpoints
+                    .get(input_index)
+                    .copied()
+                    .flatten()
+                    .flatten()
+                else {
+                    return Err(inconsistent_topology(
+                        "certified folded support member lacks stitched endpoint indices",
+                    ));
+                };
+                SectionCurveFragmentSpan::FoldedSupport {
+                    endpoints: Box::new(core::array::from_fn(|end| {
+                        SectionFoldedSupportFragmentEnd {
+                            endpoint: endpoint_indices[end],
+                            point: ends[end].point,
+                            carrier_parameter: ends[end].carrier_parameter,
+                            surface_parameters: ends[end].surface_parameters,
+                        }
+                    })),
+                }
+            }
         };
         fragments.push(SectionCurveFragment {
             branch: evidence.branch,
@@ -325,6 +347,35 @@ fn adapt_closed_endpoint(
             SectionCurveEndpointTopology::ParameterSeam {
                 branch: branch.index(),
                 site,
+            }
+        }
+        closed_stitch::CertifiedClosedEndpointKey::FoldedSupportRoot {
+            faces,
+            root_ordinal,
+            chart,
+            projective_bits,
+        } => {
+            if root_scalars != [None, None] || vertex.edge_parameters != [None, None] {
+                return Err(inconsistent_topology(
+                    "folded support root retained source-edge scalar evidence",
+                ));
+            }
+            SectionCurveEndpointTopology::FoldedSupportJoin {
+                faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                root_ordinal,
+                root_chart: if chart == 0 {
+                    super::SectionSkewCylinderRootChart::TangentHalfAngle
+                } else if chart == 1 {
+                    super::SectionSkewCylinderRootChart::CotangentHalfAngle
+                } else {
+                    return Err(inconsistent_topology(
+                        "folded support root retained an invalid projective chart",
+                    ));
+                },
+                root_interval: super::SectionSkewCylinderInterval::from_bounds(
+                    f64::from_bits(projective_bits[0]),
+                    f64::from_bits(projective_bits[1]),
+                ),
             }
         }
     };

@@ -22,6 +22,7 @@ use kgeom::param::{ParamRange, wrap_periodic};
 use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Vec2, Vec3};
 
+use crate::exact::bounded_polynomial::{ExactPolynomial, ExactScalar, RootBracket};
 use crate::{AffineParamMap1d, IntersectionCertificateError, PairedTrace};
 
 #[path = "skew_cylinder_jet.rs"]
@@ -84,24 +85,28 @@ pub use persistent_family::{
 
 #[path = "skew_cylinder_axial_bound.rs"]
 mod axial_bound;
+use axial_bound::tangent_projective_interval;
 pub use axial_bound::{
     ExactSkewCylinderDiscriminant, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SkewCylinderAngularRootBracket, SkewCylinderAxialBoundProvenance,
     SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
     SkewCylinderAxialRoot, SkewCylinderAxialRootFailure,
     SkewCylinderDiscriminantContactTopologyCertificate, SkewCylinderDiscriminantRoot,
-    SkewCylinderExactDiscriminantTopology, SkewCylinderHalfAngleChart,
+    SkewCylinderExactDiscriminantTopology, SkewCylinderFoldedSupportCellLocation,
+    SkewCylinderFoldedSupportTopologyCertificate, SkewCylinderHalfAngleChart,
     SkewCylinderHalfAngleRootBracket, SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
-    classify_skew_cylinder_axial_bound, classify_skew_cylinder_exact_discriminant,
-    exact_skew_cylinder_discriminant,
+    certify_skew_cylinder_folded_support_topology, classify_skew_cylinder_axial_bound,
+    classify_skew_cylinder_exact_discriminant, exact_skew_cylinder_discriminant,
 };
 
 #[path = "skew_cylinder_support_contact.rs"]
 mod support_contact;
 pub use support_contact::{
+    PersistentSkewCylinderFoldedSupportCertificate,
     PersistentSkewCylinderSupportContactAxialLocation,
     PersistentSkewCylinderSupportContactBoundaryPlan,
-    PersistentSkewCylinderSupportContactCertificate,
+    PersistentSkewCylinderSupportContactCertificate, SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+    certify_persistent_skew_cylinder_folded_support,
     certify_persistent_skew_cylinder_support_contact,
     plan_persistent_skew_cylinder_support_contact_boundaries,
 };
@@ -585,14 +590,39 @@ pub fn certify_paired_skew_cylinder_branch_residuals(
 }
 
 fn certify_validated_branch(
-    mut algebra: BranchAlgebra,
+    algebra: BranchAlgebra,
     ranges: [[ParamRange; 2]; 2],
     tolerance: f64,
 ) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
-    let proof = prove_branch_range(algebra, ranges)?;
+    certify_validated_branch_impl(algebra, ranges, tolerance, None, false)
+}
+
+fn certify_validated_branch_with_exact_radicand_lower(
+    algebra: BranchAlgebra,
+    ranges: [[ParamRange; 2]; 2],
+    tolerance: f64,
+    radicand_lower_bounds: RadicandLowerBounds,
+) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
+    certify_validated_branch_impl(
+        algebra,
+        ranges,
+        tolerance,
+        Some(radicand_lower_bounds),
+        true,
+    )
+}
+
+fn certify_validated_branch_impl(
+    mut algebra: BranchAlgebra,
+    ranges: [[ParamRange; 2]; 2],
+    tolerance: f64,
+    radicand_lower_bounds: Option<RadicandLowerBounds>,
+    folded_position_identity: bool,
+) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
+    let proof = prove_branch_range(algebra, ranges, radicand_lower_bounds)?;
     algebra.longitude_offset = proof.longitude_offset;
 
-    let second_residual = paired_residual_bound(algebra, proof).ok_or(
+    let second_residual = paired_residual_bound(algebra, proof, folded_position_identity).ok_or(
         IntersectionCertificateError::NonFiniteResidualBound {
             trace: PairedTrace::Second,
         },
@@ -841,15 +871,81 @@ struct CellRootEnclosures {
     exact_v: Interval,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RadicandLowerBounds {
+    stored: f64,
+    source: f64,
+}
+
+fn stored_radicand_lower_bound(algebra: BranchAlgebra, projective: RootBracket) -> Option<f64> {
+    if !projective.lo.is_finite() || !projective.hi.is_finite() || projective.lo >= projective.hi {
+        return None;
+    }
+
+    let k = ExactScalar::from_f64(algebra.k).ok()?;
+    let constant = ExactScalar::from_f64(algebra.l.constant).ok()?;
+    let cosine = ExactScalar::from_f64(algebra.l.cosine).ok()?;
+    let sine = ExactScalar::from_f64(algebra.l.sine).ok()?;
+    let numerator = [
+        constant.add(&cosine).ok()?,
+        sine.scale(2.0).ok()?,
+        constant.sub(&cosine).ok()?,
+    ];
+    let numerator_square = [
+        numerator[0].mul(&numerator[0]).ok()?,
+        numerator[0].mul(&numerator[1]).ok()?.scale(2.0).ok()?,
+        numerator[1]
+            .mul(&numerator[1])
+            .ok()?
+            .add(&numerator[0].mul(&numerator[2]).ok()?.scale(2.0).ok()?)
+            .ok()?,
+        numerator[1].mul(&numerator[2]).ok()?.scale(2.0).ok()?,
+        numerator[2].mul(&numerator[2]).ok()?,
+    ];
+    let polynomial = ExactPolynomial::new(vec![
+        k.sub(&numerator_square[0]).ok()?,
+        ExactScalar::zero().sub(&numerator_square[1]).ok()?,
+        k.scale(2.0).ok()?.sub(&numerator_square[2]).ok()?,
+        ExactScalar::zero().sub(&numerator_square[3]).ok()?,
+        k.sub(&numerator_square[4]).ok()?,
+    ])
+    .ok()?;
+    let numerator_lower = polynomial
+        .positive_lower_bound_on_interval(projective.lo, projective.hi)
+        .ok()??;
+    let projective_interval = Interval::new(projective.lo, projective.hi);
+    let denominator = (Interval::point(1.0) + projective_interval.square()).square();
+    let lower = Interval::point(numerator_lower)
+        .checked_div(denominator)?
+        .lo();
+    (lower.is_finite() && lower > 0.0).then_some(lower)
+}
+
 fn cell_root_enclosures(
     algebra: BranchAlgebra,
     coefficients: CoefficientProof,
     cosine: Interval,
     sine: Interval,
+    radicand_lower_bounds: Option<RadicandLowerBounds>,
 ) -> Option<CellRootEnclosures> {
     let stored_m = algebra.m.interval(cosine, sine)?;
     let stored_l = algebra.l.interval(cosine, sine)?;
-    let stored_radicand = finite_interval(Interval::point(algebra.k) - stored_l.square())?;
+    let exact_m = coefficients.m_true.interval(cosine, sine)?;
+    let exact_l = coefficients.l_true.interval(cosine, sine)?;
+    let mut stored_radicand = finite_interval(Interval::point(algebra.k) - stored_l.square())?;
+    let mut exact_radicand = finite_interval(coefficients.k_true - exact_l.square())?;
+    if let Some(lower) = radicand_lower_bounds {
+        if lower.stored <= 0.0
+            || lower.source <= 0.0
+            || lower.stored > stored_radicand.hi()
+            || lower.source > exact_radicand.hi()
+        {
+            return None;
+        }
+        stored_radicand =
+            Interval::new(stored_radicand.lo().max(lower.stored), stored_radicand.hi());
+        exact_radicand = Interval::new(exact_radicand.lo().max(lower.source), exact_radicand.hi());
+    }
     if stored_radicand.lo() <= 0.0 {
         return None;
     }
@@ -859,9 +955,6 @@ fn cell_root_enclosures(
             .checked_div(Interval::point(algebra.a))?,
     )?;
 
-    let exact_m = coefficients.m_true.interval(cosine, sine)?;
-    let exact_l = coefficients.l_true.interval(cosine, sine)?;
-    let exact_radicand = finite_interval(coefficients.k_true - exact_l.square())?;
     if coefficients.a_true.lo() <= 0.0 || exact_radicand.lo() <= 0.0 {
         return None;
     }
@@ -885,6 +978,7 @@ fn cell_root_enclosures(
 fn prove_branch_range(
     algebra: BranchAlgebra,
     ranges: [[ParamRange; 2]; 2],
+    radicand_lower_bounds: Option<RadicandLowerBounds>,
 ) -> Result<SheetProof, IntersectionCertificateError> {
     // This proof pass intentionally remains cohesive: the same outward cell
     // enclosure must feed radicand, both windows, seam sign, boxes, and the
@@ -943,13 +1037,18 @@ fn prove_branch_range(
         let parameter = Interval::new(lo, hi);
         let cosine = trig_interval(lo, hi, false);
         let sine = trig_interval(lo, hi, true);
-        let roots = cell_root_enclosures(algebra, coefficient_proof, cosine, sine).ok_or_else(
-            || {
+        let roots = cell_root_enclosures(
+            algebra,
+            coefficient_proof,
+            cosine,
+            sine,
+            radicand_lower_bounds,
+        )
+        .ok_or_else(|| {
                 unsupported(
                     "skew Cylinder/Cylinder source/evaluator radicand lacks a strict whole-range numeric margin",
                 )
-            },
-        )?;
+            })?;
         let cell_integrals = cells::certify_directed_chart_integral_cell(
             algebra,
             coefficient_proof,
@@ -1345,7 +1444,11 @@ fn coefficient_proof(algebra: BranchAlgebra) -> Option<CoefficientProof> {
     })
 }
 
-fn paired_residual_bound(algebra: BranchAlgebra, proof: SheetProof) -> Option<f64> {
+fn paired_residual_bound(
+    algebra: BranchAlgebra,
+    proof: SheetProof,
+    folded_position_identity: bool,
+) -> Option<f64> {
     let coefficients = coefficient_proof(algebra)?;
     let a_exact_lower = coefficients.a_stored_exact.lo();
     let conditioning_a_lower = a_exact_lower.min(coefficients.a_true.lo());
@@ -1426,17 +1529,26 @@ fn paired_residual_bound(algebra: BranchAlgebra, proof: SheetProof) -> Option<f6
     // elementary operations.  `kcore::math` trigonometric functions are
     // below one ulp; charging each as one scale unit keeps this standard
     // gamma-N forward bound conservative. Conditioning by A, E, and the
-    // square-root margin makes near-degenerate cases fail closed.
+    // square-root margin makes ordinary near-degenerate sheets fail closed.
+    // A folded guard has an additional exact positive Bernstein certificate.
+    // Its positional reconciliation uses the radial identity
+    // `(a v + M)^2 + L^2 = k`: the computed square root is squared back, so
+    // its absolute position error is bounded by the fixed expression's
+    // roundoff and does not acquire derivative-only `1 / sqrt(D)`
+    // conditioning. The guarded derivative carrier remains covered by its
+    // independently certified cell integrals and positive radicand floors.
     let epsilon_work = EVALUATOR_ROUNDING_OPS * f64::EPSILON;
     if epsilon_work >= 1.0 {
         return None;
     }
     let gamma = outward_quotient(epsilon_work, (1.0 - epsilon_work).next_down())?;
     let radicand_root_lower = proof.radicand_lower.sqrt().next_down();
-    let conditioning = 1.0_f64
+    let mut conditioning = 1.0_f64
         .max(outward_quotient(1.0, conditioning_a_lower)?)
-        .max(outward_quotient(1.0, e_true_lower)?)
-        .max(outward_quotient(1.0, radicand_root_lower)?);
+        .max(outward_quotient(1.0, e_true_lower)?);
+    if !folded_position_identity {
+        conditioning = conditioning.max(outward_quotient(1.0, radicand_root_lower)?);
+    }
     let model_scale = proof
         .max_intermediate
         .max(max_cylinder_scale(algebra.cylinders[0]))

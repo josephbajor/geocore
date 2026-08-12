@@ -1,6 +1,7 @@
 //! Exact endpoint evidence for bounded procedural skew-cylinder branches.
 
 use kgeom::param::ParamRange;
+use kgeom::vec::Point3;
 use kgraph::SkewCylinderSheet;
 
 /// Caller-authored axial side that clips a skew-cylinder branch endpoint.
@@ -67,12 +68,32 @@ pub struct SkewCylinderAxialRootEndpointProof {
     pub inside_parameter: f64,
 }
 
+/// Exact discriminant-root identity and metric representative for one shared
+/// join of a two-sheet folded support component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderFoldedSupportRootEndpointProof {
+    /// Ordinal in the exact canonical two-root cycle.
+    pub root_ordinal: usize,
+    /// Projective chart retaining the exact source-root identity.
+    pub half_angle_chart: SkewCylinderHalfAngleChartProof,
+    /// Isolating interval in the owning half-angle chart.
+    pub half_angle_bracket: [f64; 2],
+    /// Hidden inside-cell carrier coordinate used by the guarded evaluator.
+    pub inside_parameter: f64,
+    /// Exact-root-owned deterministic model-space representative.
+    pub point: Point3,
+    /// Caller-order source parameters at the exact support join.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
 /// Exact topological evidence attached to one branch endpoint slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum IntersectionBranchEndpointProof {
     /// Simple transverse root of one caller-authored cylinder axial bound.
     SkewCylinderAxialRoot(SkewCylinderAxialRootEndpointProof),
+    /// Simple discriminant root shared by both members of a folded component.
+    SkewCylinderFoldedSupportRoot(SkewCylinderFoldedSupportRootEndpointProof),
 }
 
 impl IntersectionBranchEndpointProof {
@@ -82,7 +103,9 @@ impl IntersectionBranchEndpointProof {
         sheet: SkewCylinderSheet,
         surface_ranges: [[ParamRange; 2]; 2],
     ) -> Option<[bool; 2]> {
-        let Self::SkewCylinderAxialRoot(proof) = self;
+        let Self::SkewCylinderAxialRoot(proof) = self else {
+            return None;
+        };
         if proof.source_operand > 1 {
             return None;
         }
@@ -109,5 +132,38 @@ impl IntersectionBranchEndpointProof {
         Some(core::array::from_fn(|operand| {
             operand == proof.source_operand
         }))
+    }
+
+    pub(super) fn validated_folded_support_root(
+        self,
+        parameter: f64,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderFoldedSupportRootEndpointProof> {
+        let Self::SkewCylinderFoldedSupportRoot(proof) = self else {
+            return None;
+        };
+        if proof.root_ordinal > 1
+            || proof.inside_parameter != parameter
+            || !proof.half_angle_bracket[0].is_finite()
+            || !proof.half_angle_bracket[1].is_finite()
+            || proof.half_angle_bracket[0] > proof.half_angle_bracket[1]
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || proof
+                .surface_parameters
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            || proof
+                .surface_parameters
+                .into_iter()
+                .zip(surface_ranges)
+                .any(|(parameters, ranges)| {
+                    !ranges[0].contains(parameters[0]) || !ranges[1].contains(parameters[1])
+                })
+        {
+            None
+        } else {
+            Some(proof)
+        }
     }
 }

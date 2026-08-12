@@ -96,6 +96,18 @@ pub struct SkewCylinderHalfAngleRootBracket {
     pub hi: f64,
 }
 
+pub(crate) fn tangent_projective_interval(
+    bracket: SkewCylinderHalfAngleRootBracket,
+) -> Option<kcore::interval::Interval> {
+    let interval = kcore::interval::Interval::new(bracket.lo, bracket.hi);
+    match bracket.chart {
+        SkewCylinderHalfAngleChart::Tangent => Some(interval),
+        SkewCylinderHalfAngleChart::Cotangent => {
+            kcore::interval::Interval::point(1.0).checked_div(interval)
+        }
+    }
+}
+
 /// Numeric enclosure of one source root, ordered by increasing canonical
 /// longitude in `[0, 2π)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -368,6 +380,122 @@ pub struct SkewCylinderDiscriminantContactTopologyCertificate {
     open_cell_signs: Vec<StrictSign>,
 }
 
+/// Position of the sole strict-positive cell in a two-simple-root
+/// skew-cylinder discriminant cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkewCylinderFoldedSupportCellLocation {
+    /// The positive cell runs from the first canonical root to the second.
+    BetweenCanonicalRoots,
+    /// The positive cell runs from the second canonical root across the
+    /// projective seam to the first.
+    AcrossCanonicalSeam,
+}
+
+/// Sealed exact topology of one positive-length folded support curve.
+///
+/// The two simple roots are the only support joins. One complementary cyclic
+/// cell is strictly positive and carries two regular sheets; the other is a
+/// strict miss. Rounded angular brackets are retained only to construct
+/// guarded evaluators after this exact sign topology has been sealed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderFoldedSupportTopologyCertificate {
+    topology: SkewCylinderDiscriminantContactTopologyCertificate,
+    positive_cell: SkewCylinderFoldedSupportCellLocation,
+}
+
+impl SkewCylinderFoldedSupportTopologyCertificate {
+    /// Exact cylinders in ruling-formula order.
+    pub const fn formula_cylinders(&self) -> [Cylinder; 2] {
+        self.topology.formula_cylinders
+    }
+
+    /// The two exact simple roots in canonical cyclic order.
+    pub fn roots(&self) -> [SkewCylinderDiscriminantRoot; 2] {
+        self.topology
+            .roots
+            .as_slice()
+            .try_into()
+            .expect("sealed folded support topology retains two roots")
+    }
+
+    /// Location of the sole strict-positive cell.
+    pub const fn positive_cell(&self) -> SkewCylinderFoldedSupportCellLocation {
+        self.positive_cell
+    }
+
+    /// Original complete exact discriminant topology.
+    pub const fn topology(&self) -> &SkewCylinderDiscriminantContactTopologyCertificate {
+        &self.topology
+    }
+
+    pub(crate) fn positive_radicand_lower_bound(
+        &self,
+        projective: RootBracket,
+    ) -> Result<f64, SkewCylinderAxialRootFailure> {
+        let roots = self.roots();
+        let projective_roots = roots.map(|root| tangent_projective_interval(root.bracket));
+        let [Some(first), Some(second)] = projective_roots else {
+            return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+        };
+        if self.positive_cell != SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+            || projective.lo <= first.hi()
+            || projective.hi >= second.lo()
+            || projective.lo >= projective.hi
+        {
+            return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+        }
+        let polynomial = self
+            .topology
+            .exact_discriminant_root_polynomial(SkewCylinderHalfAngleChart::Tangent)?;
+        let numerator = polynomial
+            .positive_lower_bound_on_interval(projective.lo, projective.hi)?
+            .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?;
+        let projective_interval = kcore::interval::Interval::new(projective.lo, projective.hi);
+        // The exact topology polynomial is `4 * (K - L²)` after the
+        // half-angle denominator is cleared. Recover a lower bound for the
+        // unscaled radicand consumed by the branch evaluator.
+        let denominator = kcore::interval::Interval::point(4.0)
+            * (kcore::interval::Interval::point(1.0) + projective_interval.square()).square();
+        let lower = kcore::interval::Interval::point(numerator)
+            .checked_div(denominator)
+            .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?
+            .lo();
+        if lower.is_finite() && lower > 0.0 {
+            Ok(lower)
+        } else {
+            Err(SkewCylinderAxialRootFailure::InconsistentTopology)
+        }
+    }
+}
+
+/// Seal exactly two simple discriminant roots with one strict-positive and
+/// one strict-negative complementary cell as a folded support topology.
+pub fn certify_skew_cylinder_folded_support_topology(
+    topology: SkewCylinderDiscriminantContactTopologyCertificate,
+) -> Result<SkewCylinderFoldedSupportTopologyCertificate, SkewCylinderAxialRootFailure> {
+    let positive_cell = match (
+        topology.identically_zero,
+        topology.roots.as_slice(),
+        topology.open_cell_signs.as_slice(),
+    ) {
+        (false, [first, second], [StrictSign::Positive, StrictSign::Negative])
+            if !first.repeated() && !second.repeated() =>
+        {
+            SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+        }
+        (false, [first, second], [StrictSign::Negative, StrictSign::Positive])
+            if !first.repeated() && !second.repeated() =>
+        {
+            SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+        }
+        _ => return Err(SkewCylinderAxialRootFailure::InconsistentTopology),
+    };
+    Ok(SkewCylinderFoldedSupportTopologyCertificate {
+        topology,
+        positive_cell,
+    })
+}
+
 impl SkewCylinderDiscriminantContactTopologyCertificate {
     /// Exact cylinders in the ruling formula order used by the classifier.
     pub const fn formula_cylinders(&self) -> [Cylinder; 2] {
@@ -425,7 +553,7 @@ impl SkewCylinderDiscriminantContactTopologyCertificate {
             .map_err(|_| SkewCylinderAxialRootFailure::InconsistentTopology)
     }
 
-    fn exact_discriminant_root_polynomial(
+    pub(crate) fn exact_discriminant_root_polynomial(
         &self,
         chart: SkewCylinderHalfAngleChart,
     ) -> Result<ExactPolynomial, SkewCylinderAxialRootFailure> {

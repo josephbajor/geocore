@@ -34,6 +34,12 @@ pub(super) fn execute_transverse_cylinder_boolean(
         || graph.isolated_contacts().iter().any(|contact| {
             contact.kind() == crate::section::SectionIsolatedContactKind::SupportTangency
         })
+        || graph.curve_fragments().iter().any(|fragment| {
+            matches!(
+                fragment.span(),
+                crate::section::SectionCurveFragmentSpan::FoldedSupport { .. }
+            )
+        })
     {
         return Ok(CurvedBooleanPipelineOutcome::Refused(
             CurvedBooleanPipelineRefusal::ResultTopologyUnsupported,

@@ -356,7 +356,7 @@ fn enclose_pair(
     }
     let cosine = trig_interval(parameter.lo(), parameter.hi(), false);
     let sine = trig_interval(parameter.lo(), parameter.hi(), true);
-    let roots = cell_root_enclosures(algebra, coefficients, cosine, sine).ok_or_else(|| {
+    let roots = cell_root_enclosures(algebra, coefficients, cosine, sine, None).ok_or_else(|| {
         unsupported(
             "skew Cylinder/Cylinder pcurve cell has no positive source/evaluator radicand margin",
         )
@@ -570,7 +570,7 @@ fn certify_pair_metric_proof(
             source_longitude_decreasing: false,
         }; 2],
     };
-    let second_residual = paired_residual_bound(algebra, proof).ok_or(
+    let second_residual = paired_residual_bound(algebra, proof, false).ok_or(
         IntersectionCertificateError::NonFiniteResidualBound {
             trace: PairedTrace::Second,
         },

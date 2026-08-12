@@ -2940,6 +2940,9 @@ fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize; 2]> {
                 .each_ref()
                 .map(|end| end.physical_root().endpoint()),
         ),
+        SectionCurveFragmentSpan::FoldedSupport { endpoints } => {
+            Some(endpoints.each_ref().map(|end| end.endpoint()))
+        }
     }
 }
 

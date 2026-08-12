@@ -529,6 +529,10 @@ impl SectionSkewCylinderInterval {
         }
     }
 
+    pub(super) const fn from_bounds(lo: f64, hi: f64) -> Self {
+        Self { lo, hi }
+    }
+
     /// Lower outward endpoint.
     pub const fn lo(self) -> f64 {
         self.lo

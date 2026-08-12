@@ -11,10 +11,50 @@ use kgraph::{
     PersistentSkewCylinderFiniteWindowFamilyCertificate,
     PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
     PersistentSkewCylinderFiniteWindowRootEventKind,
-    PersistentSkewCylinderFiniteWindowSheetOccupancy, SkewCylinderBranchGuardedEnd,
+    PersistentSkewCylinderFiniteWindowSheetOccupancy,
+    PersistentSkewCylinderFoldedSupportCertificate, SkewCylinderBranchGuardedEnd,
     SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveRootCorridorCertificate,
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
 };
+
+/// One lower/upper member of an exact two-root folded support component.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderFoldedSupportBranchCertificate {
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    folded: PersistentSkewCylinderFoldedSupportCertificate,
+}
+
+impl SkewCylinderFoldedSupportBranchCertificate {
+    pub(super) fn mint(
+        residual: PairedSkewCylinderBranchResidualCertificate,
+        folded: PersistentSkewCylinderFoldedSupportCertificate,
+    ) -> Result<Self, IntersectionCertificateError> {
+        let ordinal = match residual.sheet() {
+            kgraph::SkewCylinderSheet::Lower => 0,
+            kgraph::SkewCylinderSheet::Upper => 1,
+        };
+        let formula = folded.formula_residuals()[ordinal];
+        let same_order = residual == formula;
+        let swapped_order = residual == formula.swapped();
+        if (!same_order && !swapped_order)
+            || residual.carrier_range() != folded.guarded_range()
+            || folded.required_edge_tolerance() > folded.tolerance()
+        {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        Ok(Self { residual, folded })
+    }
+
+    /// Guarded paired residual member in caller source order.
+    pub const fn residual_certificate(&self) -> PairedSkewCylinderBranchResidualCertificate {
+        self.residual
+    }
+
+    /// Shared exact two-root support topology.
+    pub const fn folded_certificate(&self) -> &PersistentSkewCylinderFoldedSupportCertificate {
+        &self.folded
+    }
+}
 
 /// Full-cycle residual proof composed with exact closed finite-window contact
 /// topology for the same immutable sheet.
@@ -186,6 +226,8 @@ pub enum IntersectionBranchCertificate {
     SkewCylinderWholeContact(Box<SkewCylinderWholeContactBranchCertificate>),
     /// Non-wrapping skew span with guarded and physical-root pcurve evidence.
     SkewCylinderOpenSpan(Box<SkewCylinderOpenSpanBranchCertificate>),
+    /// One guarded member of a two-root folded support component.
+    SkewCylinderFoldedSupport(Box<SkewCylinderFoldedSupportBranchCertificate>),
     /// Operation-generated degree-1 analytic/NURBS trace proof.
     Nurbs(Box<VerifiedNurbsIntersectionCertificate>),
 }
@@ -200,6 +242,7 @@ impl IntersectionBranchCertificate {
                 | Self::SkewCylinderTwoSheet(_)
                 | Self::SkewCylinderWholeContact(_)
                 | Self::SkewCylinderOpenSpan(_)
+                | Self::SkewCylinderFoldedSupport(_)
         )
     }
 
@@ -215,6 +258,9 @@ impl IntersectionBranchCertificate {
                 certificate.residual_certificate().residual_bounds()
             }
             Self::SkewCylinderOpenSpan(certificate) => {
+                certificate.residual_certificate().residual_bounds()
+            }
+            Self::SkewCylinderFoldedSupport(certificate) => {
                 certificate.residual_certificate().residual_bounds()
             }
             Self::Nurbs(certificate) => certificate.residual_bounds(),
@@ -235,6 +281,9 @@ impl IntersectionBranchCertificate {
             Self::SkewCylinderOpenSpan(certificate) => {
                 certificate.residual_certificate().tolerance()
             }
+            Self::SkewCylinderFoldedSupport(certificate) => {
+                certificate.residual_certificate().tolerance()
+            }
             Self::Nurbs(certificate) => certificate.tolerance(),
         }
     }
@@ -249,6 +298,7 @@ impl IntersectionBranchCertificate {
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -265,6 +315,7 @@ impl IntersectionBranchCertificate {
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -279,6 +330,7 @@ impl IntersectionBranchCertificate {
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -293,6 +345,7 @@ impl IntersectionBranchCertificate {
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -309,6 +362,7 @@ impl IntersectionBranchCertificate {
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -325,6 +379,7 @@ impl IntersectionBranchCertificate {
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -341,6 +396,7 @@ impl IntersectionBranchCertificate {
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -357,6 +413,7 @@ impl IntersectionBranchCertificate {
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -373,7 +430,18 @@ impl IntersectionBranchCertificate {
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
+            | Self::SkewCylinderFoldedSupport(_)
             | Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow one member's folded support proof and its shared root topology.
+    pub fn as_skew_cylinder_folded_support(
+        &self,
+    ) -> Option<&SkewCylinderFoldedSupportBranchCertificate> {
+        match self {
+            Self::SkewCylinderFoldedSupport(certificate) => Some(certificate),
+            _ => None,
         }
     }
 
@@ -386,7 +454,8 @@ impl IntersectionBranchCertificate {
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderWholeContact(_)
-            | Self::SkewCylinderOpenSpan(_) => None,
+            | Self::SkewCylinderOpenSpan(_)
+            | Self::SkewCylinderFoldedSupport(_) => None,
             Self::Nurbs(certificate) => Some(certificate.as_ref()),
         }
     }

@@ -803,7 +803,8 @@ mod tests {
                     span_counts[2] += 1;
                     endpoints
                 }
-                SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+                SectionCurveFragmentSpan::BoundedProcedural { .. }
+                | SectionCurveFragmentSpan::FoldedSupport { .. } => {
                     panic!(
                         "parallel-cylinder fixture unexpectedly published a bounded procedural fragment"
                     )

@@ -10,6 +10,8 @@
 //! deterministic representative.
 
 use kcore::interval::Interval;
+use kgeom::curve::Curve;
+use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::Vec3;
@@ -17,16 +19,94 @@ use kgeom::vec::Vec3;
 use super::{
     BranchAlgebra, SkewCylinderDiscriminantContactTopologyCertificate,
     SkewCylinderDiscriminantRoot, SkewCylinderHalfAngleChart, SkewCylinderSheet, build_algebra,
-    coefficient_proof, finite_interval, longitude_interval,
+    coefficient_proof, finite_interval, longitude_interval, tangent_projective_interval,
 };
 use super::{
+    PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PairedSkewCylinderBranchResidualCertificate,
     SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK, SkewCylinderAxialBoundProvenance,
-    SkewCylinderAxialBoundary,
+    SkewCylinderAxialBoundary, SkewCylinderFoldedSupportCellLocation,
+    SkewCylinderFoldedSupportTopologyCertificate,
 };
 use crate::IntersectionCertificateError;
 
 const TAU: f64 = core::f64::consts::TAU;
 const UNSUPPORTED_REASON: &str = "skew Cylinder/Cylinder support contact is not one isolated repeated root inside or exactly on the boundary of two full-period finite windows";
+
+/// Exact logical work for both guarded sheet members of one folded support
+/// curve. The endpoint topology was already paid by the discriminant query;
+/// each sheet reuses the established open-span allowance.
+pub const SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK: u64 =
+    2 * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK;
+
+/// Persistent exact-root-owned carrier proof for one non-seam folded support
+/// curve wholly inside two finite cylinder windows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersistentSkewCylinderFoldedSupportCertificate {
+    topology: SkewCylinderFoldedSupportTopologyCertificate,
+    formula_windows: [[ParamRange; 2]; 2],
+    formula_to_source: [usize; 2],
+    formula_root_longitudes: [Interval; 2],
+    guarded_range: ParamRange,
+    formula_residuals: [PairedSkewCylinderBranchResidualCertificate; 2],
+    formula_endpoint_parameters: [[[f64; 2]; 2]; 2],
+    formula_endpoint_points: [Vec3; 2],
+    required_edge_tolerance: f64,
+    tolerance: f64,
+}
+
+impl PersistentSkewCylinderFoldedSupportCertificate {
+    /// Complete exact two-root/one-positive-cell source topology.
+    pub const fn topology(&self) -> &SkewCylinderFoldedSupportTopologyCertificate {
+        &self.topology
+    }
+
+    /// Exact-source root longitude enclosures in increasing formula order.
+    pub const fn formula_root_longitudes(&self) -> [Interval; 2] {
+        self.formula_root_longitudes
+    }
+
+    /// Strict-positive guarded carrier range shared by both sheets.
+    pub const fn guarded_range(&self) -> ParamRange {
+        self.guarded_range
+    }
+
+    /// Guarded paired residual certificates in lower/upper sheet order.
+    pub const fn formula_residuals(&self) -> [PairedSkewCylinderBranchResidualCertificate; 2] {
+        self.formula_residuals
+    }
+
+    /// Caller/source-order finite windows.
+    pub fn source_windows(&self) -> [[ParamRange; 2]; 2] {
+        permute_formula_to_source(self.formula_windows, self.formula_to_source)
+    }
+
+    /// Caller/source-order parameters at the two exact support joins.
+    pub fn source_endpoint_parameters(&self) -> [[[f64; 2]; 2]; 2] {
+        self.formula_endpoint_parameters
+            .map(|parameters| permute_formula_to_source(parameters, self.formula_to_source))
+    }
+
+    /// Deterministic model-space representatives of the two exact joins.
+    pub const fn endpoint_points(&self) -> [Vec3; 2] {
+        self.formula_endpoint_points
+    }
+
+    /// Complete metric envelope joining the two guarded sheet evaluators to
+    /// the exact-root-owned support points.
+    pub const fn required_edge_tolerance(&self) -> f64 {
+        self.required_edge_tolerance
+    }
+
+    /// Requested residual tolerance.
+    pub const fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// Fixed logical work represented by the two guarded branches.
+    pub const fn work(&self) -> u64 {
+        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
+    }
+}
 
 /// Exact axial location of one source coordinate at an isolated support
 /// contact.
@@ -194,6 +274,160 @@ impl PersistentSkewCylinderSupportContactCertificate {
     }
 }
 
+/// Certify one non-seam folded support curve whose two simple roots bound a
+/// strict-positive cell wholly inside both finite source windows.
+pub fn certify_persistent_skew_cylinder_folded_support(
+    topology: SkewCylinderFoldedSupportTopologyCertificate,
+    formula_windows: [[ParamRange; 2]; 2],
+    formula_to_source: [usize; 2],
+    tolerance: f64,
+    work_limit: u64,
+) -> Result<PersistentSkewCylinderFoldedSupportCertificate, IntersectionCertificateError> {
+    validate_inputs(formula_windows, formula_to_source, tolerance)?;
+    if topology.positive_cell() != SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+        || work_limit < SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
+    {
+        return Err(unsupported());
+    }
+    let roots = topology.roots();
+    let projective_roots = roots.map(|root| tangent_projective_interval(root.bracket()));
+    let [Some(first_projective), Some(second_projective)] = projective_roots else {
+        return Err(unsupported());
+    };
+    if first_projective.hi() >= second_projective.lo() {
+        return Err(unsupported());
+    }
+    let evidence = roots.map(|root| root_evidence(topology.topology(), root, formula_windows));
+    let [first, second] = evidence;
+    let [first, second] = [first?, second?];
+    let formula_root_longitudes = [
+        first.formula_longitude_enclosures[0],
+        second.formula_longitude_enclosures[0],
+    ];
+    if formula_root_longitudes[0].hi() >= formula_root_longitudes[1].lo() {
+        return Err(unsupported());
+    }
+    let projective_guard = crate::exact::bounded_polynomial::RootBracket {
+        lo: first_projective.hi().next_up(),
+        hi: second_projective.lo().next_down(),
+    };
+    let guarded_angles = [projective_guard.lo, projective_guard.hi]
+        .map(|parameter| 2.0 * kcore::math::atan2(parameter, 1.0));
+    let guarded_range = ParamRange::new(guarded_angles[0].next_up(), guarded_angles[1].next_down());
+    if !guarded_range.is_finite()
+        || guarded_range.width() <= 0.0
+        || guarded_range.lo <= formula_windows[0][0].lo
+        || guarded_range.hi >= formula_windows[0][0].hi
+    {
+        return Err(unsupported());
+    }
+    for endpoint in [first, second] {
+        if endpoint
+            .exact_heights
+            .into_iter()
+            .zip(formula_windows)
+            .any(|(height, window)| !strictly_inside(height, window[1]))
+        {
+            return Err(unsupported());
+        }
+    }
+    let exact_radicand_lower = topology
+        .positive_radicand_lower_bound(projective_guard)
+        .map_err(|_| unsupported())?;
+    let formula_residuals = [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper].map(|sheet| {
+        super::subrange::certify_paired_skew_cylinder_folded_guarded_residuals(
+            topology.formula_cylinders(),
+            formula_windows,
+            guarded_range,
+            sheet,
+            tolerance,
+            projective_guard,
+            exact_radicand_lower,
+        )
+    });
+    let [lower, upper] = formula_residuals;
+    let formula_residuals = [lower?, upper?];
+    let formula_endpoint_parameters = [first, second].map(|endpoint| {
+        let mut algebra = endpoint.algebra;
+        let raw_longitude = algebra
+            .authored_pcurve_derivs(1, endpoint.carrier_parameter, 0)
+            .d[0]
+            .x;
+        let lifted = fit_full_period_parameter(raw_longitude, formula_windows[1][0])
+            .expect("root evidence already retained an opposite longitude lift");
+        algebra.longitude_offset = lifted - raw_longitude;
+        [0, 1].map(|operand| {
+            let uv = algebra
+                .authored_pcurve_derivs(operand, endpoint.carrier_parameter, 0)
+                .d[0];
+            [uv.x, uv.y]
+        })
+    });
+    let formula_endpoint_points = formula_endpoint_parameters.map(|parameters| {
+        let points = [
+            topology.formula_cylinders()[0].eval(parameters[0]),
+            topology.formula_cylinders()[1].eval(parameters[1]),
+        ];
+        (points[0] + points[1]) * 0.5
+    });
+    for (parameters, point) in formula_endpoint_parameters
+        .into_iter()
+        .zip(formula_endpoint_points)
+    {
+        if parameters
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+            || !point.to_array().into_iter().all(f64::is_finite)
+        {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        let points = [
+            topology.formula_cylinders()[0].eval(parameters[0]),
+            topology.formula_cylinders()[1].eval(parameters[1]),
+        ];
+        if points[0].dist(points[1]) > tolerance {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+    }
+    let mut required_edge_tolerance = formula_residuals
+        .into_iter()
+        .flat_map(|residual| residual.residual_bounds())
+        .fold(0.0, f64::max);
+    for residual in formula_residuals {
+        let carrier = residual.carrier();
+        let traces = residual.traces();
+        for (parameter, point) in [residual.carrier_range().lo, residual.carrier_range().hi]
+            .into_iter()
+            .zip(formula_endpoint_points)
+        {
+            required_edge_tolerance =
+                required_edge_tolerance.max(carrier.eval(parameter).dist(point));
+            for trace in traces {
+                let uv = trace.pcurve().eval(parameter);
+                required_edge_tolerance =
+                    required_edge_tolerance.max(trace.surface().eval([uv.x, uv.y]).dist(point));
+            }
+        }
+    }
+    required_edge_tolerance = required_edge_tolerance.next_up();
+    if !required_edge_tolerance.is_finite() || required_edge_tolerance > tolerance {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    Ok(PersistentSkewCylinderFoldedSupportCertificate {
+        topology,
+        formula_windows,
+        formula_to_source,
+        formula_root_longitudes,
+        guarded_range,
+        formula_residuals,
+        formula_endpoint_parameters,
+        formula_endpoint_points,
+        required_edge_tolerance,
+        tolerance,
+    })
+}
+
 /// Plan exact axial-bound root relations for one isolated support tangency in
 /// two full-period finite cylinder windows.
 pub fn plan_persistent_skew_cylinder_support_contact_boundaries(
@@ -327,6 +561,17 @@ fn support_root_evidence(
     formula_windows: [[ParamRange; 2]; 2],
 ) -> Result<SupportRootEvidence, IntersectionCertificateError> {
     let root = topology.isolated_support_root().ok_or_else(unsupported)?;
+    root_evidence(topology, root, formula_windows)
+}
+
+fn root_evidence(
+    topology: &SkewCylinderDiscriminantContactTopologyCertificate,
+    root: SkewCylinderDiscriminantRoot,
+    formula_windows: [[ParamRange; 2]; 2],
+) -> Result<SupportRootEvidence, IntersectionCertificateError> {
+    if !topology.roots().contains(&root) {
+        return Err(unsupported());
+    }
     let angular = root.angular_bracket();
     if !angular.lo.is_finite() || !angular.hi.is_finite() || angular.lo > angular.hi {
         return Err(unsupported());
@@ -506,7 +751,8 @@ mod tests {
     use super::*;
     use crate::{
         SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
-        classify_skew_cylinder_exact_discriminant,
+        SkewCylinderFoldedSupportCellLocation, certify_persistent_skew_cylinder_folded_support,
+        certify_skew_cylinder_folded_support_topology, classify_skew_cylinder_exact_discriminant,
     };
 
     fn cylinders(offset: f64) -> [Cylinder; 2] {
@@ -600,6 +846,38 @@ mod tests {
             other => panic!("expected rooted contact topology, got {other:?}"),
         };
         assert!(rooted.roots().len() >= 2);
+        let folded = certify_skew_cylinder_folded_support_topology(rooted.clone()).unwrap();
+        assert!(folded.roots().iter().all(|root| !root.repeated()));
+        assert_eq!(folded.roots(), rooted.roots());
+        assert_eq!(
+            folded.positive_cell(),
+            SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+        );
+        assert!(
+            certify_persistent_skew_cylinder_folded_support(
+                folded.clone(),
+                windows(),
+                [0, 1],
+                1.0e-9,
+                SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1,
+            )
+            .is_err()
+        );
+        let folded = certify_persistent_skew_cylinder_folded_support(
+            folded,
+            windows(),
+            [0, 1],
+            1.0e-9,
+            SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+        )
+        .unwrap();
+        assert_eq!(folded.work(), SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK);
+        assert!(folded.guarded_range().width() > 0.0);
+        assert_eq!(
+            folded.formula_residuals().map(|residual| residual.sheet()),
+            [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
+        );
+        assert!(folded.endpoint_points().iter().all(|point| point.y > 0.0));
         assert!(
             certify_persistent_skew_cylinder_support_contact(rooted, windows(), [0, 1], 1.0e-9, 0,)
                 .is_err()

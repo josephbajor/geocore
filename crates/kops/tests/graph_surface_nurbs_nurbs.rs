@@ -136,6 +136,11 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
                     kops::intersect::IntersectionBranchEndpointEvent::PeriodSeam { .. } => {
                         panic!("an open NURBS branch cannot end at a periodic seam")
                     }
+                    kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportJoin {
+                        ..
+                    } => {
+                        panic!("an open NURBS branch cannot end at a folded-cylinder join")
+                    }
                 }),
             [[true, true], [true, true]]
         );

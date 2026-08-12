@@ -731,6 +731,18 @@ pub enum SectionCurveEndpointTopology {
         /// Index into [`BodySectionGraph::through_contacts`].
         contact: usize,
     },
+    /// Exact simple discriminant root shared by the two members of a folded
+    /// skew-cylinder support component.
+    FoldedSupportJoin {
+        /// Source faces in operand order.
+        faces: [FaceId; 2],
+        /// Ordinal in the exact canonical two-root cycle.
+        root_ordinal: usize,
+        /// Projective chart and isolating interval retaining source identity.
+        root_chart: SectionSkewCylinderRootChart,
+        /// Exact rational enclosure of the source support root.
+        root_interval: SectionSkewCylinderInterval,
+    },
 }
 
 /// One proof-keyed vertex shared by stitched branch fragments.
@@ -816,6 +828,37 @@ pub struct SectionCurveFragmentEnd {
     trim: SectionCurveTrimProvenance,
 }
 
+/// One physical support-root end of a guarded folded skew-cylinder member.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionFoldedSupportFragmentEnd {
+    endpoint: usize,
+    point: Point3,
+    carrier_parameter: f64,
+    surface_parameters: [[f64; 2]; 2],
+}
+
+impl SectionFoldedSupportFragmentEnd {
+    /// Index into [`BodySectionGraph::curve_endpoints`].
+    pub const fn endpoint(&self) -> usize {
+        self.endpoint
+    }
+
+    /// Physical source-root point, distinct from the guarded carrier bound.
+    pub const fn point(&self) -> Point3 {
+        self.point
+    }
+
+    /// Guarded interior parameter bounding the active residual certificate.
+    pub const fn carrier_parameter(&self) -> f64 {
+        self.carrier_parameter
+    }
+
+    /// Surface parameters of the physical root, in operand order.
+    pub const fn surface_parameters(&self) -> [[f64; 2]; 2] {
+        self.surface_parameters
+    }
+}
+
 impl SectionCurveFragmentEnd {
     /// Index into [`BodySectionGraph::curve_endpoints`].
     pub const fn endpoint(&self) -> usize {
@@ -863,6 +906,12 @@ pub enum SectionCurveFragmentSpan {
     BoundedProcedural {
         /// Start/end occurrences in canonical Section traversal order.
         endpoints: Box<[SectionBoundedProceduralFragmentEnd; 2]>,
+    },
+    /// One guarded member of a folded support component, bounded by the two
+    /// exact support roots shared with its sibling member.
+    FoldedSupport {
+        /// Physical start/end roots and guarded interior carrier bounds.
+        endpoints: Box<[SectionFoldedSupportFragmentEnd; 2]>,
     },
 }
 
@@ -1446,6 +1495,16 @@ enum ClosedFragmentEvidenceSpan {
         ends: [ClosedFragmentEndEvidence; 2],
         wraps_pcurve_seam: bool,
     },
+    FoldedSupport {
+        ends: [FoldedSupportEndEvidence; 2],
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FoldedSupportEndEvidence {
+    point: Point3,
+    carrier_parameter: f64,
+    surface_parameters: [[f64; 2]; 2],
 }
 
 #[derive(Debug, Clone, Copy)]

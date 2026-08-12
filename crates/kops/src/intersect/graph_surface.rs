@@ -7,15 +7,16 @@
 
 use super::error::IntersectionError;
 pub use super::graph_branch_certificate::{
-    IntersectionBranchCertificate, SkewCylinderOpenSpanBranchCertificate,
-    SkewCylinderWholeContactBranchCertificate,
+    IntersectionBranchCertificate, SkewCylinderFoldedSupportBranchCertificate,
+    SkewCylinderOpenSpanBranchCertificate, SkewCylinderWholeContactBranchCertificate,
 };
 use super::graph_cylinder_cylinder::{
     ParallelCylinderExteriorRadialSeparation, build_verified_cylinder_cylinder_ruling_branch,
     intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
 };
 use super::graph_cylinder_cylinder_skew::{
-    CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections, SkewCylinderIsolatedContact,
+    CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections,
+    SkewCylinderFoldedSupportCurve, SkewCylinderIsolatedContact,
     SkewCylinderStrictDiscriminantMiss, SkewCylinderSupportContact, SkewCylinderThroughContact,
     intersect_certified_skew_cylinders,
 };
@@ -280,6 +281,12 @@ pub enum IntersectionBranchVertexEvent {
         /// Which source chart windows contain the retained seam boundary.
         surfaces: [bool; 2],
     },
+    /// One of two exact discriminant roots joining the members of a folded
+    /// support component.
+    FoldedSupportJoin {
+        /// Ordinal in the exact canonical two-root cycle.
+        root_ordinal: usize,
+    },
 }
 
 /// End condition for one endpoint slot of an intersection branch.
@@ -295,6 +302,11 @@ pub enum IntersectionBranchEndpointEvent {
     PeriodSeam {
         /// Which source chart windows contain the retained seam boundary.
         surfaces: [bool; 2],
+    },
+    /// Exact support join shared by the lower and upper member edges.
+    FoldedSupportJoin {
+        /// Ordinal in the exact canonical two-root cycle.
+        root_ordinal: usize,
     },
 }
 
@@ -372,6 +384,7 @@ pub struct GraphSurfaceSurfaceIntersections {
     skew_cylinder_isolated_contacts: Vec<SkewCylinderIsolatedContact>,
     skew_cylinder_through_contacts: Vec<SkewCylinderThroughContact>,
     skew_cylinder_support_contacts: Vec<SkewCylinderSupportContact>,
+    skew_cylinder_folded_support_curves: Vec<SkewCylinderFoldedSupportCurve>,
 }
 
 impl GraphSurfaceSurfaceIntersections {
@@ -423,6 +436,12 @@ impl GraphSurfaceSurfaceIntersections {
     /// supports, proven strictly inside both finite source windows.
     pub fn skew_cylinder_support_contacts(&self) -> &[SkewCylinderSupportContact] {
         &self.skew_cylinder_support_contacts
+    }
+
+    /// Exact two-root folded support components, each represented by two
+    /// guarded sheet edges sharing the same support joins.
+    pub fn skew_cylinder_folded_support_curves(&self) -> &[SkewCylinderFoldedSupportCurve] {
+        &self.skew_cylinder_folded_support_curves
     }
 }
 
@@ -995,6 +1014,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     let mut skew_cylinder_isolated_contacts = None;
     let mut skew_cylinder_through_contacts = None;
     let mut skew_cylinder_support_contacts = None;
+    let mut skew_cylinder_folded_support_curves = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1070,6 +1090,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     isolated_contacts,
                     through_contacts,
                     support_contacts,
+                    folded_support_curves,
                 } = intersect_certified_skew_cylinders(
                     cylinders,
                     ranges,
@@ -1081,6 +1102,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 skew_cylinder_isolated_contacts = Some(isolated_contacts);
                 skew_cylinder_through_contacts = Some(through_contacts);
                 skew_cylinder_support_contacts = Some(support_contacts);
+                skew_cylinder_folded_support_curves = Some(folded_support_curves);
                 raw
             };
             (raw, None)
@@ -1266,6 +1288,8 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         skew_cylinder_isolated_contacts: skew_cylinder_isolated_contacts.unwrap_or_default(),
         skew_cylinder_through_contacts: skew_cylinder_through_contacts.unwrap_or_default(),
         skew_cylinder_support_contacts: skew_cylinder_support_contacts.unwrap_or_default(),
+        skew_cylinder_folded_support_curves: skew_cylinder_folded_support_curves
+            .unwrap_or_default(),
     })
 }
 
@@ -2099,10 +2123,7 @@ fn build_verified_branch_graph(
             }
         };
 
-        let endpoint_vertices = match topology {
-            IntersectionBranchTopology::Open => [vertices.len(), vertices.len() + 1],
-            IntersectionBranchTopology::Closed => [vertices.len(), vertices.len()],
-        };
+        let mut endpoint_vertices = [0; 2];
         let mut endpoint_events = [
             IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
                 surfaces: [false; 2],
@@ -2116,11 +2137,13 @@ fn build_verified_branch_graph(
             IntersectionBranchTopology::Closed => &[carrier_range.lo],
         };
         for (endpoint, &parameter) in endpoint_parameters.iter().enumerate() {
-            let surface_parameters = [
+            let evaluated_surface_parameters = [
                 pcurves[0].as_curve().eval(parameter_maps[0].map(parameter)),
                 pcurves[1].as_curve().eval(parameter_maps[1].map(parameter)),
             ];
-            let boundary_surfaces = match endpoint_proofs[endpoint] {
+            let (point, surface_parameters, endpoint_event, vertex_event) = match endpoint_proofs
+                [endpoint]
+            {
                 Some(IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)) => {
                     let sheet = match &carrier {
                         CurveDescriptor::SkewCylinderBranch(carrier) => carrier.sheet(),
@@ -2130,51 +2153,169 @@ fn build_verified_branch_graph(
                             ));
                         }
                     };
-                    IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)
-                        .validated_boundary_surfaces(parameter, sheet, surface_ranges)
+                    let boundary_surfaces =
+                        IntersectionBranchEndpointProof::SkewCylinderAxialRoot(proof)
+                            .validated_boundary_surfaces(parameter, sheet, surface_ranges)
+                            .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ))?;
+                    let endpoint_event = match topology {
+                        IntersectionBranchTopology::Open => {
+                            IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                        IntersectionBranchTopology::Closed => {
+                            IntersectionBranchEndpointEvent::PeriodSeam {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                    };
+                    let vertex_event = match topology {
+                        IntersectionBranchTopology::Open => {
+                            IntersectionBranchVertexEvent::BoundaryEndpoint {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                        IntersectionBranchTopology::Closed => {
+                            IntersectionBranchVertexEvent::PeriodSeam {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                    };
+                    (
+                        carrier.as_curve().eval(parameter),
+                        evaluated_surface_parameters.map(|uv| [uv.x, uv.y]),
+                        endpoint_event,
+                        vertex_event,
+                    )
+                }
+                Some(proof @ IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(_)) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let proof = proof
+                        .validated_folded_support_root(parameter, surface_ranges)
                         .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
                             IntersectionCertificateError::InvalidTraceFamily,
-                        ))?
-                }
-                None => [
-                    on_window_boundary(surface_parameters[0], surface_ranges[0], tolerance),
-                    on_window_boundary(surface_parameters[1], surface_ranges[1], tolerance),
-                ],
-            };
-            let endpoint_event = match topology {
-                IntersectionBranchTopology::Open => {
-                    IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
-                        surfaces: boundary_surfaces,
+                        ))?;
+                    let folded = certificate.as_skew_cylinder_folded_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    let expected_root = folded.folded_certificate().topology().roots()
+                        [proof.root_ordinal]
+                        .bracket();
+                    let expected_chart = match expected_root.chart {
+                        kgraph::SkewCylinderHalfAngleChart::Tangent => {
+                            super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Tangent
+                        }
+                        kgraph::SkewCylinderHalfAngleChart::Cotangent => {
+                            super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Cotangent
+                        }
+                    };
+                    if proof.half_angle_chart != expected_chart
+                        || proof.half_angle_bracket != [expected_root.lo, expected_root.hi]
+                        || proof.point
+                            != folded.folded_certificate().endpoint_points()[proof.root_ordinal]
+                        || proof.surface_parameters
+                            != folded.folded_certificate().source_endpoint_parameters()
+                                [proof.root_ordinal]
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
                     }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::FoldedSupportJoin {
+                            root_ordinal: proof.root_ordinal,
+                        },
+                        IntersectionBranchVertexEvent::FoldedSupportJoin {
+                            root_ordinal: proof.root_ordinal,
+                        },
+                    )
                 }
-                IntersectionBranchTopology::Closed => IntersectionBranchEndpointEvent::PeriodSeam {
-                    surfaces: boundary_surfaces,
-                },
+                None => {
+                    let boundary_surfaces = [
+                        on_window_boundary(
+                            evaluated_surface_parameters[0],
+                            surface_ranges[0],
+                            tolerance,
+                        ),
+                        on_window_boundary(
+                            evaluated_surface_parameters[1],
+                            surface_ranges[1],
+                            tolerance,
+                        ),
+                    ];
+                    let endpoint_event = match topology {
+                        IntersectionBranchTopology::Open => {
+                            IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                        IntersectionBranchTopology::Closed => {
+                            IntersectionBranchEndpointEvent::PeriodSeam {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                    };
+                    let vertex_event = match topology {
+                        IntersectionBranchTopology::Open => {
+                            IntersectionBranchVertexEvent::BoundaryEndpoint {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                        IntersectionBranchTopology::Closed => {
+                            IntersectionBranchVertexEvent::PeriodSeam {
+                                surfaces: boundary_surfaces,
+                            }
+                        }
+                    };
+                    (
+                        carrier.as_curve().eval(parameter),
+                        evaluated_surface_parameters.map(|uv| [uv.x, uv.y]),
+                        endpoint_event,
+                        vertex_event,
+                    )
+                }
             };
             endpoint_events[endpoint] = endpoint_event;
             if topology == IntersectionBranchTopology::Closed {
                 endpoint_events[1] = endpoint_event;
             }
-            vertices.push(IntersectionBranchVertex {
-                point: carrier.as_curve().eval(parameter),
-                surface_parameters: [
-                    [surface_parameters[0].x, surface_parameters[0].y],
-                    [surface_parameters[1].x, surface_parameters[1].y],
-                ],
+            let vertex = IntersectionBranchVertex {
+                point,
+                surface_parameters,
                 kind: branch.kind,
-                event: match topology {
-                    IntersectionBranchTopology::Open => {
-                        IntersectionBranchVertexEvent::BoundaryEndpoint {
-                            surfaces: boundary_surfaces,
-                        }
-                    }
-                    IntersectionBranchTopology::Closed => {
-                        IntersectionBranchVertexEvent::PeriodSeam {
-                            surfaces: boundary_surfaces,
-                        }
-                    }
-                },
-            });
+                event: vertex_event,
+            };
+            let vertex_index = if matches!(
+                vertex_event,
+                IntersectionBranchVertexEvent::FoldedSupportJoin { .. }
+            ) {
+                vertices
+                    .iter()
+                    .position(|existing| *existing == vertex)
+                    .unwrap_or_else(|| {
+                        let index = vertices.len();
+                        vertices.push(vertex);
+                        index
+                    })
+            } else {
+                let index = vertices.len();
+                vertices.push(vertex);
+                index
+            };
+            endpoint_vertices[endpoint] = vertex_index;
+            if topology == IntersectionBranchTopology::Closed {
+                endpoint_vertices[1] = vertex_index;
+            }
         }
         edges.push(IntersectionBranchEdge {
             source_surfaces,

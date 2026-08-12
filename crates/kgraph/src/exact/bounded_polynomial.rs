@@ -7,6 +7,7 @@
 //! get an explicit ambiguous result instead of an incomplete root list.
 
 use kcore::expansion;
+use kcore::interval::Interval;
 
 const MAX_DEGREE: usize = 4;
 const MAX_EXPANSION_COMPONENTS: usize = 1_024;
@@ -114,6 +115,14 @@ impl ExactScalar {
 
     pub fn is_zero(&self) -> bool {
         self.sign() == 0
+    }
+
+    fn outward_interval(&self) -> Interval {
+        self.components
+            .iter()
+            .fold(Interval::point(0.0), |sum, value| {
+                sum + Interval::point(*value)
+            })
     }
 }
 
@@ -267,6 +276,35 @@ impl ExactPolynomial {
             value = value.scale(parameter)?.add(coefficient)?;
         }
         Ok(value)
+    }
+
+    /// Strict positive Bernstein lower bound on a finite interval.
+    ///
+    /// Bernstein convex-hull containment makes the least control value a
+    /// lower bound for the complete polynomial image. `None` means the exact
+    /// controls do not prove a representably positive margin.
+    pub(crate) fn positive_lower_bound_on_interval(
+        &self,
+        lo: f64,
+        hi: f64,
+    ) -> Result<Option<f64>, RootIsolationFailure> {
+        let controls = self.bernstein_controls(lo, hi)?;
+        if controls.iter().any(|control| control.sign() <= 0) {
+            return Ok(None);
+        }
+        // `bernstein_controls` stores every degree-`n` control multiplied by
+        // `n!`; sign classification is scale-invariant, while a quantitative
+        // bound must restore the standard Bernstein normalization.
+        let scaled_lower = controls
+            .iter()
+            .map(|control| control.outward_interval().lo())
+            .fold(f64::INFINITY, f64::min);
+        let factorial = [1.0, 1.0, 2.0, 6.0, 24.0][self.degree()];
+        let lower = Interval::point(scaled_lower)
+            .checked_div(Interval::point(factorial))
+            .ok_or(RootIsolationFailure::UnsafeArithmeticEnvelope)?
+            .lo();
+        Ok((lower.is_finite() && lower > 0.0).then_some(lower))
     }
 
     pub fn side_sign(
@@ -986,6 +1024,17 @@ mod tests {
     fn certifies_no_real_roots() {
         let roots = complete_roots(&polynomial(&[1.0, 0.0, 1.0]), -100.0, 100.0);
         assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn quantitative_bernstein_bound_restores_control_normalization() {
+        let lower = polynomial(&[1.0, 0.0, 1.0])
+            .positive_lower_bound_on_interval(0.0, 1.0)
+            .unwrap()
+            .unwrap();
+        assert!(lower > 0.0);
+        assert!(lower <= 1.0);
+        assert!(lower >= 0.5_f64.next_down());
     }
 
     #[test]

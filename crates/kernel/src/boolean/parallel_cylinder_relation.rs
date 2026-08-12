@@ -1219,7 +1219,8 @@ fn certify_section_relation(
                 }
             }
             SectionCurveFragmentSpan::Whole
-            | SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+            | SectionCurveFragmentSpan::BoundedProcedural { .. }
+            | SectionCurveFragmentSpan::FoldedSupport { .. } => {
                 return Err(ParallelCylinderRelationGap::SectionLayout);
             }
         }

@@ -1305,6 +1305,7 @@ fn fragment_terminal(
             (trim.operand() == operand)
                 .then(|| (endpoint.endpoint(), trim.loop_id(), trim.source_parameter()))
         }
+        SectionCurveFragmentSpan::FoldedSupport { .. } => None,
     }
 }
 
@@ -1531,6 +1532,9 @@ fn fragment_endpoint_representatives(fragment: &SectionCurveFragment) -> Option<
                 .each_ref()
                 .map(|end| end.inside_carrier_parameter()),
         ),
+        SectionCurveFragmentSpan::FoldedSupport { endpoints } => {
+            Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
+        }
     }
 }
 
@@ -1634,6 +1638,9 @@ fn fragment_endpoint_ids(fragment: &SectionCurveFragment) -> Option<[usize; 2]> 
         SectionCurveFragmentSpan::BoundedProcedural { endpoints } => {
             Some(endpoints.each_ref().map(|end| end.endpoint()))
         }
+        SectionCurveFragmentSpan::FoldedSupport { endpoints } => {
+            Some(endpoints.each_ref().map(|end| end.endpoint()))
+        }
     }
 }
 
@@ -1648,7 +1655,8 @@ fn fragment_parameter_intervals(
                 fragment: fragment_index,
             })
         }
-        SectionCurveFragmentSpan::BoundedProcedural { .. } => {
+        SectionCurveFragmentSpan::BoundedProcedural { .. }
+        | SectionCurveFragmentSpan::FoldedSupport { .. } => {
             Err(SectionPeriodicEmbeddingGap::CarrierIntervalUnavailable {
                 fragment: fragment_index,
             })

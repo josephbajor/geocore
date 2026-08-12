@@ -1119,6 +1119,25 @@ fn endpoint_materializations_match(
             SectionCurveEndpointTopology::ThroughContact { contact: first },
             SectionCurveEndpointTopology::ThroughContact { contact: second },
         ) => first == second,
+        (
+            SectionCurveEndpointTopology::FoldedSupportJoin {
+                faces: first_faces,
+                root_ordinal: first_ordinal,
+                root_chart: first_chart,
+                root_interval: first_interval,
+            },
+            SectionCurveEndpointTopology::FoldedSupportJoin {
+                faces: second_faces,
+                root_ordinal: second_ordinal,
+                root_chart: second_chart,
+                root_interval: second_interval,
+            },
+        ) => {
+            first_faces == second_faces
+                && first_ordinal == second_ordinal
+                && first_chart == second_chart
+                && first_interval == second_interval
+        }
         _ => false,
     }
 }
@@ -1173,6 +1192,11 @@ fn adapt_endpoint(
                 branch: branch.index(),
                 site,
             }
+        }
+        CertifiedClosedEndpointKey::FoldedSupportRoot { .. } => {
+            return Err(inconsistent_topology(
+                "ruling publisher cannot author a folded support root",
+            ));
         }
     };
     Ok(SectionCurveEndpoint {

@@ -40,6 +40,48 @@ pub fn certify_paired_skew_cylinder_branch_subrange_residuals(
     certify_validated_branch(algebra, ranges, tolerance)
 }
 
+pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
+    cylinders: [Cylinder; 2],
+    ranges: [[ParamRange; 2]; 2],
+    carrier_range: ParamRange,
+    sheet: SkewCylinderSheet,
+    tolerance: f64,
+    projective_guard: RootBracket,
+    source_radicand_lower: f64,
+) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
+    validate_inputs(cylinders, ranges, tolerance)?;
+    if !carrier_range.is_finite()
+        || carrier_range.width() <= 0.0
+        || !source_radicand_lower.is_finite()
+        || source_radicand_lower <= 0.0
+    {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    let authored = ranges[0][0];
+    if carrier_range.lo <= authored.lo || carrier_range.hi >= authored.hi {
+        return Err(unsupported(
+            "folded skew Cylinder/Cylinder guard must stay strictly inside its authored longitude chart",
+        ));
+    }
+    let algebra = build_algebra(cylinders, carrier_range, sheet)
+        .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
+    let stored_radicand_lower = stored_radicand_lower_bound(algebra, projective_guard)
+        .ok_or_else(|| {
+            unsupported(
+                "folded skew Cylinder/Cylinder evaluator radicand lacks an exact positive Bernstein margin",
+            )
+        })?;
+    certify_validated_branch_with_exact_radicand_lower(
+        algebra,
+        ranges,
+        tolerance,
+        RadicandLowerBounds {
+            stored: stored_radicand_lower,
+            source: source_radicand_lower,
+        },
+    )
+}
+
 pub(super) fn proof_cell_boundary(range: ParamRange, index: usize, boundary_graded: bool) -> f64 {
     if index == 0 {
         return range.lo;

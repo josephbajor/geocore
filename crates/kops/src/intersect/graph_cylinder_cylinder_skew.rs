@@ -28,18 +28,21 @@ use kgraph::{
     PersistentSkewCylinderFiniteWindowIsolatedPointCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput,
     PersistentSkewCylinderFiniteWindowThroughContactCertificate,
+    PersistentSkewCylinderFoldedSupportCertificate,
     PersistentSkewCylinderSupportContactCertificate, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
-    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowRootEventKind,
-    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
-    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK,
+    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
+    SkewCylinderFiniteWindowRootEventKind, SkewCylinderFiniteWindowTopologyCertificate,
+    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
     SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide, SkewCylinderSheet,
     SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
     certify_persistent_skew_cylinder_finite_window_family,
-    certify_persistent_skew_cylinder_support_contact, classify_skew_cylinder_exact_discriminant,
+    certify_persistent_skew_cylinder_folded_support,
+    certify_persistent_skew_cylinder_support_contact,
+    certify_skew_cylinder_folded_support_topology, classify_skew_cylinder_exact_discriminant,
     classify_skew_cylinder_open_spans, plan_persistent_skew_cylinder_support_contact_boundaries,
     plan_skew_cylinder_root_clusters,
 };
@@ -47,12 +50,14 @@ use kgraph::{
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
 use super::graph_branch_certificate::{
-    SkewCylinderOpenSpanBranchCertificate, SkewCylinderWholeContactBranchCertificate,
+    SkewCylinderFoldedSupportBranchCertificate, SkewCylinderOpenSpanBranchCertificate,
+    SkewCylinderWholeContactBranchCertificate,
 };
 use super::graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
-    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
+    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderHalfAngleChartProof,
+    SkewCylinderRootInsideSideProof,
 };
 use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult};
 use super::result::{
@@ -283,6 +288,42 @@ pub struct SkewCylinderSupportContact {
     raw_point: SurfaceSurfacePoint,
 }
 
+/// One exact two-root folded support component represented by its lower and
+/// upper guarded sheet members and their two shared support joins.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderFoldedSupportCurve {
+    certificate: PersistentSkewCylinderFoldedSupportCertificate,
+    source_reversed: bool,
+}
+
+impl SkewCylinderFoldedSupportCurve {
+    /// Complete exact topology, finite-window, and paired residual proof.
+    pub const fn certificate(&self) -> &PersistentSkewCylinderFoldedSupportCertificate {
+        &self.certificate
+    }
+
+    /// Lower/upper guarded residual members in caller source order.
+    pub fn residuals(&self) -> [PairedSkewCylinderBranchResidualCertificate; 2] {
+        self.certificate.formula_residuals().map(|residual| {
+            if self.source_reversed {
+                residual.swapped()
+            } else {
+                residual
+            }
+        })
+    }
+
+    /// The two exact support joins in increasing formula-longitude order.
+    pub const fn endpoint_points(&self) -> [Point3; 2] {
+        self.certificate.endpoint_points()
+    }
+
+    /// Caller-order parameters at the two exact support joins.
+    pub fn source_endpoint_parameters(&self) -> [[[f64; 2]; 2]; 2] {
+        self.certificate.source_endpoint_parameters()
+    }
+}
+
 impl SkewCylinderSupportContact {
     /// Sealed kgraph root, cell, and finite-window proof.
     pub const fn certificate(&self) -> &PersistentSkewCylinderSupportContactCertificate {
@@ -378,6 +419,7 @@ pub(super) struct CertifiedSkewCylinderIntersections {
     pub(super) isolated_contacts: Vec<SkewCylinderIsolatedContact>,
     pub(super) through_contacts: Vec<SkewCylinderThroughContact>,
     pub(super) support_contacts: Vec<SkewCylinderSupportContact>,
+    pub(super) folded_support_curves: Vec<SkewCylinderFoldedSupportCurve>,
 }
 
 /// Proof and exact endpoint evidence aligned with one canonicalized raw branch.
@@ -393,6 +435,7 @@ pub(super) enum CertifiedSkewCylinderBranchProof {
     TwoSheet(Box<PairedSkewCylinderBranchResidualCertificate>),
     WholeContact(Box<SkewCylinderWholeContactBranchCertificate>),
     OpenSpan(Box<SkewCylinderOpenSpanBranchCertificate>),
+    FoldedSupport(Box<SkewCylinderFoldedSupportBranchCertificate>),
 }
 
 impl CertifiedSkewCylinderBranchProof {
@@ -401,6 +444,7 @@ impl CertifiedSkewCylinderBranchProof {
             Self::TwoSheet(certificate) => **certificate,
             Self::WholeContact(certificate) => certificate.residual_certificate(),
             Self::OpenSpan(certificate) => certificate.residual_certificate(),
+            Self::FoldedSupport(certificate) => certificate.residual_certificate(),
         }
     }
 }
@@ -470,6 +514,7 @@ pub(super) fn intersect_certified_skew_cylinders(
             isolated_contacts: Vec::new(),
             through_contacts: Vec::new(),
             support_contacts: Vec::new(),
+            folded_support_curves: Vec::new(),
         }),
         DiscriminantAdmission::StrictPositive(strict_positive) => {
             let (proof_cylinders, proof_ranges) = if parameterization_reversed {
@@ -507,6 +552,7 @@ pub(super) fn intersect_certified_skew_cylinders(
             isolated_contacts: Vec::new(),
             through_contacts: Vec::new(),
             support_contacts: Vec::new(),
+            folded_support_curves: Vec::new(),
         }),
     }
 }
@@ -527,14 +573,14 @@ fn intersect_isolated_support_contact(
     ) {
         Ok(plan) => plan,
         Err(_) => {
-            return Ok(CertifiedSkewCylinderIntersections {
-                raw: contact_topology_incomplete(scope),
-                strict_miss: None,
-                branches: None,
-                isolated_contacts: Vec::new(),
-                through_contacts: Vec::new(),
-                support_contacts: Vec::new(),
-            });
+            return intersect_folded_support_contact(
+                contact,
+                formula_ranges,
+                formula_to_source,
+                source_reversed,
+                tolerance,
+                scope,
+            );
         }
     };
     if boundary_plan.work() > 0 {
@@ -558,12 +604,111 @@ fn intersect_isolated_support_contact(
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
                 support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
             });
         }
     };
     let support = SkewCylinderSupportContact::mint(certificate)
         .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
     publish_skew_topology(Vec::new(), Vec::new(), Vec::new(), vec![support])
+}
+
+fn intersect_folded_support_contact(
+    contact: kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+    formula_ranges: [[ParamRange; 2]; 2],
+    formula_to_source: [usize; 2],
+    source_reversed: bool,
+    tolerance: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    let topology = match certify_skew_cylinder_folded_support_topology(contact) {
+        Ok(topology) => topology,
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: contact_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+                isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
+            });
+        }
+    };
+    scope.ledger_mut().charge(
+        SKEW_CYLINDER_OPEN_SPAN_WORK,
+        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+    )?;
+    let certificate = match certify_persistent_skew_cylinder_folded_support(
+        topology,
+        formula_ranges,
+        formula_to_source,
+        tolerance,
+        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+    ) {
+        Ok(certificate) => certificate,
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: contact_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+                isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
+            });
+        }
+    };
+    let folded = SkewCylinderFoldedSupportCurve {
+        certificate: certificate.clone(),
+        source_reversed,
+    };
+    let endpoint_points = certificate.endpoint_points();
+    let endpoint_parameters = certificate.source_endpoint_parameters();
+    let roots = certificate.topology().roots();
+    let residuals = folded.residuals();
+    let branches = residuals
+        .into_iter()
+        .map(|residual| {
+            let range = residual.carrier_range();
+            let endpoint_proofs = [0, 1].map(|root_ordinal| {
+                let root = roots[root_ordinal].bracket();
+                Some(
+                    IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(
+                        SkewCylinderFoldedSupportRootEndpointProof {
+                            root_ordinal,
+                            half_angle_chart: match root.chart {
+                                SkewCylinderHalfAngleChart::Tangent => {
+                                    SkewCylinderHalfAngleChartProof::Tangent
+                                }
+                                SkewCylinderHalfAngleChart::Cotangent => {
+                                    SkewCylinderHalfAngleChartProof::Cotangent
+                                }
+                            },
+                            half_angle_bracket: [root.lo, root.hi],
+                            inside_parameter: if root_ordinal == 0 {
+                                range.lo
+                            } else {
+                                range.hi
+                            },
+                            point: endpoint_points[root_ordinal],
+                            surface_parameters: endpoint_parameters[root_ordinal],
+                        },
+                    ),
+                )
+            });
+            CertifiedSkewCylinderBranch {
+                proof: CertifiedSkewCylinderBranchProof::FoldedSupport(Box::new(
+                    SkewCylinderFoldedSupportBranchCertificate::mint(residual, certificate.clone())
+                        .expect(
+                            "folded source-order residual is retained by its shared certificate",
+                        ),
+                )),
+                endpoint_proofs,
+            }
+        })
+        .collect();
+    publish_skew_topology_with_folded(branches, Vec::new(), Vec::new(), Vec::new(), vec![folded])
 }
 
 fn intersect_strict_positive_two_sheet(
@@ -615,6 +760,7 @@ fn intersect_strict_positive_two_sheet(
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
                 support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
             });
         }
         Err(_) => {
@@ -625,6 +771,7 @@ fn intersect_strict_positive_two_sheet(
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
                 support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
             });
         }
     };
@@ -644,6 +791,7 @@ fn intersect_strict_positive_two_sheet(
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
                 support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
             });
         }
     };
@@ -662,6 +810,7 @@ fn intersect_strict_positive_two_sheet(
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
                 support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
             });
         }
         Err(_) => {
@@ -672,6 +821,7 @@ fn intersect_strict_positive_two_sheet(
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
                 support_contacts: Vec::new(),
+                folded_support_curves: Vec::new(),
             });
         }
     };
@@ -683,6 +833,7 @@ fn intersect_strict_positive_two_sheet(
             isolated_contacts: Vec::new(),
             through_contacts: Vec::new(),
             support_contacts: Vec::new(),
+            folded_support_curves: Vec::new(),
         });
     }
     for event in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
@@ -701,6 +852,7 @@ fn intersect_strict_positive_two_sheet(
                     isolated_contacts: Vec::new(),
                     through_contacts: Vec::new(),
                     support_contacts: Vec::new(),
+                    folded_support_curves: Vec::new(),
                 });
             }
             SkewCylinderFiniteWindowRootEventKind::Boundary
@@ -712,6 +864,7 @@ fn intersect_strict_positive_two_sheet(
                     isolated_contacts: Vec::new(),
                     through_contacts: Vec::new(),
                     support_contacts: Vec::new(),
+                    folded_support_curves: Vec::new(),
                 });
             }
         }
@@ -847,6 +1000,7 @@ fn publish_finite_window_topology(
                             isolated_contacts: Vec::new(),
                             through_contacts: Vec::new(),
                             support_contacts: Vec::new(),
+                            folded_support_curves: Vec::new(),
                         });
                     }
                     let open_span = match certify_open_span_pcurve_transport(
@@ -927,7 +1081,8 @@ fn publish_finite_window_topology(
                 }
                 CertifiedSkewCylinderBranchProof::TwoSheet(_)
                 | CertifiedSkewCylinderBranchProof::WholeContact(_)
-                | CertifiedSkewCylinderBranchProof::OpenSpan(_) => None,
+                | CertifiedSkewCylinderBranchProof::OpenSpan(_)
+                | CertifiedSkewCylinderBranchProof::FoldedSupport(_) => None,
             };
             if let Some(certificate) = whole_contact {
                 branch.proof = CertifiedSkewCylinderBranchProof::WholeContact(Box::new(
@@ -1051,6 +1206,22 @@ fn publish_skew_topology(
     through_contacts: Vec<SkewCylinderThroughContact>,
     support_contacts: Vec<SkewCylinderSupportContact>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    publish_skew_topology_with_folded(
+        branches,
+        isolated_contacts,
+        through_contacts,
+        support_contacts,
+        Vec::new(),
+    )
+}
+
+fn publish_skew_topology_with_folded(
+    branches: Vec<CertifiedSkewCylinderBranch>,
+    isolated_contacts: Vec<SkewCylinderIsolatedContact>,
+    through_contacts: Vec<SkewCylinderThroughContact>,
+    support_contacts: Vec<SkewCylinderSupportContact>,
+    folded_support_curves: Vec<SkewCylinderFoldedSupportCurve>,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
     if !isolated_contacts.is_empty() && !support_contacts.is_empty() {
         return Err(GraphSurfaceIntersectionError::BranchCertificate(
             IntersectionCertificateError::InvalidTraceFamily,
@@ -1094,6 +1265,7 @@ fn publish_skew_topology(
         isolated_contacts,
         through_contacts,
         support_contacts,
+        folded_support_curves,
     })
 }
 
@@ -1219,6 +1391,7 @@ fn branch_certificate_failure(
         isolated_contacts: Vec::new(),
         through_contacts: Vec::new(),
         support_contacts: Vec::new(),
+        folded_support_curves: Vec::new(),
     }
 }
 
@@ -1242,6 +1415,7 @@ fn single_branch_certificate_failure(
         isolated_contacts: Vec::new(),
         through_contacts: Vec::new(),
         support_contacts: Vec::new(),
+        folded_support_curves: Vec::new(),
     }
 }
 
@@ -1265,6 +1439,7 @@ fn open_span_certificate_failure(
         isolated_contacts: Vec::new(),
         through_contacts: Vec::new(),
         support_contacts: Vec::new(),
+        folded_support_curves: Vec::new(),
     }
 }
 
