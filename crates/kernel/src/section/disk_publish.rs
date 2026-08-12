@@ -25,6 +25,7 @@ use kcore::interval::Interval;
 use kcore::operation::OperationScope;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
+use kops::intersect::SurfaceSurfacePoint;
 use ktopo::entity::FaceId as RawFaceId;
 use ktopo::store::Store;
 
@@ -34,6 +35,31 @@ pub(super) struct CertifiedDiskCapFragment {
     branch: usize,
     faces: [RawFaceId; 2],
     endpoints: [CertifiedDiskFragmentEndpoint; 2],
+}
+
+pub(super) fn proves_exact_support_point(
+    a: &AdmittedFace,
+    b: &AdmittedFace,
+    point: &SurfaceSurfacePoint,
+    contacts: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
+) -> bool {
+    let (AdmittedFaceBoundary::Disk(first_disk), AdmittedFaceBoundary::Disk(second_disk)) =
+        (&a.boundary, &b.boundary)
+    else {
+        return false;
+    };
+    contacts.iter().any(|contact| {
+        let super::skew_cylinder_public::SectionIsolatedContactSource::SupportTangency(source) =
+            &contact.source
+        else {
+            return false;
+        };
+        let [Some(first), Some(second)] = contact.root_evidence else {
+            return false;
+        };
+        [first.edge, second.edge] == [first_disk.boundary_edge(), second_disk.boundary_edge()]
+            && point.point.dist(source.point()) <= source.certificate().tolerance()
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -178,6 +204,20 @@ pub(super) fn process_disk_pair(
             scope,
         )?,
     ];
+    if matches!(
+        clipped,
+        [
+            super::disk_clip::DiskCapClipOutcome::Indeterminate(
+                super::disk_clip::DiskCapClipGap::TangentialContact
+            ),
+            super::disk_clip::DiskCapClipOutcome::Indeterminate(
+                super::disk_clip::DiskCapClipGap::TangentialContact
+            ),
+        ]
+    ) && exact_support_point_only_disk_pair(disks, pair, &acc.isolated_contacts)
+    {
+        return Ok(());
+    }
     let chords = match clipped {
         [
             super::disk_clip::DiskCapClipOutcome::Chord(first),
@@ -218,6 +258,53 @@ pub(super) fn process_disk_pair(
         endpoints,
         acc,
     )
+}
+
+fn exact_support_point_only_disk_pair(
+    disks: [super::disk_clip::CertifiedDiskCapAdmission; 2],
+    pair: PairCarrier,
+    contacts: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
+) -> bool {
+    let direction = pair.carrier.direction;
+    let denominator = direction
+        .into_iter()
+        .map(|value| value * value)
+        .sum::<f64>();
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return false;
+    }
+    contacts.iter().any(|contact| {
+        let super::skew_cylinder_public::SectionIsolatedContactSource::SupportTangency(source) =
+            &contact.source
+        else {
+            return false;
+        };
+        let [Some(first), Some(second)] = contact.root_evidence else {
+            return false;
+        };
+        if [first.edge, second.edge] != [disks[0].boundary_edge(), disks[1].boundary_edge()] {
+            return false;
+        }
+        let point = source.point();
+        let offset = [
+            point.x - pair.carrier.origin[0],
+            point.y - pair.carrier.origin[1],
+            point.z - pair.carrier.origin[2],
+        ];
+        let parameter =
+            (offset[0] * direction[0] + offset[1] * direction[1] + offset[2] * direction[2])
+                / denominator;
+        if !parameter.is_finite() {
+            return false;
+        }
+        Point3::new(
+            pair.carrier.origin[0] + direction[0] * parameter,
+            pair.carrier.origin[1] + direction[1] * parameter,
+            pair.carrier.origin[2] + direction[2] * parameter,
+        )
+        .dist(point)
+            <= source.certificate().tolerance()
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

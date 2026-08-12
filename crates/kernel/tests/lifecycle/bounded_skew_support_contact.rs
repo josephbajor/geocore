@@ -91,6 +91,35 @@ fn boundary_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn corner_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(frame, 1.0, 4.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_frame = Frame::new(frame.point_at(0.0, 3.0, 0.0), frame.x(), frame.y()).unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 2.0, 4.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn section(fixture: &Fixture, swapped: bool) -> BodySectionGraph {
     let bodies = if swapped {
         [fixture.second.clone(), fixture.first.clone()]
@@ -216,6 +245,42 @@ fn assert_boundary_support_contact(
     assert!(contact.surface_parameters()[boundary_operand][1].abs() <= 1.0e-12);
 }
 
+fn assert_corner_support_contact(fixture: &Fixture, graph: &BodySectionGraph) {
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty(), "{:#?}", graph.gaps());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.branches().is_empty());
+    assert!(graph.curve_fragments().is_empty());
+    let [contact] = graph.isolated_contacts() else {
+        panic!("expected one corner support contact: {graph:#?}")
+    };
+    assert_eq!(contact.kind(), SectionIsolatedContactKind::SupportTangency);
+    assert!(contact.point().dist(fixture.frame.point_at(0.0, 1.0, 0.0)) <= 1.0e-12);
+    let SectionCurveEndpointTopology::Trim {
+        sites,
+        source_parameters,
+    } = graph.curve_endpoints()[contact.endpoint()].topology()
+    else {
+        panic!("corner support tangency acquired a non-trim endpoint")
+    };
+    assert!(
+        sites
+            .iter()
+            .all(|site| matches!(site, SectionSite::EdgeInterior(_)))
+    );
+    assert!(source_parameters.iter().all(Option::is_some));
+    assert_eq!(contact.roots().len(), 2);
+    assert!(contact.roots().iter().all(|root| {
+        root.axial_boundary() == SectionSkewCylinderAxialBoundary::Lower
+            && root.authored_bound() == 0.0
+    }));
+}
+
 #[test]
 fn isolated_support_contact_section_is_complete_replay_swap_and_frame_stable() {
     for frame in exact_frames() {
@@ -316,6 +381,56 @@ fn boundary_support_contact_boolean_refuses_distinctly_without_mutation() {
             assert!(part.body(fixture.second.clone()).is_ok());
             let graph = section(&fixture, swapped);
             assert_boundary_support_contact(&fixture, &graph, usize::from(swapped));
+        }
+    }
+}
+
+#[test]
+fn corner_support_contact_section_is_complete_replay_swap_and_frame_stable() {
+    for frame in exact_frames() {
+        let fixture = corner_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay);
+        assert_eq!(swapped, swapped_replay);
+        assert_corner_support_contact(&fixture, &forward);
+        assert_corner_support_contact(&fixture, &swapped);
+    }
+}
+
+#[test]
+fn corner_support_contact_boolean_refuses_distinctly_without_mutation() {
+    for frame in exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = corner_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Intersect,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_corner_support_contact(&fixture, &section(&fixture, swapped));
         }
     }
 }

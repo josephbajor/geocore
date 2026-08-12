@@ -82,28 +82,26 @@ impl SupportBoundaryPointProof {
     ) -> Option<Self> {
         let points = contacts
             .iter()
-            .filter_map(|contact| {
+            .flat_map(|contact| {
                 let super::skew_cylinder_public::SectionIsolatedContactSource::SupportTangency(
                     source,
                 ) = &contact.source
                 else {
-                    return None;
+                    return Vec::new();
                 };
-                let mut roots = contact
+                contact
                     .root_evidence
                     .iter()
                     .enumerate()
-                    .filter_map(|(operand, root)| root.map(|root| (operand, root)));
-                let (operand, root) = roots.next()?;
-                if roots.next().is_some() {
-                    return None;
-                }
-                Some(ExactSupportBoundaryPoint {
-                    edge: root.edge,
-                    opposing_side_face: contact.faces[1 - operand].raw(),
-                    point: source.point(),
-                    tolerance: source.certificate().tolerance(),
-                })
+                    .filter_map(|(operand, root)| {
+                        root.map(|root| ExactSupportBoundaryPoint {
+                            edge: root.edge,
+                            opposing_side_face: contact.faces[1 - operand].raw(),
+                            point: source.point(),
+                            tolerance: source.certificate().tolerance(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
         (!points.is_empty()).then_some(Self { points })

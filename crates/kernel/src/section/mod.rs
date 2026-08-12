@@ -2302,6 +2302,7 @@ fn resolve_pair_carrier(
     store: &Store,
     a: &AdmittedFace,
     b: &AdmittedFace,
+    isolated_contacts: &[skew_cylinder_fragment::CertifiedSectionIsolatedContact],
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PairResolution> {
     let (Some(window_a), Some(window_b)) = (a.window, b.window) else {
@@ -2335,6 +2336,12 @@ fn resolve_pair_carrier(
             .iter()
             .any(|branch| branch.kind != ContactKind::Transverse)
     {
+        if branches.is_empty()
+            && let [point] = intersections.raw.points.as_slice()
+            && disk_publish::proves_exact_support_point(a, b, point, isolated_contacts)
+        {
+            return Ok(PairResolution::Empty);
+        }
         return Ok(PairResolution::Gap(GAP_TANGENT_CONTACT));
     }
     if branches.is_empty() {
@@ -2437,7 +2444,7 @@ fn process_pair(
     scope: &mut OperationScope<'_, '_>,
     acc: &mut SectionAccumulator,
 ) -> Result<()> {
-    let pair = match resolve_pair_carrier(store, a, b, scope)? {
+    let pair = match resolve_pair_carrier(store, a, b, &acc.isolated_contacts, scope)? {
         PairResolution::Carrier(pair) => pair,
         PairResolution::Empty => return Ok(()),
         PairResolution::Gap(reason) => {
