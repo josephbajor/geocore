@@ -18,6 +18,7 @@ use kgraph::{
 use kops::intersect::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderHalfAngleChartProof, SkewCylinderIsolatedContact, SkewCylinderRootInsideSideProof,
+    SkewCylinderThroughContact,
 };
 use ktopo::entity::{
     EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId,
@@ -54,6 +55,7 @@ struct PreparedOpenSkewBranch {
 struct PreparedSkewFacePairData {
     branches: Vec<PreparedSkewBranch>,
     isolated_contacts: Vec<CertifiedSectionIsolatedContact>,
+    through_contacts: Vec<SectionThroughContact>,
 }
 
 enum PreparedSkewFacePair {
@@ -90,6 +92,7 @@ pub(super) fn append_face_pair_branches(
     facades: &[FaceId; 2],
     edges: &[IntersectionBranchEdge],
     isolated_contacts: &[SkewCylinderIsolatedContact],
+    through_contacts: &[SkewCylinderThroughContact],
     vertices: &[kops::intersect::IntersectionBranchVertex],
     surfaces: [&SurfaceGeom; 2],
     senses: [Sense; 2],
@@ -99,8 +102,10 @@ pub(super) fn append_face_pair_branches(
     acc: &mut SectionAccumulator,
 ) -> Result<()> {
     let has_skew = !isolated_contacts.is_empty()
+        || !through_contacts.is_empty()
         || edges.iter().any(|edge| {
             edge.certificate.as_skew_cylinder_two_sheet().is_some()
+                || edge.certificate.as_skew_cylinder_whole_contact().is_some()
                 || edge.certificate.as_skew_cylinder_open_span().is_some()
         });
     if !has_skew {
@@ -122,6 +127,7 @@ pub(super) fn append_face_pair_branches(
     }
     if !edges.iter().all(|edge| {
         edge.certificate.as_skew_cylinder_two_sheet().is_some()
+            || edge.certificate.as_skew_cylinder_whole_contact().is_some()
             || edge.certificate.as_skew_cylinder_open_span().is_some()
     }) {
         acc.gaps.push(SectionGap {
@@ -164,6 +170,23 @@ pub(super) fn append_face_pair_branches(
             return Ok(());
         }
     };
+    let through_contacts = match super::skew_cylinder_through_contact::prepare(
+        raw_faces,
+        facades,
+        edges,
+        through_contacts,
+        &annuli,
+        acc.branches.len(),
+    )? {
+        Some(contacts) => contacts,
+        None => {
+            acc.gaps.push(SectionGap {
+                reason: GAP_PAIR_UNRESOLVED,
+                faces: facades.to_vec(),
+            });
+            return Ok(());
+        }
+    };
     let prepared = prepare_skew_face_pair(
         store,
         raw_faces,
@@ -180,12 +203,15 @@ pub(super) fn append_face_pair_branches(
     match prepared {
         PreparedSkewFacePair::Ready(mut prepared) => {
             prepared.isolated_contacts = isolated_contacts;
+            prepared.through_contacts = through_contacts;
             let PreparedSkewFacePairData {
                 branches,
                 isolated_contacts,
+                through_contacts,
             } = *prepared;
             commit_prepared_branches(branches, acc);
             acc.isolated_contacts.extend(isolated_contacts);
+            acc.through_contacts.extend(through_contacts);
         }
         PreparedSkewFacePair::Gap(reason) => acc.gaps.push(SectionGap {
             reason,
@@ -374,7 +400,11 @@ fn prepare_skew_face_pair(
     let mut prepared = Vec::with_capacity(edges.len());
     for edge in edges {
         let branch_index = base_branch + prepared.len();
-        if let Some(certificate) = edge.certificate.as_skew_cylinder_two_sheet() {
+        if let Some(certificate) = edge.certificate.as_skew_cylinder_two_sheet().or_else(|| {
+            edge.certificate
+                .as_skew_cylinder_whole_contact()
+                .map(|certificate| certificate.residual_certificate())
+        }) {
             let branch = match super::cylinder_cylinder_publish::adapt_skew_two_sheet_branch(
                 facades,
                 edge,
@@ -438,6 +468,7 @@ fn prepare_skew_face_pair(
         PreparedSkewFacePairData {
             branches: prepared,
             isolated_contacts: Vec::new(),
+            through_contacts: Vec::new(),
         },
     )))
 }
@@ -1338,6 +1369,7 @@ mod tests {
             &facades,
             &edges,
             intersections.skew_cylinder_isolated_contacts(),
+            intersections.skew_cylinder_through_contacts(),
             &intersections.branch_graph.vertices,
             surfaces,
             face_data.map(|face| face.sense()),
@@ -1374,6 +1406,7 @@ mod tests {
             &facades,
             &edges,
             intersections.skew_cylinder_isolated_contacts(),
+            intersections.skew_cylinder_through_contacts(),
             &intersections.branch_graph.vertices,
             surfaces,
             face_data.map(|face| face.sense()),

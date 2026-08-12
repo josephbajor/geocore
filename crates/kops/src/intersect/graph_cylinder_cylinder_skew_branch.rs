@@ -46,11 +46,15 @@ pub(super) fn build_verified_skew_cylinder_branch(
             (true, CertifiedSkewCylinderBranchProof::TwoSheet(certificate)) => {
                 IntersectionBranchCertificate::SkewCylinderTwoSheet(certificate)
             }
+            (true, CertifiedSkewCylinderBranchProof::WholeContact(certificate)) => {
+                IntersectionBranchCertificate::SkewCylinderWholeContact(certificate)
+            }
             (false, CertifiedSkewCylinderBranchProof::OpenSpan(certificate)) => {
                 IntersectionBranchCertificate::SkewCylinderOpenSpan(certificate)
             }
             (true, CertifiedSkewCylinderBranchProof::OpenSpan(_))
-            | (false, CertifiedSkewCylinderBranchProof::TwoSheet(_)) => {
+            | (false, CertifiedSkewCylinderBranchProof::TwoSheet(_))
+            | (false, CertifiedSkewCylinderBranchProof::WholeContact(_)) => {
                 return Err(GraphSurfaceIntersectionError::BranchCertificate(
                     kgraph::IntersectionCertificateError::InvalidTraceFamily,
                 ));

@@ -116,9 +116,11 @@ pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK, SKEW_CYLINDER_DISCRIMINANT_NUMERIC_RESOLUTION,
     SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH,
     SKEW_CYLINDER_OPEN_SPAN_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_WORK,
-    SKEW_CYLINDER_ROOT_CLUSTER_WORK, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
+    SKEW_CYLINDER_ROOT_CLUSTER_WORK, SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK,
+    SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK_PER_BRANCH, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
     SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderIsolatedContact, SkewCylinderStrictDiscriminantMiss,
+    SkewCylinderThroughContact,
 };
 pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
@@ -133,8 +135,9 @@ pub use graph_surface::{
     IntersectionBranchVertexEvent, NURBS_TRACE_CERTIFICATE_WORK, PERSISTENT_DESCRIPTOR_FAILURE,
     PersistentIntersectionBranchEdge, PersistentIntersectionBranchGraph,
     SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS, SkewCylinderOpenSpanBranchCertificate,
-    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
-    intersect_bounded_graph_surfaces_with_context, persist_verified_graph_surface_intersections,
+    SkewCylinderWholeContactBranchCertificate, intersect_bounded_graph_surfaces,
+    intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
+    persist_verified_graph_surface_intersections,
 };
 pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;

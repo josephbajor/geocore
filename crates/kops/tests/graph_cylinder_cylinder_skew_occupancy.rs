@@ -27,11 +27,11 @@ use kops::intersect::{
     IntersectionBranchEndpointProof, IntersectionBranchTopology, IntersectionBranchVertexEvent,
     SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,
     SKEW_CYLINDER_CLIPPED_BRANCH_TOPOLOGY, SKEW_CYLINDER_CLIPPED_TOPOLOGY_INCOMPLETE,
-    SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY, SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
-    SKEW_CYLINDER_DISCRIMINANT_WORK, SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH,
-    SKEW_CYLINDER_OPEN_SPAN_WORK, SKEW_CYLINDER_ROOT_CLUSTER_WORK,
-    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
-    SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderAxialBoundaryProof, SkewCylinderAxialRelationProof,
+    SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH, SKEW_CYLINDER_OPEN_SPAN_WORK,
+    SKEW_CYLINDER_ROOT_CLUSTER_WORK, SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK,
+    SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER, SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
+    SKEW_CYLINDER_TWO_SHEET_INCOMPLETE, SKEW_CYLINDER_TWO_SHEET_WORK,
+    SkewCylinderAxialBoundaryProof, SkewCylinderAxialRelationProof,
     SkewCylinderRootInsideSideProof, SurfaceIntersectionCurve, intersect_bounded_graph_surfaces,
     intersect_bounded_graph_surfaces_with_context,
 };
@@ -107,6 +107,7 @@ fn assert_no_skew_branches(
     assert!(result.branch_graph.vertices.is_empty());
     assert!(result.branch_graph.edges.is_empty());
     assert!(result.skew_cylinder_isolated_contacts().is_empty());
+    assert!(result.skew_cylinder_through_contacts().is_empty());
     assert!(
         result.skew_cylinder_strict_discriminant_miss().is_none(),
         "finite-window occupancy must not mint an infinite-support miss witness"
@@ -143,6 +144,7 @@ fn assert_corner_topology(
 
     let contacts = result.skew_cylinder_isolated_contacts();
     assert_eq!(contacts.len(), 2);
+    assert!(result.skew_cylinder_through_contacts().is_empty());
     let expected_family = contacts[0].certificate().family();
     let mut carrier_points = Vec::with_capacity(2);
     for (ordinal, (contact, raw_point)) in contacts.iter().zip(&result.raw.points).enumerate() {
@@ -1400,7 +1402,7 @@ fn positive_width_windows_publish_an_isolated_only_family() {
 }
 
 #[test]
-fn finite_window_contact_stratum_retains_the_contact_topology_refusal() {
+fn finite_window_through_contacts_are_branch_attached_without_raw_points() {
     let cylinders = perpendicular_pair();
     let windows = [
         cylinder_window(range(-3.0, 3.0)),
@@ -1418,12 +1420,145 @@ fn finite_window_contact_stratum_retains_the_contact_topology_refusal() {
     )
     .unwrap();
 
-    assert_single_typed_gap(
-        &result,
-        handles,
-        SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
-        SKEW_CYLINDER_DISCRIMINANT_WORK,
-        SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
+    assert_eq!(result.branch_graph.source_surfaces, handles);
+    assert!(result.raw.is_complete(), "{:#?}", result.raw);
+    assert!(result.raw.points.is_empty());
+    assert_eq!(result.raw.curves.len(), 2);
+    assert!(result.raw.regions.is_empty());
+    assert!(result.raw.incomplete_evidence().is_empty());
+    assert_eq!(result.branch_graph.edges.len(), 2);
+    assert_eq!(result.branch_graph.vertices.len(), 2);
+    assert!(result.skew_cylinder_isolated_contacts().is_empty());
+
+    let contacts = result.skew_cylinder_through_contacts();
+    assert_eq!(contacts.len(), 4);
+    let family = contacts[0].certificate().family();
+    assert_eq!(family.member_count(), 0);
+    let tolerance = family.tolerance();
+    let mut expected = vec![
+        Point3::new(-1.0, 0.0, -2.0),
+        Point3::new(-1.0, 0.0, 2.0),
+        Point3::new(1.0, 0.0, -2.0),
+        Point3::new(1.0, 0.0, 2.0),
+    ];
+    for contact in contacts.iter().copied() {
+        assert_eq!(contact.certificate().family(), family);
+        assert_eq!(contact.root_count(), 1);
+        let root = contact.root(0).unwrap();
+        assert!(root.repeated);
+        assert_eq!(root.tag.source_slot(), 1);
+        assert!(contact.root(1).is_none());
+        let parameters = contact.surface_parameters();
+        for (cylinder, uv) in cylinders.into_iter().zip(parameters) {
+            assert!(cylinder.eval(uv).dist(contact.point()) <= tolerance);
+        }
+        assert!(result.branch_graph.edges.iter().any(|edge| {
+            edge.certificate
+                .as_skew_cylinder_whole_contact()
+                .is_some_and(|certificate| {
+                    certificate.residual_certificate().sheet() == contact.sheet()
+                        && certificate.finite_window_family() == family
+                })
+        }));
+        let index = expected
+            .iter()
+            .position(|point| point.dist(contact.point()) <= tolerance)
+            .expect("branch contact escaped the perpendicular-cylinder oracle");
+        expected.remove(index);
+    }
+    assert!(expected.is_empty());
+}
+
+#[test]
+fn through_contact_recertification_has_exact_n_and_atomic_n_minus_one_boundary() {
+    assert_eq!(SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, 512);
+    assert_eq!(SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK, 1024);
+    let cylinders = perpendicular_pair();
+    let windows = [
+        cylinder_window(range(-3.0, 3.0)),
+        cylinder_window(range(-1.0, 1.0)),
+    ];
+    let (graph, handles) = graph_pair(cylinders);
+    let graph_counts = (
+        graph.surface_count(),
+        graph.curve_count(),
+        graph.curve2d_count(),
+    );
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+
+    let exact_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_TWO_SHEET_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK,
+    )])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &exact_context,
+    );
+    let exact_outcome = exact.result();
+    let exact_result = exact_outcome.as_ref().unwrap();
+    assert_eq!(exact_result.branch_graph.edges.len(), 2);
+    assert_eq!(exact_result.skew_cylinder_through_contacts().len(), 4);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_TWO_SHEET_WORK),
+        SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied_plan = BudgetPlan::new([LimitSpec::new(
+        SKEW_CYLINDER_TWO_SHEET_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK - 1,
+    )])
+    .unwrap();
+    let denied_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(denied_plan);
+    let denied = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        handles[0],
+        windows[0],
+        handles[1],
+        windows[1],
+        &denied_context,
+    );
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_TWO_SHEET_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK,
+        allowed: SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_TWO_SHEET_WORK),
+        SKEW_CYLINDER_TWO_SHEET_EXACT_WORK,
+        "the rejected recertification debit must leave only the earlier atomic attempt consumed"
+    );
+    assert_eq!(
+        (
+            graph.surface_count(),
+            graph.curve_count(),
+            graph.curve2d_count(),
+        ),
+        graph_counts,
+        "N-1 refusal must leave the source graph untouched"
     );
 }
 

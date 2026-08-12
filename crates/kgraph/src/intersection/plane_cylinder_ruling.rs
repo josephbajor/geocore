@@ -1,8 +1,9 @@
 //! Exact, fail-closed Plane/Cylinder ruling trace certification.
 //!
-//! This proof family is operation-local. It admits only finite, strictly
-//! transverse secants whose line carrier shares the signed cylinder axis.
+//! This proof family is operation-local. It admits finite exact secants and
+//! tangencies whose line carrier shares the signed cylinder axis.
 
+use kcore::expansion;
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::predicates::{Orientation, affine_dot3};
@@ -91,6 +92,15 @@ pub enum PlaneCylinderRulingTrace {
     Cylinder(CylinderRulingTrace),
 }
 
+/// Exact local contact character of one certified ruling family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneCylinderRulingContact {
+    /// The plane cuts the cylinder support in two distinct rulings.
+    Transverse,
+    /// The plane touches the cylinder support in one repeated ruling.
+    Tangent,
+}
+
 impl PlaneCylinderRulingTrace {
     /// Carrier-to-pcurve parameter map.
     pub const fn parameter_map(self) -> AffineParamMap1d {
@@ -113,6 +123,7 @@ pub struct PairedPlaneCylinderRulingResidualCertificate {
     traces: [PlaneCylinderRulingTrace; 2],
     residual_bounds: [f64; 2],
     tolerance: f64,
+    contact: PlaneCylinderRulingContact,
 }
 
 impl PairedPlaneCylinderRulingResidualCertificate {
@@ -148,15 +159,21 @@ impl PairedPlaneCylinderRulingResidualCertificate {
     pub const fn tolerance(self) -> f64 {
         self.tolerance
     }
+
+    /// Exact support contact character retained by the family admission.
+    pub const fn contact(self) -> PlaneCylinderRulingContact {
+        self.contact
+    }
 }
 
-/// Certify a finite, strictly transverse Plane/Cylinder ruling.
+/// Certify a finite exact Plane/Cylinder ruling.
 ///
 /// Family admission is exact and fail-closed. A plane normal shared with a
 /// signed cylinder radial frame axis proves that the cylinder axis lies in
 /// the plane; otherwise the dyadic sign of `normal · axis` must be exactly
-/// zero. An outward interval discriminant must then prove a strict secant,
-/// excluding tangent and numerically near-parallel candidates. Both lifted
+/// zero. An outward interval discriminant proves ordinary strict secants;
+/// cancellation falls back to the exact dyadic expansion sign, admitting
+/// exact zero as a tangent while rejecting near-tangent guesses. Both lifted
 /// traces are affine in the carrier parameter. Their residual coefficients
 /// are formed before one outward interval evaluation over the complete range,
 /// preserving shared-parameter correlation without sampling.
@@ -189,7 +206,7 @@ pub fn certify_paired_plane_cylinder_ruling_residuals(
     if !finite_plane(plane) || !finite_cylinder(cylinder) {
         return Err(IntersectionCertificateError::NonFiniteGeometry);
     }
-    certify_strict_ruling_family(carrier, plane, cylinder)?;
+    let contact = certify_ruling_family(carrier, plane, cylinder)?;
 
     let carrier_coefficients =
         line_coefficients(carrier).ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
@@ -224,15 +241,16 @@ pub fn certify_paired_plane_cylinder_ruling_residuals(
         traces,
         residual_bounds,
         tolerance,
+        contact,
     })
 }
 pub(super) type AffineCoefficients = [[Interval; 3]; 2];
 
-fn certify_strict_ruling_family(
+fn certify_ruling_family(
     carrier: Line,
     plane: Plane,
     cylinder: Cylinder,
-) -> Result<(), IntersectionCertificateError> {
+) -> Result<PlaneCylinderRulingContact, IntersectionCertificateError> {
     let normal = plane.frame().z();
     let frame = cylinder.frame();
     if !shares_signed_cylinder_axis(carrier, cylinder) {
@@ -259,14 +277,23 @@ fn certify_strict_ruling_family(
 
     let discriminant = ruling_discriminant(plane, cylinder)
         .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
-    if discriminant.lo() <= 0.0 {
-        return Err(
-            IntersectionCertificateError::UnsupportedCarrierParameterization {
-                reason: "Plane/Cylinder ruling requires a proven strict transverse secant",
-            },
-        );
+    if discriminant.lo() > 0.0 {
+        return Ok(PlaneCylinderRulingContact::Transverse);
     }
-    Ok(())
+    match exact_ruling_discriminant_sign(plane, cylinder) {
+        Some(Orientation::Positive) => Ok(PlaneCylinderRulingContact::Transverse),
+        Some(Orientation::Zero) => Ok(PlaneCylinderRulingContact::Tangent),
+        Some(Orientation::Negative) => Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "Plane/Cylinder ruling carrier has a negative exact discriminant",
+            },
+        ),
+        None => Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "Plane/Cylinder ruling discriminant lacks an exact safe-envelope sign",
+            },
+        ),
+    }
 }
 
 fn shares_signed_cylinder_axis(carrier: Line, cylinder: Cylinder) -> bool {
@@ -298,6 +325,83 @@ fn ruling_discriminant(plane: Plane, cylinder: Cylinder) -> Option<Interval> {
         Interval::point(cylinder.radius()).square() * finite_interval(nx.square() + ny.square())?,
     )?;
     finite_interval(radial_squared - offset.square())
+}
+
+fn exact_ruling_discriminant_sign(plane: Plane, cylinder: Cylinder) -> Option<Orientation> {
+    let normal = plane.frame().z().to_array();
+    let frame = cylinder.frame();
+    let offset = exact_dot_difference(
+        normal,
+        frame.origin().to_array(),
+        plane.frame().origin().to_array(),
+    )?;
+    let nx = exact_dot(normal, frame.x().to_array())?;
+    let ny = exact_dot(normal, frame.y().to_array())?;
+    let radial = checked_expansion_sum(
+        &checked_expansion_mul(&nx, &nx)?,
+        &checked_expansion_mul(&ny, &ny)?,
+    )?;
+    let radius = vec![cylinder.radius()];
+    let radial = checked_expansion_mul(&checked_expansion_mul(&radial, &radius)?, &radius)?;
+    let offset_squared = checked_expansion_mul(&offset, &offset)?;
+    let discriminant = checked_expansion_sum(&radial, &expansion::negate(&offset_squared))?;
+    Some(match expansion::sign(&discriminant) {
+        value if value > 0 => Orientation::Positive,
+        value if value < 0 => Orientation::Negative,
+        _ => Orientation::Zero,
+    })
+}
+
+fn exact_dot(left: [f64; 3], right: [f64; 3]) -> Option<Vec<f64>> {
+    let mut result = vec![0.0];
+    for (left, right) in left.into_iter().zip(right) {
+        result = checked_expansion_sum(&result, &exact_product(left, right)?)?;
+    }
+    Some(result)
+}
+
+fn exact_dot_difference(normal: [f64; 3], point: [f64; 3], origin: [f64; 3]) -> Option<Vec<f64>> {
+    let point = exact_dot(normal, point)?;
+    let origin = exact_dot(normal, origin)?;
+    checked_expansion_sum(&point, &expansion::negate(&origin))
+}
+
+fn exact_product(left: f64, right: f64) -> Option<Vec<f64>> {
+    const SPLIT_SAFETY: f64 = 134_217_729.0;
+    if !left.is_finite()
+        || !right.is_finite()
+        || left.abs() > f64::MAX / SPLIT_SAFETY
+        || right.abs() > f64::MAX / SPLIT_SAFETY
+    {
+        return None;
+    }
+    if left == 0.0 || right == 0.0 {
+        return Some(vec![0.0]);
+    }
+    let product = left * right;
+    if !product.is_normal() {
+        return None;
+    }
+    let (rounded, residue) = expansion::two_product(left, right);
+    let result = expansion::from_two(rounded, residue);
+    valid_expansion(&result).then_some(result)
+}
+
+fn checked_expansion_sum(left: &[f64], right: &[f64]) -> Option<Vec<f64>> {
+    let result = expansion::sum(left, right);
+    valid_expansion(&result).then_some(result)
+}
+
+fn checked_expansion_mul(left: &[f64], right: &[f64]) -> Option<Vec<f64>> {
+    let result = expansion::mul(left, right);
+    valid_expansion(&result).then_some(result)
+}
+
+fn valid_expansion(value: &[f64]) -> bool {
+    !value.is_empty()
+        && value
+            .iter()
+            .all(|component| *component == 0.0 || component.is_normal())
 }
 
 fn plane_ruling_coefficients(
@@ -654,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_tangent_and_near_parallel_families() {
+    fn certifies_exact_tangent_and_refuses_near_parallel_families() {
         let cylinder = Cylinder::new(Frame::world(), 2.0).unwrap();
         let tangent_plane = Plane::new(
             Frame::new(
@@ -666,15 +770,21 @@ mod tests {
         );
         let tangent_carrier =
             Line::new(Point3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0)).unwrap();
-        assert!(matches!(
-            certify_paired_plane_cylinder_ruling_residuals(
-                tangent_carrier,
-                ParamRange::new(-1.0, 1.0),
-                ruling_traces(tangent_plane, cylinder, tangent_carrier, 0.0),
-                1.0,
-            ),
-            Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
-        ));
+        let tangent = certify_paired_plane_cylinder_ruling_residuals(
+            tangent_carrier,
+            ParamRange::new(-1.0, 1.0),
+            ruling_traces(tangent_plane, cylinder, tangent_carrier, 0.0),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(tangent.contact(), PlaneCylinderRulingContact::Tangent);
+        assert_eq!(tangent.carrier(), tangent_carrier);
+        assert!(
+            tangent
+                .residual_bounds()
+                .into_iter()
+                .all(|bound| bound <= tangent.tolerance())
+        );
 
         let near_plane = Plane::new(
             Frame::new(

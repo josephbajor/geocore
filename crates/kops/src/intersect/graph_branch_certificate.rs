@@ -8,10 +8,55 @@ use kgraph::{
     IntersectionCertificateError, PairedCylinderCylinderRulingResidualCertificate,
     PairedPlaneCylinderCircleResidualCertificate, PairedPlaneCylinderRulingResidualCertificate,
     PairedSkewCylinderBranchResidualCertificate,
-    PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate, SkewCylinderBranchGuardedEnd,
+    PersistentSkewCylinderFiniteWindowFamilyCertificate,
+    PersistentSkewCylinderFiniteWindowFamilyMembershipCertificate,
+    PersistentSkewCylinderFiniteWindowRootEventKind,
+    PersistentSkewCylinderFiniteWindowSheetOccupancy, SkewCylinderBranchGuardedEnd,
     SkewCylinderBranchPcurveCellCertificate, SkewCylinderBranchPcurveRootCorridorCertificate,
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
 };
+
+/// Full-cycle residual proof composed with exact closed finite-window contact
+/// topology for the same immutable sheet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderWholeContactBranchCertificate {
+    residual: PairedSkewCylinderBranchResidualCertificate,
+    family: PersistentSkewCylinderFiniteWindowFamilyCertificate,
+}
+
+impl SkewCylinderWholeContactBranchCertificate {
+    pub(super) fn mint(
+        residual: PairedSkewCylinderBranchResidualCertificate,
+        family: PersistentSkewCylinderFiniteWindowFamilyCertificate,
+    ) -> Result<Self, IntersectionCertificateError> {
+        let sheet = residual.sheet();
+        let has_contact = (0..family.root_event_count(sheet)).any(|ordinal| {
+            family.root_event(sheet, ordinal).is_some_and(|event| {
+                event.kind() == PersistentSkewCylinderFiniteWindowRootEventKind::Contact
+            })
+        });
+        if family.sheet_occupancy(sheet) != PersistentSkewCylinderFiniteWindowSheetOccupancy::Whole
+            || !has_contact
+            || residual.carrier().cylinders() != family.formula_cylinders()
+            || residual.carrier_range() != family.formula_windows()[0][0]
+            || residual.traces().map(|trace| trace.surface()) != family.source_cylinders()
+            || residual.tolerance().to_bits() != family.tolerance().to_bits()
+        {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        Ok(Self { residual, family })
+    }
+
+    /// Whole-cycle paired residual proof for the represented analytic branch.
+    pub const fn residual_certificate(self) -> PairedSkewCylinderBranchResidualCertificate {
+        self.residual
+    }
+
+    /// Exact finite-window family proving closed whole occupancy and contacts.
+    pub const fn finite_window_family(self) -> PersistentSkewCylinderFiniteWindowFamilyCertificate {
+        self.family
+    }
+}
 
 /// Sealed operation-local proof for one bounded skew-cylinder component.
 ///
@@ -137,6 +182,8 @@ pub enum IntersectionBranchCertificate {
     CylinderCylinderRuling(Box<PairedCylinderCylinderRulingResidualCertificate>),
     /// Certified procedural full-cycle sheet of a strict-positive skew pair.
     SkewCylinderTwoSheet(Box<PairedSkewCylinderBranchResidualCertificate>),
+    /// Full-cycle skew sheet with exact branch-attached finite-window contacts.
+    SkewCylinderWholeContact(Box<SkewCylinderWholeContactBranchCertificate>),
     /// Non-wrapping skew span with guarded and physical-root pcurve evidence.
     SkewCylinderOpenSpan(Box<SkewCylinderOpenSpanBranchCertificate>),
     /// Operation-generated degree-1 analytic/NURBS trace proof.
@@ -151,6 +198,7 @@ impl IntersectionBranchCertificate {
                 | Self::PlaneCylinderRuling(_)
                 | Self::CylinderCylinderRuling(_)
                 | Self::SkewCylinderTwoSheet(_)
+                | Self::SkewCylinderWholeContact(_)
                 | Self::SkewCylinderOpenSpan(_)
         )
     }
@@ -163,6 +211,9 @@ impl IntersectionBranchCertificate {
             Self::PlaneCylinderRuling(certificate) => certificate.residual_bounds(),
             Self::CylinderCylinderRuling(certificate) => certificate.residual_bounds(),
             Self::SkewCylinderTwoSheet(certificate) => certificate.residual_bounds(),
+            Self::SkewCylinderWholeContact(certificate) => {
+                certificate.residual_certificate().residual_bounds()
+            }
             Self::SkewCylinderOpenSpan(certificate) => {
                 certificate.residual_certificate().residual_bounds()
             }
@@ -178,6 +229,9 @@ impl IntersectionBranchCertificate {
             Self::PlaneCylinderRuling(certificate) => certificate.tolerance(),
             Self::CylinderCylinderRuling(certificate) => certificate.tolerance(),
             Self::SkewCylinderTwoSheet(certificate) => certificate.tolerance(),
+            Self::SkewCylinderWholeContact(certificate) => {
+                certificate.residual_certificate().tolerance()
+            }
             Self::SkewCylinderOpenSpan(certificate) => {
                 certificate.residual_certificate().tolerance()
             }
@@ -193,6 +247,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
             | Self::Nurbs(_) => None,
         }
@@ -208,6 +263,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
             | Self::Nurbs(_) => None,
         }
@@ -221,6 +277,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
             | Self::Nurbs(_) => None,
         }
@@ -234,6 +291,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderCircle(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
             | Self::Nurbs(_) => None,
         }
@@ -249,6 +307,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderCircle(_)
             | Self::PlaneCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_)
             | Self::Nurbs(_) => None,
         }
@@ -264,6 +323,23 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderCircle(_)
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderWholeContact(_)
+            | Self::SkewCylinderOpenSpan(_)
+            | Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow a whole skew branch's closed finite-window contact proof.
+    pub fn as_skew_cylinder_whole_contact(
+        &self,
+    ) -> Option<SkewCylinderWholeContactBranchCertificate> {
+        match self {
+            Self::SkewCylinderWholeContact(certificate) => Some(**certificate),
+            Self::Analytic(_)
+            | Self::PlaneCylinderCircle(_)
+            | Self::PlaneCylinderRuling(_)
+            | Self::CylinderCylinderRuling(_)
+            | Self::SkewCylinderTwoSheet(_)
             | Self::SkewCylinderOpenSpan(_)
             | Self::Nurbs(_) => None,
         }
@@ -280,6 +356,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -295,6 +372,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::Nurbs(_) => None,
         }
     }
@@ -307,6 +385,7 @@ impl IntersectionBranchCertificate {
             | Self::PlaneCylinderRuling(_)
             | Self::CylinderCylinderRuling(_)
             | Self::SkewCylinderTwoSheet(_)
+            | Self::SkewCylinderWholeContact(_)
             | Self::SkewCylinderOpenSpan(_) => None,
             Self::Nurbs(certificate) => Some(certificate.as_ref()),
         }

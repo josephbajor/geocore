@@ -49,6 +49,181 @@ pub(super) struct SemanticRulingRecertification {
     tolerance: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CircularCapSource {
+    cylinder: Cylinder,
+    edge: ktopo::entity::EdgeId,
+}
+
+/// Recover one rounded oblique tangent ruling from the conjunction of exact
+/// cap topology and already-certified skew-cylinder through-contacts.
+///
+/// Raw Plane/Cylinder discovery remains untrusted: it must return exactly one
+/// complete tangent line. The cap's shared side/circle incidence proves its
+/// semantic source cylinder, two distinct through-contact carriers bind both
+/// line ends to that exact cap edge, and outward residuals certify the stored
+/// world-space line against both published pcurves.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn recover_tangent_from_through_contacts(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    surfaces: [&SurfaceGeom; 2],
+    domains: [[ParamRange; 2]; 2],
+    error: &GraphSurfaceIntersectionError,
+    contacts: &[super::SectionThroughContact],
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<Option<Vec<SectionBranch>>> {
+    if contacts.is_empty() || !matches!(error, GraphSurfaceIntersectionError::BranchCertificate(_))
+    {
+        return Ok(None);
+    }
+    let (plane_operand, plane, cylinder) = match surfaces {
+        [SurfaceGeom::Plane(plane), SurfaceGeom::Cylinder(cylinder)] => (0, *plane, *cylinder),
+        [SurfaceGeom::Cylinder(cylinder), SurfaceGeom::Plane(plane)] => (1, *plane, *cylinder),
+        _ => return Ok(None),
+    };
+    let tolerance = scope.context().tolerances().linear();
+    let Some(cap_source) =
+        certify_circular_cap_source(store, raw_faces[plane_operand], plane, tolerance)?
+    else {
+        return Ok(None);
+    };
+    let mut contact_roots = contacts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, contact)| {
+            contact
+                .roots
+                .iter()
+                .find(|root| root.source_edge == cap_source.edge)
+                .map(|root| (index, contact, root))
+        })
+        .collect::<Vec<_>>();
+    if contact_roots.len() != 2 || contact_roots[0].0 == contact_roots[1].0 {
+        return Ok(None);
+    }
+
+    super::charge(scope, 32)?;
+    let cylinder_operand = 1 - plane_operand;
+    let raw = intersect_bounded_plane_cylinder(
+        &plane,
+        domains[plane_operand],
+        &cylinder,
+        domains[cylinder_operand],
+        scope.context().tolerances(),
+    )
+    .map_err(Error::from)?;
+    if !raw.is_complete() || !raw.points.is_empty() || !raw.regions.is_empty() {
+        return Ok(None);
+    }
+    if raw.curves.is_empty()
+        || raw.curves.len() > 2
+        || raw.curves.iter().any(|branch| {
+            !matches!(branch.kind, ContactKind::Transverse | ContactKind::Tangent)
+                || !matches!(branch.curve, SurfaceIntersectionCurve::Line(_))
+        })
+    {
+        return Ok(None);
+    }
+
+    let cylinder_face = &facades[cylinder_operand];
+    let mut longitudes = [0.0; 2];
+    let mut points = [Point3::new(0.0, 0.0, 0.0); 2];
+    for (slot, (_, contact, _)) in contact_roots.drain(..).enumerate() {
+        let mut operands = contact
+            .faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| *face == cylinder_face);
+        let Some((operand, _)) = operands.next() else {
+            return Ok(None);
+        };
+        if operands.next().is_some() {
+            return Ok(None);
+        }
+        longitudes[slot] = contact.surface_parameters()[operand][0];
+        points[slot] = contact.point();
+    }
+    if longitudes[0].to_bits() != longitudes[1].to_bits()
+        || points
+            .iter()
+            .flat_map(|point| point.to_array())
+            .any(|value| !value.is_finite())
+    {
+        return Ok(None);
+    }
+    let mut direction = cylinder.frame().z();
+    if direction.x < 0.0
+        || direction.x == 0.0 && direction.y < 0.0
+        || direction.x == 0.0 && direction.y == 0.0 && direction.z < 0.0
+    {
+        direction = -direction;
+    }
+    let Ok(line) = Line::new(points[0], direction) else {
+        return Ok(None);
+    };
+    let second_parameter = (points[1] - points[0]).dot(line.dir());
+    let range = ParamRange::new(second_parameter.min(0.0), second_parameter.max(0.0));
+    if !range.is_finite() || range.lo >= range.hi {
+        return Ok(None);
+    }
+    let raw_pcurves = [
+        plane_pcurve(line, plane),
+        cylinder_pcurve(line, cylinder, longitudes[0]),
+    ];
+    let pcurves = if plane_operand == 0 {
+        raw_pcurves
+    } else {
+        [raw_pcurves[1], raw_pcurves[0]]
+    };
+    let uv = pcurves.map(|pcurve| {
+        [range.lo, range.hi].map(|parameter| {
+            let point = pcurve.origin + pcurve.direction * parameter;
+            [point.x, point.y]
+        })
+    });
+    let raw_points = [line.eval(range.lo), line.eval(range.hi)];
+    let sites = [0, 1].map(|endpoint| SectionFragmentSite {
+        point: raw_points[endpoint],
+        surface_parameters: [uv[0][endpoint], uv[1][endpoint]],
+        surface_window_boundaries: [
+            on_window_boundary(uv[0][endpoint], domains[0]),
+            on_window_boundary(uv[1][endpoint], domains[1]),
+        ],
+    });
+    let source = SemanticRulingRecertification {
+        plane,
+        cylinder,
+        plane_operand,
+        tolerance,
+    };
+    let mut branch = SectionBranch {
+        faces: facades.clone(),
+        carrier: SectionCarrier::Line {
+            origin: line.origin(),
+            direction: line.dir(),
+        },
+        range,
+        topology: SectionBranchTopology::Open,
+        pcurves: pcurves.map(SectionUvCurve::Line),
+        fragment_sites: sites.to_vec(),
+        endpoint_sites: [0, 1],
+        evidence: SectionBranchEvidence {
+            residual_bounds: [0.0; 2],
+            tolerance,
+        },
+        skew_cylinder_embedding: None,
+        ruling_recertification: Some(RulingRecertification::Semantic(source)),
+        ruling_parameter_flipped: false,
+    };
+    let Some(residual_bounds) = recertify(&branch, branch.range, &source) else {
+        return Ok(None);
+    };
+    branch.evidence.residual_bounds = residual_bounds;
+    Ok(Some(vec![branch]))
+}
+
 /// Recover graph promotion only at the exact rounded-axis proof boundary.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn recover(
@@ -260,7 +435,7 @@ fn certify_semantic_axis_containing_face(
     }
     Ok(
         certify_circular_cap_source(store, face_id, plane, tolerance)?
-            .is_some_and(|source| source_axis_is_perpendicular(source, opposing_axis)),
+            .is_some_and(|source| source_axis_is_perpendicular(source.cylinder, opposing_axis)),
     )
 }
 
@@ -371,7 +546,7 @@ fn certify_circular_cap_source(
     face_id: RawFaceId,
     plane: Plane,
     tolerance: f64,
-) -> Result<Option<Cylinder>> {
+) -> Result<Option<CircularCapSource>> {
     let face = store
         .get(face_id)
         .map_err(|source| Error::InconsistentTopology { source })?;
@@ -471,7 +646,10 @@ fn certify_circular_cap_source(
     {
         return Ok(None);
     }
-    Ok(Some(*source_cylinder))
+    Ok(Some(CircularCapSource {
+        cylinder: *source_cylinder,
+        edge: cap_fin.edge(),
+    }))
 }
 
 /// Cross-body perpendicularity is exact dyadic zero or exact identity with

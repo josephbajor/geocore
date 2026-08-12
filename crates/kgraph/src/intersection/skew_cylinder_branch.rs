@@ -75,8 +75,10 @@ pub use persistent_family::{
     PersistentSkewCylinderFiniteWindowMemberInput, PersistentSkewCylinderFiniteWindowRootEvent,
     PersistentSkewCylinderFiniteWindowRootEventCertificate,
     PersistentSkewCylinderFiniteWindowRootEventKind,
-    PersistentSkewCylinderFiniteWindowSheetOccupancy, PersistentSkewCylinderHalfAngleChart,
-    PersistentSkewCylinderRootInsideSide, certify_persistent_skew_cylinder_finite_window_family,
+    PersistentSkewCylinderFiniteWindowSheetOccupancy,
+    PersistentSkewCylinderFiniteWindowThroughContactCertificate,
+    PersistentSkewCylinderHalfAngleChart, PersistentSkewCylinderRootInsideSide,
+    certify_persistent_skew_cylinder_finite_window_family,
     reissue_persistent_skew_cylinder_finite_window_family,
 };
 

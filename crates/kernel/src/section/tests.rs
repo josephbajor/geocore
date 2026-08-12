@@ -1665,7 +1665,8 @@ fn root_scalar_signature(graph: &BodySectionGraph) -> Vec<(EdgeId, usize, [u64; 
             SectionCurveEndpointTopology::Trim {
                 source_parameters, ..
             } => source_parameters.iter().flatten().next(),
-            SectionCurveEndpointTopology::ParameterSeam { .. } => None,
+            SectionCurveEndpointTopology::ParameterSeam { .. }
+            | SectionCurveEndpointTopology::ThroughContact { .. } => None,
         })
         .map(|key| {
             let enclosure = key.root_parameter_enclosure();

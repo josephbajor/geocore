@@ -65,6 +65,7 @@ mod skew_cylinder_fragment;
 #[cfg_attr(not(test), allow(dead_code))]
 mod skew_cylinder_persistence;
 mod skew_cylinder_public;
+mod skew_cylinder_through_contact;
 mod source_annulus;
 mod stitch;
 
@@ -91,6 +92,7 @@ pub use skew_cylinder_public::{
     SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
     SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
     SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
+    SectionThroughContact, SectionThroughContactRoot,
 };
 
 #[cfg(test)]
@@ -723,6 +725,12 @@ pub enum SectionCurveEndpointTopology {
         /// Index into [`SectionBranch::fragment_sites`].
         site: usize,
     },
+    /// Exact repeated-root event where a tangent ruling terminates on a
+    /// positive-length skew-cylinder branch.
+    ThroughContact {
+        /// Index into [`BodySectionGraph::through_contacts`].
+        contact: usize,
+    },
 }
 
 /// One proof-keyed vertex shared by stitched branch fragments.
@@ -1016,6 +1024,7 @@ pub struct BodySectionGraph {
     pub(crate) branches: Vec<SectionBranch>,
     pub(crate) curve_endpoints: Vec<SectionCurveEndpoint>,
     pub(crate) isolated_contacts: Vec<SectionIsolatedContact>,
+    pub(crate) through_contacts: Vec<SectionThroughContact>,
     pub(crate) curve_fragments: Vec<SectionCurveFragment>,
     pub(crate) curve_components: Vec<SectionCurveComponent>,
     pub(crate) periodic_face_embeddings: Vec<SectionPeriodicFaceEmbeddingEvidence>,
@@ -1061,6 +1070,12 @@ impl BodySectionGraph {
     /// stitch vertices and positive-length curve fragments.
     pub fn isolated_contacts(&self) -> &[SectionIsolatedContact] {
         &self.isolated_contacts
+    }
+
+    /// Certified branch-attached contacts, kept distinct from isolated
+    /// points, curve endpoints, and positive-length fragments.
+    pub fn through_contacts(&self) -> &[SectionThroughContact] {
+        &self.through_contacts
     }
 
     /// Exact branch fragments in deterministic publisher order.
@@ -1462,6 +1477,7 @@ struct SectionAccumulator {
     disk_fragments: Vec<disk_publish::CertifiedDiskCapFragment>,
     bounded_procedural_fragments: Vec<skew_cylinder_fragment::CertifiedBoundedSkewCylinderFragment>,
     isolated_contacts: Vec<skew_cylinder_fragment::CertifiedSectionIsolatedContact>,
+    through_contacts: Vec<SectionThroughContact>,
     cylinder_cylinder_exterior_radial_separations:
         Vec<SectionCylinderCylinderExteriorRadialSeparation>,
     skew_cylinder_strict_discriminant_misses: Vec<SectionSkewCylinderStrictDiscriminantMiss>,
@@ -2576,6 +2592,7 @@ fn assemble_graph(
         disk_fragments,
         bounded_procedural_fragments,
         isolated_contacts,
+        through_contacts,
         cylinder_cylinder_exterior_radial_separations,
         skew_cylinder_strict_discriminant_misses,
         mut gaps,
@@ -2639,6 +2656,7 @@ fn assemble_graph(
         &disk_fragments,
         &bounded_procedural_fragments,
         &isolated_contacts,
+        &through_contacts,
         &closed_stitched,
     )?;
     let periodic_face_embeddings = periodic_embedding::certify_periodic_faces(
@@ -2690,6 +2708,7 @@ fn assemble_graph(
         branches,
         curve_endpoints,
         isolated_contacts,
+        through_contacts,
         curve_fragments,
         curve_components,
         periodic_face_embeddings,

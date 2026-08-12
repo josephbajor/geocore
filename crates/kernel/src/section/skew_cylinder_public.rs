@@ -15,7 +15,9 @@ use kgraph::{
     SkewCylinderBranchCarrier, SkewCylinderBranchPcurve, SkewCylinderBranchPcurveCellCertificate,
     SkewCylinderBranchPcurveEnclosure, SkewCylinderBranchPcurveRootCorridorCertificate,
 };
-use kops::intersect::{SkewCylinderIsolatedContact, SkewCylinderOpenSpanBranchCertificate};
+use kops::intersect::{
+    SkewCylinderIsolatedContact, SkewCylinderOpenSpanBranchCertificate, SkewCylinderThroughContact,
+};
 
 use super::{SectionEdgeParameterInterval, SectionSourceParameterKey};
 use crate::{FaceId, FinId, LoopId};
@@ -72,7 +74,7 @@ impl SectionIsolatedContactRoot {
     }
 
     /// Intrinsic source-edge enclosure of the exact physical root.
-    pub const fn edge_parameter(&self) -> SectionEdgeParameterInterval {
+    pub fn edge_parameter(&self) -> SectionEdgeParameterInterval {
         self.edge_parameter
     }
 
@@ -125,6 +127,119 @@ impl SectionIsolatedContact {
 
     /// Exact source-ring roots grouped into this physical point.
     pub fn roots(&self) -> &[SectionIsolatedContactRoot] {
+        &self.roots
+    }
+}
+
+/// One exact authored-bound root retained by a branch-attached
+/// skew-cylinder through-contact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionThroughContactRoot {
+    pub(super) operand: usize,
+    pub(super) axial_boundary: SectionSkewCylinderAxialBoundary,
+    pub(super) authored_bound: f64,
+    pub(super) face: FaceId,
+    pub(super) loop_id: LoopId,
+    pub(super) fin: FinId,
+    pub(super) surface_longitude: f64,
+    pub(super) carrier_root: SectionSkewCylinderCarrierRootEnclosure,
+    pub(super) source_edge: ktopo::entity::EdgeId,
+    pub(super) edge_parameter: Interval,
+}
+
+impl SectionThroughContactRoot {
+    /// Operand slot whose cylindrical source ring owns this root.
+    pub const fn operand(&self) -> usize {
+        self.operand
+    }
+
+    /// Authored lower/upper axial side that owns this root.
+    pub const fn axial_boundary(&self) -> SectionSkewCylinderAxialBoundary {
+        self.axial_boundary
+    }
+
+    /// Bit-exact caller-authored axial bound used by the root equation.
+    pub const fn authored_bound(&self) -> f64 {
+        self.authored_bound
+    }
+
+    /// Cylindrical side face whose cap ring owns this root.
+    pub fn face(&self) -> FaceId {
+        self.face.clone()
+    }
+
+    /// Topology-owned cap-ring loop.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+
+    /// Source fin carrying the cap ring's whole-period pcurve.
+    pub fn fin(&self) -> FinId {
+        self.fin.clone()
+    }
+
+    /// Deterministic source-surface longitude at the exact event.
+    ///
+    /// The exact projective enclosure remains the ordering authority; this
+    /// scalar is a metric representative, not a source-edge root key.
+    pub const fn surface_longitude(&self) -> f64 {
+        self.surface_longitude
+    }
+
+    /// Exact projective graph-root enclosure.
+    pub const fn carrier_root(&self) -> SectionSkewCylinderCarrierRootEnclosure {
+        self.carrier_root
+    }
+
+    /// Conservative intrinsic parameter enclosure on the topology-owned cap
+    /// ring. This is metric association evidence only: a repeated contact has
+    /// no transverse source-root ordinal.
+    pub fn edge_parameter(&self) -> SectionEdgeParameterInterval {
+        SectionEdgeParameterInterval::from_interval(self.edge_parameter)
+    }
+}
+
+/// First-class contact stratum attached to one positive-length Section branch.
+///
+/// This event is neither a standalone point member nor a curve endpoint. The
+/// exact root touches an authored cap while the represented whole branch stays
+/// inside the closed finite window on both adjacent sides.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionThroughContact {
+    pub(super) faces: [FaceId; 2],
+    pub(super) branch: usize,
+    pub(super) source: SkewCylinderThroughContact,
+    pub(super) roots: Vec<SectionThroughContactRoot>,
+}
+
+impl SectionThroughContact {
+    /// Source faces in section operand order.
+    pub const fn faces(&self) -> &[FaceId; 2] {
+        &self.faces
+    }
+
+    /// Index of the positive-length branch carrying this contact.
+    pub const fn branch(&self) -> usize {
+        self.branch
+    }
+
+    /// Exact analytic point on the represented branch.
+    pub fn point(&self) -> Point3 {
+        self.source.point()
+    }
+
+    /// Parameters on the two source cylinders, in operand order.
+    pub fn surface_parameters(&self) -> [[f64; 2]; 2] {
+        self.source.surface_parameters()
+    }
+
+    /// Deterministic graph carrier-chart representative of the exact event.
+    pub fn carrier_parameter(&self) -> f64 {
+        self.source.certificate().carrier_parameter()
+    }
+
+    /// Exact source-ring roots grouped into this branch contact.
+    pub fn roots(&self) -> &[SectionThroughContactRoot] {
         &self.roots
     }
 }

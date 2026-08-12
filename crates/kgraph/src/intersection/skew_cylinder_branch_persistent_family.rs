@@ -555,6 +555,42 @@ impl PersistentSkewCylinderFiniteWindowFamilyCertificate {
         .then_some(certificate)
     }
 
+    /// Derive a branch-attached carrier for one whole-sheet Contact event.
+    ///
+    /// The event remains a distinct closed-set stratum even though its point
+    /// lies on an already represented positive-length branch. Boundary,
+    /// Isolated, and clipped-sheet Contact events deliberately return `None`.
+    pub fn through_contact_certificate(
+        self,
+        sheet: SkewCylinderSheet,
+        ordinal: usize,
+    ) -> Option<PersistentSkewCylinderFiniteWindowThroughContactCertificate> {
+        let event = self.root_event_certificate(sheet, ordinal)?;
+        if event.event().kind() != PersistentSkewCylinderFiniteWindowRootEventKind::Contact
+            || self.sheet_occupancy(sheet)
+                != PersistentSkewCylinderFiniteWindowSheetOccupancy::Whole
+        {
+            return None;
+        }
+        let certificate = PersistentSkewCylinderFiniteWindowThroughContactCertificate { event };
+        let carrier = certificate.point();
+        let parameters = certificate.source_surface_parameters();
+        let surface_points = certificate.source_surface_points();
+        let residuals = surface_points.map(|point| point.dist(carrier));
+        ([carrier.x, carrier.y, carrier.z]
+            .into_iter()
+            .all(f64::is_finite)
+            && parameters.into_iter().flatten().all(f64::is_finite)
+            && surface_points
+                .into_iter()
+                .flat_map(|point| [point.x, point.y, point.z])
+                .all(f64::is_finite)
+            && residuals
+                .into_iter()
+                .all(|residual| residual.is_finite() && residual <= self.tolerance))
+        .then_some(certificate)
+    }
+
     /// Exact bound root grouped into one persistent physical event.
     pub fn root_event_root(
         &self,
@@ -754,6 +790,87 @@ impl PersistentSkewCylinderFiniteWindowIsolatedPointCertificate {
             self.event.sheet(),
         )
         .expect("sealed strict-positive family always rebuilds finite point algebra");
+        let parameter = self.carrier_parameter();
+        let raw_longitude = algebra.authored_pcurve_derivs(1, parameter, 0).d[0].x;
+        let wrapped_longitude = wrap_periodic(raw_longitude, windows[1][0].lo, TAU);
+        algebra.longitude_offset = wrapped_longitude - raw_longitude;
+        algebra
+    }
+}
+
+/// Exact-root-owned contact attached to one represented whole branch.
+///
+/// The event's point is evaluated from the same strict-positive analytic
+/// formula as the branch, but this type has no independent curve range and is
+/// never an isolated point or endpoint. It can only be minted for a `Contact`
+/// event whose sheet occupancy is `Whole`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersistentSkewCylinderFiniteWindowThroughContactCertificate {
+    event: PersistentSkewCylinderFiniteWindowRootEventCertificate,
+}
+
+impl PersistentSkewCylinderFiniteWindowThroughContactCertificate {
+    /// Complete finite-window family owning the branch contact.
+    pub const fn family(self) -> PersistentSkewCylinderFiniteWindowFamilyCertificate {
+        self.event.family()
+    }
+
+    /// Sealed exact physical-root identity.
+    pub const fn event_certificate(self) -> PersistentSkewCylinderFiniteWindowRootEventCertificate {
+        self.event
+    }
+
+    /// Ordered quadratic sheet carrying this contact.
+    pub const fn sheet(self) -> SkewCylinderSheet {
+        self.event.sheet()
+    }
+
+    /// Deterministic authored-chart representative of the exact event.
+    pub const fn carrier_parameter(self) -> f64 {
+        self.event.event().carrier_parameter()
+    }
+
+    /// Exact authored-bound root grouped into this contact.
+    pub fn root(self, root_ordinal: usize) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.event.root(root_ordinal)
+    }
+
+    /// Deterministic model-space point on the represented analytic branch.
+    pub fn point(self) -> Vec3 {
+        let algebra = self.algebra();
+        algebra.carrier_derivs(self.carrier_parameter(), 0).d[0]
+    }
+
+    /// Parameters on both source cylinders in caller/live dependency order.
+    pub fn source_surface_parameters(self) -> [[f64; 2]; 2] {
+        let algebra = self.algebra();
+        let parameter = self.carrier_parameter();
+        let formula = [0, 1].map(|operand| {
+            let uv = algebra.pcurve_derivs(operand, parameter, 0).d[0];
+            [uv.x, uv.y]
+        });
+        permute_formula_to_source(formula, self.family().formula_to_source())
+    }
+
+    /// Independent source-surface evaluations at the retained parameters.
+    pub fn source_surface_points(self) -> [Vec3; 2] {
+        let parameters = self.source_surface_parameters();
+        let cylinders = self.family().source_cylinders();
+        [
+            cylinders[0].eval(parameters[0]),
+            cylinders[1].eval(parameters[1]),
+        ]
+    }
+
+    fn algebra(self) -> BranchAlgebra {
+        let family = self.family();
+        let windows = family.formula_windows();
+        let mut algebra = build_algebra(
+            family.formula_cylinders(),
+            windows[0][0],
+            self.event.sheet(),
+        )
+        .expect("sealed strict-positive family always rebuilds finite contact algebra");
         let parameter = self.carrier_parameter();
         let raw_longitude = algebra.authored_pcurve_derivs(1, parameter, 0).d[0].x;
         let wrapped_longitude = wrap_periodic(raw_longitude, windows[1][0].lo, TAU);

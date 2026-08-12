@@ -14,8 +14,8 @@ use kgeom::surface::{Cylinder, Plane};
 use kgeom::vec::Vec2;
 use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, CurveDescriptor, CylinderLongitudeTrace,
-    CylinderRulingTrace, PlaneCircleTrace, PlaneCylinderCircleTrace, PlaneCylinderRulingTrace,
-    PlaneRulingTrace, certify_paired_plane_cylinder_circle_residuals,
+    CylinderRulingTrace, PlaneCircleTrace, PlaneCylinderCircleTrace, PlaneCylinderRulingContact,
+    PlaneCylinderRulingTrace, PlaneRulingTrace, certify_paired_plane_cylinder_circle_residuals,
     certify_paired_plane_cylinder_ruling_residuals,
 };
 
@@ -69,7 +69,10 @@ pub(super) fn build_verified_plane_cylinder_ruling_branch(
     plane_first: bool,
     tolerance: f64,
 ) -> GraphSurfaceIntersectionResult<VerifiedBranchPayload> {
-    if raw_branch.kind != ContactKind::Transverse {
+    if !matches!(
+        raw_branch.kind,
+        ContactKind::Transverse | ContactKind::Tangent
+    ) {
         return Err(GraphSurfaceIntersectionError::BranchCertificate(
             kgraph::IntersectionCertificateError::UnsupportedCarrierParameterization {
                 reason: "Plane/Cylinder ruling promotion requires a transverse branch",
@@ -122,6 +125,15 @@ pub(super) fn build_verified_plane_cylinder_ruling_branch(
     let certificate =
         certify_paired_plane_cylinder_ruling_residuals(carrier, carrier_range, traces, tolerance)
             .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
+    let expected_kind = match certificate.contact() {
+        PlaneCylinderRulingContact::Transverse => ContactKind::Transverse,
+        PlaneCylinderRulingContact::Tangent => ContactKind::Tangent,
+    };
+    if raw_branch.kind != expected_kind {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            kgraph::IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
 
     Ok(VerifiedBranchPayload {
         carrier: CurveDescriptor::Line(carrier),

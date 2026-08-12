@@ -26,12 +26,13 @@ use kgraph::{
     IntersectionCertificateError, PairedSkewCylinderBranchResidualCertificate,
     PersistentSkewCylinderAxialRootEventInput,
     PersistentSkewCylinderFiniteWindowIsolatedPointCertificate,
-    PersistentSkewCylinderFiniteWindowMemberInput, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
-    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
-    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowRootEventKind,
-    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
-    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    PersistentSkewCylinderFiniteWindowMemberInput,
+    PersistentSkewCylinderFiniteWindowThroughContactCertificate,
+    SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
+    SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK,
+    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
+    SkewCylinderFiniteWindowRootEventKind, SkewCylinderFiniteWindowTopologyCertificate,
+    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
     SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide, SkewCylinderSheet,
     SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     certify_paired_skew_cylinder_branch_residuals,
@@ -43,7 +44,9 @@ use kgraph::{
 
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
 use super::error::IntersectionError;
-use super::graph_branch_certificate::SkewCylinderOpenSpanBranchCertificate;
+use super::graph_branch_certificate::{
+    SkewCylinderOpenSpanBranchCertificate, SkewCylinderWholeContactBranchCertificate,
+};
 use super::graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
@@ -92,6 +95,17 @@ pub const SKEW_CYLINDER_TWO_SHEET_WORK: StageId =
 
 /// Atomic work charged before certifying both procedural skew branches.
 pub const SKEW_CYLINDER_TWO_SHEET_EXACT_WORK: u64 = 2 * SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK;
+
+/// Additional existing residual-certifier work for one whole sheet whose
+/// authored finite window is closed-contact rather than strictly contained.
+pub const SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK_PER_BRANCH: u64 =
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK;
+
+/// Total cumulative two-sheet work for a closed finite window that touches
+/// authored bounds on both whole sheets: the initial strict-window attempt
+/// plus one existing residual recertification per sheet.
+pub const SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK: u64 =
+    SKEW_CYLINDER_TWO_SHEET_EXACT_WORK + 2 * SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK_PER_BRANCH;
 
 /// Stable work stage for one atomic four-bound axial occupancy proof.
 pub const SKEW_CYLINDER_AXIAL_CLIP_WORK: StageId =
@@ -247,12 +261,67 @@ impl SkewCylinderIsolatedContact {
     }
 }
 
+/// Exact-root-owned contact that lies on one represented whole skew branch.
+///
+/// Unlike [`SkewCylinderIsolatedContact`], this carrier contributes no raw
+/// point or graph vertex. Its sealed sheet identity binds the contact to the
+/// already published positive-length branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderThroughContact {
+    certificate: PersistentSkewCylinderFiniteWindowThroughContactCertificate,
+}
+
+impl SkewCylinderThroughContact {
+    /// Sealed kgraph proof owning the exact branch-attached event.
+    pub const fn certificate(self) -> PersistentSkewCylinderFiniteWindowThroughContactCertificate {
+        self.certificate
+    }
+
+    /// Exact analytic point on the represented whole branch.
+    pub fn point(self) -> Point3 {
+        self.certificate.point()
+    }
+
+    /// Caller-order parameters on the two source cylinders.
+    pub fn surface_parameters(self) -> [[f64; 2]; 2] {
+        self.certificate.source_surface_parameters()
+    }
+
+    /// Ordered quadratic sheet carrying this contact and its whole branch.
+    pub const fn sheet(self) -> SkewCylinderSheet {
+        self.certificate.sheet()
+    }
+
+    /// Number of exact authored-bound roots grouped into this contact.
+    pub const fn root_count(self) -> usize {
+        self.certificate.event_certificate().event().root_count()
+    }
+
+    /// Exact authored-bound root grouped into this contact.
+    pub fn root(self, ordinal: usize) -> Option<PersistentSkewCylinderAxialRootEventInput> {
+        self.certificate.root(ordinal)
+    }
+
+    fn mint(
+        certificate: PersistentSkewCylinderFiniteWindowThroughContactCertificate,
+    ) -> Result<Self, IntersectionCertificateError> {
+        let [first, second] = certificate.source_surface_points();
+        let residual = first.dist(second);
+        let tolerance = certificate.family().tolerance();
+        if !residual.is_finite() || residual > tolerance {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        Ok(Self { certificate })
+    }
+}
+
 /// Complete graph inputs produced by the exact skew-cylinder admission.
 pub(super) struct CertifiedSkewCylinderIntersections {
     pub(super) raw: SurfaceSurfaceIntersections,
     pub(super) strict_miss: Option<SkewCylinderStrictDiscriminantMiss>,
     pub(super) branches: Option<Vec<CertifiedSkewCylinderBranch>>,
     pub(super) isolated_contacts: Vec<SkewCylinderIsolatedContact>,
+    pub(super) through_contacts: Vec<SkewCylinderThroughContact>,
 }
 
 /// Proof and exact endpoint evidence aligned with one canonicalized raw branch.
@@ -266,6 +335,7 @@ pub(super) struct CertifiedSkewCylinderBranch {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum CertifiedSkewCylinderBranchProof {
     TwoSheet(Box<PairedSkewCylinderBranchResidualCertificate>),
+    WholeContact(Box<SkewCylinderWholeContactBranchCertificate>),
     OpenSpan(Box<SkewCylinderOpenSpanBranchCertificate>),
 }
 
@@ -273,6 +343,7 @@ impl CertifiedSkewCylinderBranchProof {
     pub(super) fn residual(&self) -> PairedSkewCylinderBranchResidualCertificate {
         match self {
             Self::TwoSheet(certificate) => **certificate,
+            Self::WholeContact(certificate) => certificate.residual_certificate(),
             Self::OpenSpan(certificate) => certificate.residual_certificate(),
         }
     }
@@ -342,6 +413,7 @@ pub(super) fn intersect_certified_skew_cylinders(
             strict_miss: Some(SkewCylinderStrictDiscriminantMiss::certified()),
             branches: None,
             isolated_contacts: Vec::new(),
+            through_contacts: Vec::new(),
         }),
         DiscriminantAdmission::StrictPositive(strict_positive) => {
             let (proof_cylinders, proof_ranges) = if parameterization_reversed {
@@ -363,12 +435,14 @@ pub(super) fn intersect_certified_skew_cylinders(
             strict_miss: None,
             branches: None,
             isolated_contacts: Vec::new(),
+            through_contacts: Vec::new(),
         }),
         DiscriminantAdmission::NumericResolution => Ok(CertifiedSkewCylinderIntersections {
             raw: numeric_resolution(scope, SKEW_CYLINDER_DISCRIMINANT_WORK),
             strict_miss: None,
             branches: None,
             isolated_contacts: Vec::new(),
+            through_contacts: Vec::new(),
         }),
     }
 }
@@ -420,6 +494,7 @@ fn intersect_strict_positive_two_sheet(
                 strict_miss: None,
                 branches: None,
                 isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
             });
         }
         Err(_) => {
@@ -428,6 +503,7 @@ fn intersect_strict_positive_two_sheet(
                 strict_miss: None,
                 branches: None,
                 isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
             });
         }
     };
@@ -445,6 +521,7 @@ fn intersect_strict_positive_two_sheet(
                 strict_miss: None,
                 branches: None,
                 isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
             });
         }
     };
@@ -461,6 +538,7 @@ fn intersect_strict_positive_two_sheet(
                 strict_miss: None,
                 branches: None,
                 isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
             });
         }
         Err(_) => {
@@ -469,6 +547,7 @@ fn intersect_strict_positive_two_sheet(
                 strict_miss: None,
                 branches: None,
                 isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
             });
         }
     };
@@ -478,6 +557,7 @@ fn intersect_strict_positive_two_sheet(
             strict_miss: None,
             branches: None,
             isolated_contacts: Vec::new(),
+            through_contacts: Vec::new(),
         });
     }
     for event in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
@@ -487,12 +567,19 @@ fn intersect_strict_positive_two_sheet(
         match event.kind() {
             SkewCylinderFiniteWindowRootEventKind::Boundary if event.root_count() == 1 => {}
             SkewCylinderFiniteWindowRootEventKind::Isolated if event.root_count() > 0 => {}
+            SkewCylinderFiniteWindowRootEventKind::Contact
+                if event.root_count() > 0
+                    && matches!(
+                        finite_topology.sheet(event.sheet()),
+                        SkewCylinderFiniteSheetTopology::Whole
+                    ) => {}
             SkewCylinderFiniteWindowRootEventKind::Contact => {
                 return Ok(CertifiedSkewCylinderIntersections {
                     raw: contact_topology_incomplete(scope),
                     strict_miss: None,
                     branches: None,
                     isolated_contacts: Vec::new(),
+                    through_contacts: Vec::new(),
                 });
             }
             SkewCylinderFiniteWindowRootEventKind::Boundary
@@ -502,6 +589,7 @@ fn intersect_strict_positive_two_sheet(
                     strict_miss: None,
                     branches: None,
                     isolated_contacts: Vec::new(),
+                    through_contacts: Vec::new(),
                 });
             }
         }
@@ -548,10 +636,42 @@ fn publish_finite_window_topology(
                 .count()
         })
         .sum::<usize>();
+    let through_contact_count = sheets
+        .into_iter()
+        .map(|sheet| {
+            finite_topology
+                .root_events(sheet)
+                .iter()
+                .filter(|event| event.kind() == SkewCylinderFiniteWindowRootEventKind::Contact)
+                .count()
+        })
+        .sum::<usize>();
     if open_span_count > 0 {
         scope.ledger_mut().charge(
             SKEW_CYLINDER_OPEN_SPAN_WORK,
             SKEW_CYLINDER_OPEN_SPAN_EXACT_WORK_PER_BRANCH * open_span_count as u64,
+        )?;
+    }
+    let whole_contact_recertification_count = sheets
+        .into_iter()
+        .zip(certified.iter())
+        .filter(|(sheet, certificate)| {
+            certificate.is_err()
+                && matches!(
+                    finite_topology.sheet(*sheet),
+                    SkewCylinderFiniteSheetTopology::Whole
+                )
+                && finite_topology
+                    .root_events(*sheet)
+                    .iter()
+                    .any(|event| event.kind() == SkewCylinderFiniteWindowRootEventKind::Contact)
+        })
+        .count();
+    if whole_contact_recertification_count > 0 {
+        scope.ledger_mut().charge(
+            SKEW_CYLINDER_TWO_SHEET_WORK,
+            SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK_PER_BRANCH
+                * whole_contact_recertification_count as u64,
         )?;
     }
 
@@ -560,17 +680,37 @@ fn publish_finite_window_topology(
     for (sheet, whole_certificate) in sheets.into_iter().zip(certified.iter()) {
         match finite_topology.sheet(sheet) {
             SkewCylinderFiniteSheetTopology::Outside => {}
-            SkewCylinderFiniteSheetTopology::Whole => match whole_certificate {
-                Ok(certificate) => branches.push(CertifiedSkewCylinderBranch {
+            SkewCylinderFiniteSheetTopology::Whole => {
+                let has_contact = finite_topology
+                    .root_events(sheet)
+                    .iter()
+                    .any(|event| event.kind() == SkewCylinderFiniteWindowRootEventKind::Contact);
+                let certificate = match whole_certificate {
+                    Ok(certificate) => *certificate,
+                    Err(_) if has_contact => {
+                        match certify_paired_skew_cylinder_branch_residuals(
+                            cylinders,
+                            whole_contact_residual_ranges(ranges),
+                            sheet,
+                            tolerance,
+                        ) {
+                            Ok(certificate) => certificate,
+                            Err(failure) => {
+                                return Ok(single_branch_certificate_failure(&failure, scope));
+                            }
+                        }
+                    }
+                    Err(failure) => return Ok(single_branch_certificate_failure(failure, scope)),
+                };
+                branches.push(CertifiedSkewCylinderBranch {
                     proof: CertifiedSkewCylinderBranchProof::TwoSheet(Box::new(if reversed {
                         certificate.swapped()
                     } else {
-                        *certificate
+                        certificate
                     })),
                     endpoint_proofs: [None; 2],
-                }),
-                Err(failure) => return Ok(single_branch_certificate_failure(failure, scope)),
-            },
+                });
+            }
             SkewCylinderFiniteSheetTopology::Open(spans) => {
                 for span in spans.iter().copied() {
                     if span.sheet != sheet {
@@ -579,6 +719,7 @@ fn publish_finite_window_topology(
                             strict_miss: None,
                             branches: None,
                             isolated_contacts: Vec::new(),
+                            through_contacts: Vec::new(),
                         });
                     }
                     let open_span = match certify_open_span_pcurve_transport(
@@ -602,7 +743,8 @@ fn publish_finite_window_topology(
         }
     }
     let mut isolated_contacts = Vec::with_capacity(isolated_count);
-    if open_span_count > 0 || isolated_count > 0 {
+    let mut through_contacts = Vec::with_capacity(through_contact_count);
+    if open_span_count > 0 || isolated_count > 0 || through_contact_count > 0 {
         let family = match certify_persistent_skew_cylinder_finite_window_family(
             strict_positive,
             &finite_topology,
@@ -631,6 +773,32 @@ fn publish_finite_window_topology(
                 IntersectionCertificateError::InvalidTraceFamily,
             ));
         }
+        for branch in &mut branches {
+            let whole_contact = match &branch.proof {
+                CertifiedSkewCylinderBranchProof::TwoSheet(residual)
+                    if (0..family.root_event_count(residual.sheet())).any(|ordinal| {
+                        family
+                            .root_event(residual.sheet(), ordinal)
+                            .is_some_and(|event| {
+                                event.kind()
+                                == kgraph::PersistentSkewCylinderFiniteWindowRootEventKind::Contact
+                            })
+                    }) =>
+                {
+                    Some(SkewCylinderWholeContactBranchCertificate::mint(
+                        **residual, family,
+                    ))
+                }
+                CertifiedSkewCylinderBranchProof::TwoSheet(_)
+                | CertifiedSkewCylinderBranchProof::WholeContact(_)
+                | CertifiedSkewCylinderBranchProof::OpenSpan(_) => None,
+            };
+            if let Some(certificate) = whole_contact {
+                branch.proof = CertifiedSkewCylinderBranchProof::WholeContact(Box::new(
+                    certificate.map_err(GraphSurfaceIntersectionError::BranchCertificate)?,
+                ));
+            }
+        }
         for sheet in sheets {
             for event_ordinal in 0..family.root_event_count(sheet) {
                 let Some(event) = family.root_event(sheet, event_ordinal) else {
@@ -638,28 +806,55 @@ fn publish_finite_window_topology(
                         IntersectionCertificateError::InvalidTraceFamily,
                     ));
                 };
-                if event.kind() != kgraph::PersistentSkewCylinderFiniteWindowRootEventKind::Isolated
-                {
-                    continue;
+                match event.kind() {
+                    kgraph::PersistentSkewCylinderFiniteWindowRootEventKind::Isolated => {
+                        let certificate =
+                            family
+                                .isolated_point_certificate(sheet, event_ordinal)
+                                .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                                    IntersectionCertificateError::InvalidTraceFamily,
+                                ))?;
+                        isolated_contacts.push(
+                            SkewCylinderIsolatedContact::mint(certificate)
+                                .map_err(GraphSurfaceIntersectionError::BranchCertificate)?,
+                        );
+                    }
+                    kgraph::PersistentSkewCylinderFiniteWindowRootEventKind::Contact => {
+                        let certificate = family
+                            .through_contact_certificate(sheet, event_ordinal)
+                            .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ))?;
+                        through_contacts.push(
+                            SkewCylinderThroughContact::mint(certificate)
+                                .map_err(GraphSurfaceIntersectionError::BranchCertificate)?,
+                        );
+                    }
+                    kgraph::PersistentSkewCylinderFiniteWindowRootEventKind::Boundary => {}
                 }
-                let certificate = family
-                    .isolated_point_certificate(sheet, event_ordinal)
-                    .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
-                        IntersectionCertificateError::InvalidTraceFamily,
-                    ))?;
-                isolated_contacts.push(
-                    SkewCylinderIsolatedContact::mint(certificate)
-                        .map_err(GraphSurfaceIntersectionError::BranchCertificate)?,
-                );
             }
         }
-        if isolated_contacts.len() != isolated_count {
+        if isolated_contacts.len() != isolated_count
+            || through_contacts.len() != through_contact_count
+        {
             return Err(GraphSurfaceIntersectionError::BranchCertificate(
                 IntersectionCertificateError::InvalidTraceFamily,
             ));
         }
     }
-    publish_skew_topology(branches, isolated_contacts)
+    publish_skew_topology(branches, isolated_contacts, through_contacts)
+}
+
+fn whole_contact_residual_ranges(mut ranges: [[ParamRange; 2]; 2]) -> [[ParamRange; 2]; 2] {
+    // The existing trusted residual theorem needs strict axial enclosure. The
+    // exact finite-window family separately proves closed authored-window
+    // occupancy, so this auxiliary proof uses one finite universal envelope
+    // only for evaluator/residual certification; it never changes topology.
+    let bound = f64::MAX / 4.0;
+    for window in &mut ranges {
+        window[1] = ParamRange::new(-bound, bound);
+    }
+    ranges
 }
 
 fn certify_open_span_pcurve_transport(
@@ -704,12 +899,14 @@ fn publish_whole_sheets(
             })
             .collect(),
         Vec::new(),
+        Vec::new(),
     )
 }
 
 fn publish_skew_topology(
     branches: Vec<CertifiedSkewCylinderBranch>,
     isolated_contacts: Vec<SkewCylinderIsolatedContact>,
+    through_contacts: Vec<SkewCylinderThroughContact>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
     let points = isolated_contacts
         .iter()
@@ -733,6 +930,7 @@ fn publish_skew_topology(
         strict_miss: None,
         branches: Some(branches),
         isolated_contacts,
+        through_contacts,
     })
 }
 
@@ -825,6 +1023,7 @@ fn branch_certificate_failure(
         strict_miss: None,
         branches: None,
         isolated_contacts: Vec::new(),
+        through_contacts: Vec::new(),
     }
 }
 
@@ -846,6 +1045,7 @@ fn single_branch_certificate_failure(
         strict_miss: None,
         branches: None,
         isolated_contacts: Vec::new(),
+        through_contacts: Vec::new(),
     }
 }
 
@@ -867,6 +1067,7 @@ fn open_span_certificate_failure(
         strict_miss: None,
         branches: None,
         isolated_contacts: Vec::new(),
+        through_contacts: Vec::new(),
     }
 }
 

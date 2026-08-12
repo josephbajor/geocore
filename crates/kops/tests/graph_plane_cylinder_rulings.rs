@@ -8,10 +8,11 @@ use kgeom::surface::{Cylinder, Plane, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError,
-    PlaneCylinderRulingTrace,
+    PlaneCylinderRulingContact, PlaneCylinderRulingTrace,
 };
 use kops::intersect::{
-    GraphSurfaceIntersectionError, IntersectionBranchTopology, intersect_bounded_graph_surfaces,
+    ContactKind, GraphSurfaceIntersectionError, IntersectionBranchTopology,
+    intersect_bounded_graph_surfaces,
 };
 
 fn range(lo: f64, hi: f64) -> ParamRange {
@@ -179,41 +180,61 @@ fn oblique_frame_rulings_use_the_canonical_signed_axis() {
 }
 
 #[test]
-fn tangent_and_near_parallel_graph_candidates_fail_closed() {
+fn exact_tangent_promotes_while_near_parallel_candidate_fails_closed() {
     let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
-    for plane in [
-        Plane::new(
-            Frame::new(
-                Point3::new(1.0, 0.0, 0.0),
-                Vec3::new(1.0, 0.0, 0.0),
-                Vec3::new(0.0, 1.0, 0.0),
-            )
-            .unwrap(),
-        ),
-        Plane::new(
-            Frame::new(
-                Point3::new(0.0, 0.0, 0.0),
-                Vec3::new(1.0, 0.0, 1e-12),
-                Vec3::new(0.0, 1.0, 0.0),
-            )
-            .unwrap(),
-        ),
-    ] {
-        let (graph, plane_handle, cylinder_handle) = graph_pair(plane, cylinder);
-        let error = intersect_bounded_graph_surfaces(
-            &graph,
-            plane_handle,
-            [range(-2.0, 2.0), range(-2.0, 2.0)],
-            cylinder_handle,
-            cylinder_window(range(-1.0, 1.0)),
-            Tolerances::default(),
+    let tangent = Plane::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
         )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            GraphSurfaceIntersectionError::BranchCertificate(
-                IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
-            )
-        ));
-    }
+        .unwrap(),
+    );
+    let (graph, plane_handle, cylinder_handle) = graph_pair(tangent, cylinder);
+    let hit = intersect_bounded_graph_surfaces(
+        &graph,
+        plane_handle,
+        [range(-2.0, 2.0), range(-2.0, 2.0)],
+        cylinder_handle,
+        cylinder_window(range(-1.0, 1.0)),
+        Tolerances::default(),
+    )
+    .unwrap();
+    let [edge] = hit.branch_graph.edges.as_slice() else {
+        panic!("exact tangent must promote one ruling: {hit:?}");
+    };
+    assert_eq!(edge.kind, ContactKind::Tangent);
+    assert_eq!(
+        edge.certificate
+            .as_plane_cylinder_ruling()
+            .unwrap()
+            .contact(),
+        PlaneCylinderRulingContact::Tangent
+    );
+    assert_ruling_lifts(edge, tangent, cylinder, true);
+
+    let near = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 1e-12),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let (graph, plane_handle, cylinder_handle) = graph_pair(near, cylinder);
+    let error = intersect_bounded_graph_surfaces(
+        &graph,
+        plane_handle,
+        [range(-2.0, 2.0), range(-2.0, 2.0)],
+        cylinder_handle,
+        cylinder_window(range(-1.0, 1.0)),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::UnsupportedCarrierParameterization { .. }
+        )
+    ));
 }

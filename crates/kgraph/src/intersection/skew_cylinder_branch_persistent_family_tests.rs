@@ -342,6 +342,46 @@ fn isolated_only_family_mints_event_carriers_without_curve_members() {
 }
 
 #[test]
+fn repeated_whole_sheet_contacts_mint_branch_attached_carriers() {
+    let cylinders = perpendicular_pair(0.0);
+    let ranges = [
+        [ParamRange::new(0.0, TAU), ParamRange::new(-3.0, 3.0)],
+        [ParamRange::new(0.0, TAU), ParamRange::new(-1.0, 1.0)],
+    ];
+    let fixture = family_fixture_for(cylinders, ranges, TEST_TOLERANCE);
+    assert!(fixture.members.is_empty());
+    let family = certify_fixture(&fixture).unwrap();
+
+    assert_eq!(family.member_count(), 0);
+    for sheet in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper] {
+        assert_eq!(
+            family.sheet_occupancy(sheet),
+            PersistentSkewCylinderFiniteWindowSheetOccupancy::Whole
+        );
+        assert_eq!(family.root_event_count(sheet), 2);
+        for ordinal in 0..2 {
+            let contact = family.through_contact_certificate(sheet, ordinal).unwrap();
+            assert_eq!(contact.family(), family);
+            assert_eq!(contact.sheet(), sheet);
+            assert_eq!(contact.event_certificate().event().root_count(), 1);
+            assert!(contact.root(0).is_some_and(|root| root.repeated));
+            assert!(contact.root(1).is_none());
+            assert!(
+                contact
+                    .source_surface_points()
+                    .into_iter()
+                    .all(|source| { source.dist(contact.point()) <= TEST_TOLERANCE })
+            );
+        }
+    }
+    assert!(
+        family
+            .through_contact_certificate(SkewCylinderSheet::Lower, 2)
+            .is_none()
+    );
+}
+
+#[test]
 fn missing_and_reordered_members_are_rejected() {
     let mut fixture = family_fixture();
     fixture.members.pop();

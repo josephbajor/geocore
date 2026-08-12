@@ -147,36 +147,69 @@ pub(super) fn collect_certified_curved_branches(
                             continue;
                         }
                         let recovered = if pair_kind == CertifiedCurvedPair::PlaneCylinder {
-                            semantic_ruling::recover(
+                            let tangent = semantic_ruling::recover_tangent_from_through_contacts(
                                 store,
                                 [raw_a, raw_b],
                                 &facades,
                                 [surface_a, surface_b],
-                                [face_a.sense, face_b.sense],
                                 discovery_domains,
                                 &error,
+                                &acc.through_contacts,
                                 scope,
-                            )?
-                        } else {
-                            None
-                        };
-                        if let Some(branches) = recovered {
-                            let endpoint_proof =
-                            ruling_publish::RulingEndpointCoincidenceProof::from_isolated_contacts(
-                                &acc.isolated_contacts,
-                            );
-                            for branch in branches {
-                                let endpoint_proof = endpoint_proof.clone();
-                                ruling_publish::append_branch_with_endpoint_proof(
+                            )?;
+                            match tangent {
+                                Some(branches) => Some((branches, true)),
+                                None => semantic_ruling::recover(
                                     store,
                                     [raw_a, raw_b],
                                     &facades,
-                                    branch,
-                                    |_, _, _| Ok(endpoint_proof),
-                                    root_identity,
+                                    [surface_a, surface_b],
+                                    [face_a.sense, face_b.sense],
+                                    discovery_domains,
+                                    &error,
                                     scope,
-                                    acc,
-                                )?;
+                                )?
+                                .map(|branches| (branches, false)),
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some((branches, tangent)) = recovered {
+                            let endpoint_proof =
+                                ruling_publish::RulingEndpointCoincidenceProof::from_isolated_contacts(
+                                    &acc.isolated_contacts,
+                                );
+                            let through_contact_proof = tangent.then(|| {
+                                ruling_publish::ThroughContactEndpointProof::from_contacts(
+                                    &acc.through_contacts,
+                                )
+                            });
+                            for branch in branches {
+                                let endpoint_proof = endpoint_proof.clone();
+                                if let Some(Some(proof)) = through_contact_proof.as_ref() {
+                                    ruling_publish::append_tangent_branch_with_through_contacts(
+                                        store,
+                                        [raw_a, raw_b],
+                                        &facades,
+                                        branch,
+                                        |_, _, _| Ok(endpoint_proof),
+                                        proof,
+                                        root_identity,
+                                        scope,
+                                        acc,
+                                    )?;
+                                } else {
+                                    ruling_publish::append_branch_with_endpoint_proof(
+                                        store,
+                                        [raw_a, raw_b],
+                                        &facades,
+                                        branch,
+                                        |_, _, _| Ok(endpoint_proof),
+                                        root_identity,
+                                        scope,
+                                        acc,
+                                    )?;
+                                }
                             }
                         } else {
                             acc.gaps.push(SectionGap {
@@ -229,6 +262,7 @@ pub(super) fn collect_certified_curved_branches(
                     continue;
                 }
                 let isolated_contacts = intersections.skew_cylinder_isolated_contacts();
+                let through_contacts = intersections.skew_cylinder_through_contacts();
                 let points_are_represented = intersections.raw.points.is_empty()
                     || pair_kind == CertifiedCurvedPair::CylinderCylinder
                         && isolated_contacts.len() == intersections.raw.points.len();
@@ -266,6 +300,7 @@ pub(super) fn collect_certified_curved_branches(
                             &facades,
                             &intersections.branch_graph.edges,
                             isolated_contacts,
+                            through_contacts,
                             &intersections.branch_graph.vertices,
                             [surface_a, surface_b],
                             [face_a.sense, face_b.sense],
@@ -296,6 +331,12 @@ fn append_plane_cylinder_branch(
     scope: &mut OperationScope<'_, '_>,
     acc: &mut SectionAccumulator,
 ) -> Result<()> {
+    let tangent_ruling = edge
+        .certificate
+        .as_plane_cylinder_ruling()
+        .is_some_and(|certificate| {
+            certificate.contact() == kgraph::PlaneCylinderRulingContact::Tangent
+        });
     let branch = match adapt_plane_cylinder_branch(
         facades,
         edge,
@@ -325,6 +366,28 @@ fn append_plane_cylinder_branch(
         let endpoint_proof = ruling_publish::RulingEndpointCoincidenceProof::from_isolated_contacts(
             &acc.isolated_contacts,
         );
+        if tangent_ruling {
+            let Some(through_contact_proof) =
+                ruling_publish::ThroughContactEndpointProof::from_contacts(&acc.through_contacts)
+            else {
+                acc.gaps.push(SectionGap {
+                    reason: GAP_PAIR_UNRESOLVED,
+                    faces: facades.to_vec(),
+                });
+                return Ok(());
+            };
+            return ruling_publish::append_tangent_branch_with_through_contacts(
+                store,
+                raw_faces,
+                facades,
+                branch,
+                |_, _, _| Ok(endpoint_proof),
+                &through_contact_proof,
+                root_identity,
+                scope,
+                acc,
+            );
+        }
         return ruling_publish::append_branch_with_endpoint_proof(
             store,
             raw_faces,
@@ -412,7 +475,7 @@ fn adapt_plane_cylinder_branch(
     surface_b: &SurfaceGeom,
     sense_b: Sense,
 ) -> PlaneCylinderBranchAdaptation {
-    if edge.kind != ContactKind::Transverse {
+    if !matches!(edge.kind, ContactKind::Transverse | ContactKind::Tangent) {
         return PlaneCylinderBranchAdaptation::Unsupported;
     }
     if edge.certificate.as_plane_cylinder_circle().is_some() {
@@ -515,15 +578,23 @@ fn adapt_plane_cylinder_ruling_branch(
     {
         return PlaneCylinderBranchAdaptation::Unsupported;
     }
-    let Some(flipped) = canonical_plane_cylinder_ruling_flip(
-        surface_a,
-        sense_a,
-        surface_b,
-        sense_b,
-        carrier.origin(),
-        carrier.dir(),
-    ) else {
-        return PlaneCylinderBranchAdaptation::OrientationIndeterminate;
+    let flipped = if certificate.contact() == kgraph::PlaneCylinderRulingContact::Tangent {
+        // Parallel face normals make `n_A × n_B` identically zero. The graph
+        // carrier is already lexicographically canonical, so exact tangencies
+        // retain that direction instead of inventing a transverse orientation.
+        false
+    } else {
+        let Some(flipped) = canonical_plane_cylinder_ruling_flip(
+            surface_a,
+            sense_a,
+            surface_b,
+            sense_b,
+            carrier.origin(),
+            carrier.dir(),
+        ) else {
+            return PlaneCylinderBranchAdaptation::OrientationIndeterminate;
+        };
+        flipped
     };
     let Some(pcurves) = adapt_branch_pcurves(edge, flipped) else {
         return PlaneCylinderBranchAdaptation::Unsupported;

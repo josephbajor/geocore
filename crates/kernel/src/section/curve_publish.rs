@@ -40,6 +40,7 @@ pub(super) fn publish_curves(
         super::skew_cylinder_fragment::CertifiedBoundedSkewCylinderFragment
     ],
     isolated_contacts: &[super::skew_cylinder_fragment::CertifiedSectionIsolatedContact],
+    through_contacts: &[super::SectionThroughContact],
     closed_stitched: &closed_stitch::ClosedStitchResult,
 ) -> Result<PublishedCurves> {
     if closed_fragments.len() != closed_fragment_evidence.len() {
@@ -85,8 +86,12 @@ pub(super) fn publish_curves(
     )?;
     let isolated_contacts = publish_isolated_contacts(part, isolated_contacts, &mut endpoints)?;
 
-    let mixed_stitched =
-        mixed_stitch::stitch_curve_fragments(&fragments, &isolated_contacts, endpoints.len())?;
+    let mixed_stitched = mixed_stitch::stitch_curve_fragments(
+        &fragments,
+        &isolated_contacts,
+        &endpoints,
+        through_contacts.len(),
+    )?;
     let components = mixed_stitched
         .components
         .iter()

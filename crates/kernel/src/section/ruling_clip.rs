@@ -12,6 +12,7 @@
 //! operation's shared root-identity authority assigns them after both
 //! operand clips have been collected.
 
+use kcore::expansion;
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
 use kcore::predicates::{Orientation, orient2d};
@@ -687,14 +688,31 @@ fn periodic_edge_parameter(
 
     let mut candidate = None;
     for winding in (first as i32)..=(last as i32) {
-        let winding = f64::from(winding);
+        let winding_scalar = f64::from(winding);
         let numerator = Interval::point(trace_longitude)
-            + Interval::point(winding) * Interval::point(period)
+            + Interval::point(winding_scalar) * Interval::point(period)
             - chart_shift
             - Interval::point(boundary.origin().x);
         let q = numerator.checked_div(Interval::point(direction.x))?;
         if !finite(q) {
             return None;
+        }
+        let exact_seam_root = [active.lo, active.hi].into_iter().any(|parameter| {
+            exact_periodic_boundary_root(
+                trace_longitude,
+                winding,
+                chart_winding,
+                boundary,
+                parameter,
+            )
+        });
+        if exact_seam_root {
+            // The whole-fin theorem has already proved that the two pcurve
+            // endpoints are one source-circle seam with intrinsic domain
+            // `[0, TAU)`. Canonicalize that single exact event to zero; if
+            // both adjacent integer lifts expose it, retain it only once.
+            candidate.get_or_insert(Interval::point(0.0));
+            continue;
         }
         if q.hi() < active.lo || q.lo() >= active.hi {
             continue;
@@ -712,6 +730,39 @@ fn periodic_edge_parameter(
         }
     }
     candidate
+}
+
+/// Exact sign test for
+/// `trace + winding*TAU - chart*TAU - origin - direction*parameter`.
+/// All inputs are authored finite doubles, so expansion arithmetic decides a
+/// boundary root without promoting a rounded interval overlap to authority.
+fn exact_periodic_boundary_root(
+    trace_longitude: f64,
+    winding: i32,
+    chart_winding: i32,
+    boundary: &Line2d,
+    parameter: f64,
+) -> bool {
+    let direction = boundary.dir().x;
+    let origin = boundary.origin().x;
+    if [trace_longitude, direction, origin, parameter]
+        .into_iter()
+        .any(|value| !value.is_finite())
+    {
+        return false;
+    }
+    // Every i32 and the full difference of two i32 values are exactly
+    // representable in f64.  Convert before subtracting so hostile chart
+    // metadata cannot overflow the integer subtraction in debug builds.
+    let turns = f64::from(winding) - f64::from(chart_winding);
+    let mut value = vec![trace_longitude];
+    value = expansion::sum(&value, &expansion::scale(&[core::f64::consts::TAU], turns));
+    value = expansion::sum(&value, &[-origin]);
+    value = expansion::sum(
+        &value,
+        &expansion::negate(&expansion::scale(&[direction], parameter)),
+    );
+    value.iter().all(|component| component.is_finite()) && expansion::sign(&value) == 0
 }
 
 fn finish_crossings(
@@ -1166,6 +1217,26 @@ mod tests {
     }
 
     #[test]
+    fn exact_periodic_boundary_predicate_distinguishes_the_chart_seam() {
+        let boundary = Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+        assert!(exact_periodic_boundary_root(0.0, 0, 0, &boundary, 0.0));
+        assert!(exact_periodic_boundary_root(
+            0.0,
+            1,
+            0,
+            &boundary,
+            core::f64::consts::TAU,
+        ));
+        assert!(!exact_periodic_boundary_root(
+            f64::EPSILON,
+            0,
+            0,
+            &boundary,
+            0.0,
+        ));
+    }
+
+    #[test]
     fn polygon_vertex_and_coincident_boundary_fail_closed() {
         let mut store = Store::new();
         let body = ktopo::make::block(&mut store, &Frame::world(), [4.0, 4.0, 1.0]).unwrap();
@@ -1271,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn periodic_parameter_refuses_unproved_membership_and_noncanonical_periods() {
+    fn periodic_parameter_certifies_exact_seam_and_refuses_noncanonical_periods() {
         let tau = core::f64::consts::TAU;
         let boundary = Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
         let mut store = Store::new();
@@ -1286,8 +1357,8 @@ mod tests {
         );
         assert_eq!(
             periodic_edge_parameter(0.0, &boundary, canonical),
-            None,
-            "a root whose enclosure touches the half-open seam is not admitted"
+            Some(Interval::point(0.0)),
+            "the exact whole-fin seam identity canonicalizes to intrinsic zero"
         );
 
         let doubled = periodic_use(
@@ -1311,6 +1382,11 @@ mod tests {
         assert_eq!(
             periodic_edge_parameter(1.0, &boundary, shifted_height),
             None
+        );
+
+        assert!(
+            !exact_periodic_boundary_root(0.0, i32::MAX, i32::MIN, &boundary, 0.0),
+            "extreme hostile chart windings must refuse without integer overflow"
         );
     }
 

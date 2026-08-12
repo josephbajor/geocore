@@ -46,6 +46,50 @@ pub(crate) struct RulingEndpointCoincidenceProof {
     roots: Vec<ExactRulingEndpointRoot>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ExactThroughContactRoot {
+    contact: usize,
+    edge: RawEdgeId,
+    edge_parameter: Interval,
+    point: Point3,
+}
+
+/// Existing branch-attached repeated roots that may terminate a tangent
+/// ruling without acquiring a transverse source-root ordinal.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ThroughContactEndpointProof {
+    roots: Vec<ExactThroughContactRoot>,
+}
+
+impl ThroughContactEndpointProof {
+    pub(super) fn from_contacts(contacts: &[super::SectionThroughContact]) -> Option<Self> {
+        let roots = contacts
+            .iter()
+            .enumerate()
+            .flat_map(|(contact, source)| {
+                source
+                    .roots
+                    .iter()
+                    .map(move |root| ExactThroughContactRoot {
+                        contact,
+                        edge: root.source_edge,
+                        edge_parameter: root.edge_parameter,
+                        point: source.point(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        (!roots.is_empty()).then_some(Self { roots })
+    }
+
+    fn exact_root(&self, site: RulingTrimSite) -> Option<ExactThroughContactRoot> {
+        let mut matches = self.roots.iter().copied().filter(|root| {
+            root.edge == site.edge && intervals_overlap(root.edge_parameter, site.edge_parameter)
+        });
+        let root = matches.next()?;
+        matches.next().is_none().then_some(root)
+    }
+}
+
 impl RulingEndpointCoincidenceProof {
     /// Bind at most two independently certified cap-ring pairs.
     pub(super) fn from_exact_cap_ring_pairs(pairs: &[[RawEdgeId; 2]]) -> Option<Self> {
@@ -157,6 +201,41 @@ where
         facades,
         branch,
         endpoint_proof,
+        None,
+        root_identity,
+        scope,
+        acc,
+    )
+}
+
+/// Publish an exact tangent ruling whose physical endpoints are already
+/// certified as repeated roots on skew-cylinder branches.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn append_tangent_branch_with_through_contacts<F>(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    branch: SectionBranch,
+    endpoint_proof: F,
+    through_contact_proof: &ThroughContactEndpointProof,
+    root_identity: &mut RootIdentityAuthority,
+    scope: &mut OperationScope<'_, '_>,
+    acc: &mut super::SectionAccumulator,
+) -> Result<()>
+where
+    F: FnOnce(
+        &[RulingClipSpan],
+        &[RulingClipSpan],
+        &mut OperationScope<'_, '_>,
+    ) -> Result<Option<RulingEndpointCoincidenceProof>>,
+{
+    append_branch_impl(
+        store,
+        raw_faces,
+        facades,
+        branch,
+        endpoint_proof,
+        Some(through_contact_proof),
         root_identity,
         scope,
         acc,
@@ -170,6 +249,7 @@ fn append_branch_impl<F>(
     facades: &[FaceId; 2],
     branch: SectionBranch,
     endpoint_proof: F,
+    through_contact_proof: Option<&ThroughContactEndpointProof>,
     root_identity: &mut RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
     acc: &mut super::SectionAccumulator,
@@ -238,6 +318,7 @@ where
         branch_index,
         &acc.branches[branch_index],
         &spans,
+        through_contact_proof,
         root_identity,
         scope,
     )? {
@@ -267,9 +348,18 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct CertifiedRulingEndpoint {
-    endpoint: CertifiedClosedEndpoint,
+    endpoint: CertifiedRulingEndpointAuthority,
     carrier_parameter: Interval,
     sites: [Option<CertifiedRulingTrimSite>; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CertifiedRulingEndpointAuthority {
+    SourceRoot(CertifiedClosedEndpoint),
+    ThroughContact {
+        contact: usize,
+        edge_parameters: [Option<Interval>; 2],
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -294,24 +384,41 @@ pub(super) enum RulingCertificationOutcome {
 }
 
 /// Issue operation-shared source-root identities for every ruling endpoint.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn certify_fragments(
     store: &Store,
     faces: [RawFaceId; 2],
     branch: usize,
     branch_evidence: &SectionBranch,
     spans: &[MergedRulingSpan],
+    through_contact_proof: Option<&ThroughContactEndpointProof>,
     roots: &mut RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<RulingCertificationOutcome> {
     let mut fragments = Vec::with_capacity(spans.len());
     let mut previous_end = None;
     for (ordinal, span) in spans.iter().copied().enumerate() {
-        let start = match certify_endpoint(store, faces, branch_evidence, span.start, roots, scope)?
-        {
+        let start = match certify_endpoint(
+            store,
+            faces,
+            branch_evidence,
+            span.start,
+            through_contact_proof,
+            roots,
+            scope,
+        )? {
             Ok(endpoint) => endpoint,
             Err(reason) => return Ok(RulingCertificationOutcome::Indeterminate(reason)),
         };
-        let end = match certify_endpoint(store, faces, branch_evidence, span.end, roots, scope)? {
+        let end = match certify_endpoint(
+            store,
+            faces,
+            branch_evidence,
+            span.end,
+            through_contact_proof,
+            roots,
+            scope,
+        )? {
             Ok(endpoint) => endpoint,
             Err(reason) => return Ok(RulingCertificationOutcome::Indeterminate(reason)),
         };
@@ -339,9 +446,59 @@ fn certify_endpoint(
     faces: [RawFaceId; 2],
     branch: &SectionBranch,
     merged: MergedRulingEndpoint,
+    through_contact_proof: Option<&ThroughContactEndpointProof>,
     roots: &mut RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<core::result::Result<CertifiedRulingEndpoint, &'static str>> {
+    let contact_matches = merged.sites.map(|site| {
+        site.and_then(|site| through_contact_proof.and_then(|proof| proof.exact_root(site)))
+    });
+    if contact_matches.iter().any(Option::is_some) {
+        let mut contact = None;
+        let mut contact_point = None;
+        for (operand, contact_match) in contact_matches.into_iter().enumerate() {
+            match (merged.sites[operand], contact_match) {
+                (None, None) if merged.edge_parameters[operand].is_none() => {}
+                (Some(site), Some(root))
+                    if merged.edge_parameters[operand] == Some(site.edge_parameter) =>
+                {
+                    if contact.is_some_and(|current| current != root.contact) {
+                        return Ok(Err(super::GAP_INCOMPATIBLE_EDGE_PARAMETERS));
+                    }
+                    contact = Some(root.contact);
+                    contact_point = Some(root.point);
+                }
+                _ => return Ok(Err(super::GAP_INCOMPATIBLE_EDGE_PARAMETERS)),
+            }
+        }
+        if merged.source_roots != [None, None] {
+            return Ok(Err(super::GAP_INCOMPATIBLE_EDGE_PARAMETERS));
+        }
+        let Some(projected) =
+            contact_point
+                .map(interval_point)
+                .and_then(|point| match branch.carrier {
+                    SectionCarrier::Line { origin, direction } => {
+                        project_point_to_line(point, origin, direction)
+                    }
+                    _ => None,
+                })
+        else {
+            return Ok(Err(super::GAP_CARRIER_ORIENTATION));
+        };
+        return Ok(Ok(CertifiedRulingEndpoint {
+            endpoint: CertifiedRulingEndpointAuthority::ThroughContact {
+                contact: contact.ok_or(Error::InconsistentTopology {
+                    source: kcore::error::Error::InvalidGeometry {
+                        reason: "tangent ruling contact proof lost its contact identity",
+                    },
+                })?,
+                edge_parameters: merged.edge_parameters,
+            },
+            carrier_parameter: hull_interval(projected, merged.carrier_parameter),
+            sites: [None, None],
+        }));
+    }
     let mut topology_sites = faces.map(stitch::SiteKey::Face);
     let mut root_keys = [None, None];
     let mut parameters = [None, None];
@@ -435,14 +592,14 @@ fn certify_endpoint(
         return Ok(Err(super::GAP_INCOMPATIBLE_EDGE_PARAMETERS));
     }
     Ok(Ok(CertifiedRulingEndpoint {
-        endpoint: CertifiedClosedEndpoint::trim_site(
+        endpoint: CertifiedRulingEndpointAuthority::SourceRoot(CertifiedClosedEndpoint::trim_site(
             stitch::VertexKey {
                 a: topology_sites[0],
                 b: topology_sites[1],
             },
             root_keys,
             parameters,
-        ),
+        )),
         carrier_parameter: carrier_parameter.ok_or(Error::InconsistentTopology {
             source: kcore::error::Error::InvalidGeometry {
                 reason: "ruling endpoint has no certified carrier parameter",
@@ -639,7 +796,8 @@ pub(super) fn publish_fragments(
             let root_scalars = evidence
                 .sites
                 .map(|site| site.map(|site| site.source_root_scalar));
-            let endpoint = intern_endpoint(part, evidence.endpoint, root_scalars, endpoints)?;
+            let endpoint =
+                intern_ruling_endpoint(part, evidence.endpoint, root_scalars, endpoints)?;
             let parameter = interval_midpoint(evidence.carrier_parameter);
             let point = line_point(branch, parameter).ok_or_else(|| {
                 inconsistent_topology("ruling fragment has no finite carrier representative")
@@ -666,6 +824,35 @@ pub(super) fn publish_fragments(
         });
     }
     Ok(())
+}
+
+fn intern_ruling_endpoint(
+    part: &PartId,
+    certified: CertifiedRulingEndpointAuthority,
+    root_scalars: [Option<super::root_identity::CertifiedSourceRootScalar>; 2],
+    endpoints: &mut Vec<SectionCurveEndpoint>,
+) -> Result<usize> {
+    let candidate = match certified {
+        CertifiedRulingEndpointAuthority::SourceRoot(certified) => {
+            adapt_endpoint(part, certified, root_scalars)?
+        }
+        CertifiedRulingEndpointAuthority::ThroughContact {
+            contact,
+            edge_parameters,
+        } => {
+            if root_scalars != [None, None] {
+                return Err(inconsistent_topology(
+                    "through-contact endpoint acquired transverse root scalars",
+                ));
+            }
+            SectionCurveEndpoint {
+                topology: SectionCurveEndpointTopology::ThroughContact { contact },
+                edge_parameters: edge_parameters
+                    .map(|value| value.map(SectionEdgeParameterInterval::from_interval)),
+            }
+        }
+    };
+    intern_endpoint_candidate(candidate, endpoints)
 }
 
 fn line_point(branch: &SectionBranch, parameter: f64) -> Option<Point3> {
@@ -785,6 +972,10 @@ fn endpoint_materializations_match(
             SectionCurveEndpointTopology::ParameterSeam { .. },
             SectionCurveEndpointTopology::ParameterSeam { .. },
         ) => true,
+        (
+            SectionCurveEndpointTopology::ThroughContact { contact: first },
+            SectionCurveEndpointTopology::ThroughContact { contact: second },
+        ) => first == second,
         _ => false,
     }
 }

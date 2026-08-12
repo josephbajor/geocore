@@ -6,7 +6,10 @@
 //! fragment count: every bounded fragment contributes one directed arrival and
 //! departure, and only one-in/one-out components become certified cycles.
 
-use super::{SectionCurveFragment, SectionCurveFragmentSpan, SectionIsolatedContact};
+use super::{
+    SectionCurveEndpoint, SectionCurveEndpointTopology, SectionCurveFragment,
+    SectionCurveFragmentSpan, SectionIsolatedContact,
+};
 use crate::error::{Error, Result};
 
 /// One maximal directed component in deterministic first-fragment order.
@@ -39,7 +42,8 @@ pub(crate) struct MixedStitchResult {
 pub(crate) fn stitch_curve_fragments(
     fragments: &[SectionCurveFragment],
     isolated_contacts: &[SectionIsolatedContact],
-    endpoint_count: usize,
+    endpoints: &[SectionCurveEndpoint],
+    through_contact_count: usize,
 ) -> Result<MixedStitchResult> {
     let occurrences = fragments
         .iter()
@@ -49,7 +53,25 @@ pub(crate) fn stitch_curve_fragments(
             endpoint_pair: fragment_endpoints(fragment),
         })
         .collect::<Vec<_>>();
-    let stitched = stitch_endpoint_occurrences(&occurrences, endpoint_count)?;
+    let contact_terminals = endpoints
+        .iter()
+        .map(|endpoint| match endpoint.topology() {
+            SectionCurveEndpointTopology::ThroughContact { contact }
+                if *contact < through_contact_count =>
+            {
+                Ok(true)
+            }
+            SectionCurveEndpointTopology::ThroughContact { .. } => Err(inconsistent_topology(
+                "section endpoint referenced an unknown through-contact",
+            )),
+            _ => Ok(false),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let stitched = stitch_endpoint_occurrences_with_terminals(
+        &occurrences,
+        endpoints.len(),
+        &contact_terminals,
+    )?;
     let mut components = stitched
         .components
         .into_iter()
@@ -59,7 +81,7 @@ pub(crate) fn stitch_curve_fragments(
             closed: component.closed,
         })
         .collect::<Vec<_>>();
-    let mut endpoint_components = vec![None; endpoint_count];
+    let mut endpoint_components = vec![None; endpoints.len()];
     for (component, stitched) in components.iter().enumerate() {
         for &fragment in &stitched.fragments {
             let Some(endpoint_pair) = fragments.get(fragment).and_then(fragment_endpoints) else {
@@ -139,11 +161,18 @@ struct EndpointIncidence {
     outgoing: usize,
     /// The unique departing fragment, cleared as soon as departure branches.
     successor: Option<usize>,
+    /// The unique arriving fragment, cleared as soon as arrival branches.
+    predecessor: Option<usize>,
 }
 
 impl EndpointIncidence {
-    fn record_incoming(&mut self) {
+    fn record_incoming(&mut self, fragment: usize) {
         self.incoming += 1;
+        self.predecessor = if self.incoming == 1 {
+            Some(fragment)
+        } else {
+            None
+        };
     }
 
     fn record_outgoing(&mut self, fragment: usize) {
@@ -170,6 +199,7 @@ struct EndpointPairGraph<'a, Source> {
     occurrences: &'a [EndpointPairOccurrence<Source>],
     incidence: Vec<EndpointIncidence>,
     endpoint_valid: Vec<bool>,
+    contact_terminals: Vec<bool>,
     defects: Vec<MixedStitchDefect>,
 }
 
@@ -177,7 +207,13 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
     fn build(
         occurrences: &'a [EndpointPairOccurrence<Source>],
         endpoint_count: usize,
+        contact_terminals: &[bool],
     ) -> Result<Self> {
+        if contact_terminals.len() != endpoint_count {
+            return Err(inconsistent_topology(
+                "section contact-terminal evidence was not endpoint-aligned",
+            ));
+        }
         let mut incidence = vec![EndpointIncidence::default(); endpoint_count];
 
         for (occurrence, published) in occurrences.iter().enumerate() {
@@ -191,7 +227,7 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
                 ));
             }
             incidence[endpoint_pair.departure].record_outgoing(occurrence);
-            incidence[endpoint_pair.arrival].record_incoming();
+            incidence[endpoint_pair.arrival].record_incoming(occurrence);
         }
 
         let mut defects = Vec::new();
@@ -200,21 +236,28 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
             if !counts.touched() {
                 continue;
             }
-            if counts.incoming != 1 {
+            let valid_contact_terminal = contact_terminals[endpoint]
+                && matches!((counts.incoming, counts.outgoing), (1, 0) | (0, 1));
+            if !counts.is_one_in_one_out() && !valid_contact_terminal {
                 endpoint_valid[endpoint] = false;
-                defects.push(MixedStitchDefect::IncomingDegree);
+                if counts.incoming != 1 {
+                    defects.push(MixedStitchDefect::IncomingDegree);
+                }
+                if counts.outgoing != 1 {
+                    defects.push(MixedStitchDefect::OutgoingDegree);
+                }
             }
-            if counts.outgoing != 1 {
-                endpoint_valid[endpoint] = false;
-                defects.push(MixedStitchDefect::OutgoingDegree);
-            }
-            debug_assert_eq!(endpoint_valid[endpoint], counts.is_one_in_one_out());
+            debug_assert_eq!(
+                endpoint_valid[endpoint],
+                counts.is_one_in_one_out() || valid_contact_terminal
+            );
         }
 
         Ok(Self {
             occurrences,
             incidence,
             endpoint_valid,
+            contact_terminals: contact_terminals.to_vec(),
             defects,
         })
     }
@@ -227,7 +270,7 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
                 continue;
             }
             let published = self.occurrences[first];
-            let Some(first_endpoints) = published.endpoint_pair else {
+            let Some(_) = published.endpoint_pair else {
                 used[first] = true;
                 components.push(EndpointPairComponent {
                     sources: vec![published.source],
@@ -235,8 +278,12 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
                 });
                 continue;
             };
-            let component = self.walk_chain(first, first_endpoints, &mut used)?;
-            if !component.closed {
+            let first = self.chain_start(first)?;
+            let first_endpoints = self.occurrences[first]
+                .endpoint_pair
+                .ok_or_else(|| inconsistent_topology("chain start lost its endpoint pair"))?;
+            let (component, admitted) = self.walk_chain(first, first_endpoints, &mut used)?;
+            if !admitted {
                 self.defects.push(MixedStitchDefect::OpenChain);
             } else {
                 components.push(component);
@@ -249,12 +296,34 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
         })
     }
 
+    fn chain_start(&self, first: usize) -> Result<usize> {
+        let mut current = first;
+        for _ in 0..=self.occurrences.len() {
+            let endpoints = self.occurrences[current].endpoint_pair.ok_or_else(|| {
+                inconsistent_topology("bounded chain search found a whole fragment")
+            })?;
+            if self.contact_terminals[endpoints.departure] {
+                return Ok(current);
+            }
+            let Some(previous) = self.incidence[endpoints.departure].predecessor else {
+                return Ok(current);
+            };
+            if previous == first {
+                return Ok(first);
+            }
+            current = previous;
+        }
+        Err(inconsistent_topology(
+            "section endpoint predecessor search exceeded the fragment count",
+        ))
+    }
+
     fn walk_chain(
         &self,
         first: usize,
         first_endpoints: DirectedEndpointPair,
         used: &mut [bool],
-    ) -> Result<EndpointPairComponent<Source>> {
+    ) -> Result<(EndpointPairComponent<Source>, bool)> {
         used[first] = true;
         let origin = first_endpoints.departure;
         let mut at = first_endpoints.arrival;
@@ -285,18 +354,36 @@ impl<'a, Source: Copy> EndpointPairGraph<'a, Source> {
                 && self.endpoint_valid[next_endpoints.arrival];
             at = next_endpoints.arrival;
         };
-        Ok(EndpointPairComponent {
-            sources: ordered,
-            closed,
-        })
+        let admitted =
+            closed || self.contact_terminals[origin] && self.contact_terminals[at] && unambiguous;
+        Ok((
+            EndpointPairComponent {
+                sources: ordered,
+                closed,
+            },
+            admitted,
+        ))
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn stitch_endpoint_occurrences<Source: Copy>(
     occurrences: &[EndpointPairOccurrence<Source>],
     endpoint_count: usize,
 ) -> Result<EndpointPairStitchResult<Source>> {
-    EndpointPairGraph::build(occurrences, endpoint_count)?.stitch()
+    stitch_endpoint_occurrences_with_terminals(
+        occurrences,
+        endpoint_count,
+        &vec![false; endpoint_count],
+    )
+}
+
+fn stitch_endpoint_occurrences_with_terminals<Source: Copy>(
+    occurrences: &[EndpointPairOccurrence<Source>],
+    endpoint_count: usize,
+    contact_terminals: &[bool],
+) -> Result<EndpointPairStitchResult<Source>> {
+    EndpointPairGraph::build(occurrences, endpoint_count, contact_terminals)?.stitch()
 }
 
 fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<DirectedEndpointPair> {
@@ -476,6 +563,33 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn exact_contact_terminals_admit_open_stratified_chains_only_at_both_ends() {
+        let fragments = [
+            EndpointPairOccurrence {
+                source: RULING_B,
+                endpoint_pair: bounded(SymbolicEndpoint::B, SymbolicEndpoint::C),
+            },
+            EndpointPairOccurrence {
+                source: RULING_A,
+                endpoint_pair: bounded(SymbolicEndpoint::A, SymbolicEndpoint::B),
+            },
+        ];
+        let admitted =
+            stitch_endpoint_occurrences_with_terminals(&fragments, 3, &[true, false, true])
+                .unwrap();
+        assert!(admitted.defects.is_empty(), "{admitted:?}");
+        assert_eq!(admitted.components.len(), 1);
+        assert_eq!(admitted.components[0].sources, vec![RULING_A, RULING_B]);
+        assert!(!admitted.components[0].closed);
+
+        let refused =
+            stitch_endpoint_occurrences_with_terminals(&fragments, 3, &[true, false, false])
+                .unwrap();
+        assert!(refused.components.is_empty());
+        assert!(refused.defects.contains(&MixedStitchDefect::OpenChain));
     }
 
     #[test]
