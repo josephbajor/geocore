@@ -30,7 +30,11 @@ pub(super) fn execute_transverse_cylinder_boolean(
     let first = extract_cylinder_operand(edit, bodies[0].clone(), 0, scope)?;
     let second = extract_cylinder_operand(edit, bodies[1].clone(), 1, scope)?;
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
-    if !graph.through_contacts().is_empty() {
+    if !graph.through_contacts().is_empty()
+        || graph.isolated_contacts().iter().any(|contact| {
+            contact.kind() == crate::section::SectionIsolatedContactKind::SupportTangency
+        })
+    {
         return Ok(CurvedBooleanPipelineOutcome::Refused(
             CurvedBooleanPipelineRefusal::ResultTopologyUnsupported,
         ));

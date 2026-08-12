@@ -1149,33 +1149,16 @@ fn non_right_skew_positive_pair_matches_independent_oracle_and_is_swap_stable() 
 }
 
 #[test]
-fn perpendicular_skew_root_and_ulp_cases_keep_structured_evidence() {
-    #[derive(Clone, Copy)]
-    struct Fixture {
-        name: &'static str,
-        offset: f64,
-        code: DiagnosticCode,
-        capability: CapabilityId,
-    }
-
-    let fixtures = [
-        Fixture {
-            name: "exact-repeated-zero",
-            offset: 3.0,
-            code: SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
-            capability: SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
-        },
-        Fixture {
-            name: "one-ulp-rooted-neighbor",
-            offset: 3.0_f64.next_down(),
-            code: SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
-            capability: SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
-        },
-    ];
+fn exact_perpendicular_support_contact_publishes_while_rooted_ulp_neighbor_refuses() {
+    let rotated = Frame::new(
+        Point3::new(2.0, -1.0, 3.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
     let windows = skew_windows();
-
-    for fixture in fixtures {
-        let [first, second] = perpendicular_axis_pair(Frame::world(), fixture.offset, 2.0);
+    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+        let [first, second] = perpendicular_axis_pair(frame, 3.0, 2.0);
         let (graph, first_handle, second_handle) = graph_pair(first, second);
         let forward = intersect_bounded_graph_surfaces(
             &graph,
@@ -1205,27 +1188,60 @@ fn perpendicular_skew_root_and_ulp_cases_keep_structured_evidence() {
         )
         .unwrap();
 
-        assert_eq!(forward, replay, "{} changed across replay", fixture.name);
+        assert_eq!(forward, replay, "{name} changed across replay");
         for (result, sources) in [
             (&forward, [first_handle, second_handle]),
             (&reversed, [second_handle, first_handle]),
         ] {
-            assert_single_skew_incomplete(
-                result,
-                sources,
-                fixture.code,
-                SKEW_CYLINDER_DISCRIMINANT_WORK,
-                fixture.capability,
-                fixture.name,
+            assert_eq!(result.branch_graph.source_surfaces, sources);
+            assert!(result.raw.is_complete(), "{name}");
+            assert_eq!(result.raw.points.len(), 1, "{name}");
+            assert!(result.raw.curves.is_empty(), "{name}");
+            assert!(result.raw.regions.is_empty(), "{name}");
+            assert_eq!(result.branch_graph.vertices.len(), 1, "{name}");
+            assert!(result.branch_graph.edges.is_empty(), "{name}");
+            assert_eq!(
+                result.branch_graph.vertices[0].event,
+                IntersectionBranchVertexEvent::IsolatedContact
             );
+            assert_eq!(result.branch_graph.vertices[0].kind, ContactKind::Tangent);
+            assert!(result.skew_cylinder_isolated_contacts().is_empty());
+            assert!(result.skew_cylinder_through_contacts().is_empty());
+            let [contact] = result.skew_cylinder_support_contacts() else {
+                panic!("{name}: expected one support contact")
+            };
+            assert!(contact.certificate().root().repeated());
+            assert_eq!(contact.certificate().topology().roots().len(), 1);
+            assert_eq!(contact.raw_point(), result.raw.points[0]);
+            assert!(contact.point().dist(frame.origin() + frame.y()) <= 1.0e-12);
         }
         assert_eq!(
             reversed.raw,
             forward.raw.clone().swapped(),
-            "{} changed under operand reversal",
-            fixture.name
+            "{name} changed under operand reversal"
         );
     }
+
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 3.0_f64.next_down(), 2.0);
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let rooted = intersect_bounded_graph_surfaces(
+        &graph,
+        first_handle,
+        windows[0],
+        second_handle,
+        windows[1],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_single_skew_incomplete(
+        &rooted,
+        [first_handle, second_handle],
+        SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE,
+        SKEW_CYLINDER_DISCRIMINANT_WORK,
+        SKEW_CYLINDER_CONTACT_ROOT_TOPOLOGY,
+        "one-ulp-rooted-neighbor",
+    );
+    assert!(rooted.skew_cylinder_support_contacts().is_empty());
 }
 
 #[test]
@@ -1406,6 +1422,47 @@ fn skew_discriminant_work_has_exact_n_and_atomic_n_minus_one_boundary() {
         observed_work(denied.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
         0,
         "a rejected single-stage debit must not partially consume work"
+    );
+
+    let [first, tangent] = perpendicular_axis_pair(Frame::world(), 3.0, 2.0);
+    let (contact_graph, first_handle, tangent_handle) = graph_pair(first, tangent);
+    let exact_contact = intersect_bounded_graph_surfaces_with_context(
+        &contact_graph,
+        first_handle,
+        windows[0],
+        tangent_handle,
+        windows[1],
+        &exact_context,
+    );
+    let exact_contact_result = exact_contact.result().unwrap();
+    assert!(exact_contact_result.raw.is_complete());
+    assert_eq!(
+        exact_contact_result.skew_cylinder_support_contacts().len(),
+        1
+    );
+    assert_eq!(
+        observed_work(exact_contact.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
+        SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK
+    );
+
+    let denied_contact = intersect_bounded_graph_surfaces_with_context(
+        &contact_graph,
+        first_handle,
+        windows[0],
+        tangent_handle,
+        windows[1],
+        &denied_context,
+    );
+    assert!(matches!(
+        denied_contact.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied_contact.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied_contact.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
+        0
     );
 }
 

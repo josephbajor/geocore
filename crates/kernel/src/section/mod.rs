@@ -86,8 +86,8 @@ pub(crate) use skew_cylinder_persistence::{
 };
 pub use skew_cylinder_public::{
     SectionBoundedProceduralFragmentEnd, SectionBoundedProceduralPhysicalRoot,
-    SectionBoundedProceduralTrimProvenance, SectionIsolatedContact, SectionIsolatedContactRoot,
-    SectionSkewCylinderAxialBoundary, SectionSkewCylinderBranchCarrier,
+    SectionBoundedProceduralTrimProvenance, SectionIsolatedContact, SectionIsolatedContactKind,
+    SectionIsolatedContactRoot, SectionSkewCylinderAxialBoundary, SectionSkewCylinderBranchCarrier,
     SectionSkewCylinderBranchPcurve, SectionSkewCylinderCarrierRootEnclosure,
     SectionSkewCylinderEmbeddingCertificate, SectionSkewCylinderInterval,
     SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,

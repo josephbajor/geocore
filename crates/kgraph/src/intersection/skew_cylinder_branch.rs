@@ -88,10 +88,19 @@ pub use axial_bound::{
     ExactSkewCylinderDiscriminant, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SkewCylinderAngularRootBracket, SkewCylinderAxialBoundProvenance,
     SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
-    SkewCylinderAxialRoot, SkewCylinderAxialRootFailure, SkewCylinderExactDiscriminantTopology,
-    SkewCylinderHalfAngleChart, SkewCylinderHalfAngleRootBracket,
-    SkewCylinderStrictPositiveTwoSheetAdmissionCertificate, classify_skew_cylinder_axial_bound,
-    classify_skew_cylinder_exact_discriminant, exact_skew_cylinder_discriminant,
+    SkewCylinderAxialRoot, SkewCylinderAxialRootFailure,
+    SkewCylinderDiscriminantContactTopologyCertificate, SkewCylinderDiscriminantRoot,
+    SkewCylinderExactDiscriminantTopology, SkewCylinderHalfAngleChart,
+    SkewCylinderHalfAngleRootBracket, SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
+    classify_skew_cylinder_axial_bound, classify_skew_cylinder_exact_discriminant,
+    exact_skew_cylinder_discriminant,
+};
+
+#[path = "skew_cylinder_support_contact.rs"]
+mod support_contact;
+pub use support_contact::{
+    PersistentSkewCylinderSupportContactCertificate,
+    certify_persistent_skew_cylinder_support_contact,
 };
 
 #[path = "skew_cylinder_finite_window_topology.rs"]

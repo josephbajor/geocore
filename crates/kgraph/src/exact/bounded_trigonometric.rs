@@ -163,6 +163,16 @@ impl CyclicSecondHarmonicTopology {
             Self::IdenticallyZero | Self::Nonzero { .. } => None,
         }
     }
+
+    pub(crate) fn into_parts(self) -> Option<(Vec<CyclicRoot>, Vec<StrictSign>)> {
+        match self {
+            Self::IdenticallyZero => None,
+            Self::Nonzero {
+                roots,
+                open_cell_signs,
+            } => Some((roots, open_cell_signs)),
+        }
+    }
 }
 
 /// Stable fail-closed causes for cyclic topology construction.

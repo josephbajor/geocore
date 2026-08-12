@@ -18,7 +18,7 @@ use kgraph::{
 use kops::intersect::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderHalfAngleChartProof, SkewCylinderIsolatedContact, SkewCylinderRootInsideSideProof,
-    SkewCylinderThroughContact,
+    SkewCylinderSupportContact, SkewCylinderThroughContact,
 };
 use ktopo::entity::{
     EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId,
@@ -30,6 +30,7 @@ use super::root_identity::{
     CertifiedSourceRootScalar, RootIdentityAuthority, RootOrderOutcome, RootResolution,
     SourceRootKey, SourceRootQuery,
 };
+use super::skew_cylinder_public::SectionIsolatedContactSource;
 use super::source_annulus::{self, CertifiedSourceAnnulus};
 use super::*;
 
@@ -66,7 +67,7 @@ enum PreparedSkewFacePair {
 #[derive(Debug, Clone)]
 pub(super) struct CertifiedSectionIsolatedContact {
     pub(super) faces: [FaceId; 2],
-    pub(super) source: SkewCylinderIsolatedContact,
+    pub(super) source: SectionIsolatedContactSource,
     pub(super) endpoint: closed_stitch::CertifiedClosedEndpoint,
     pub(super) root_scalars: [Option<CertifiedSourceRootScalar>; 2],
     pub(super) roots: Vec<SectionIsolatedContactRoot>,
@@ -93,6 +94,7 @@ pub(super) fn append_face_pair_branches(
     edges: &[IntersectionBranchEdge],
     isolated_contacts: &[SkewCylinderIsolatedContact],
     through_contacts: &[SkewCylinderThroughContact],
+    support_contacts: &[SkewCylinderSupportContact],
     vertices: &[kops::intersect::IntersectionBranchVertex],
     surfaces: [&SurfaceGeom; 2],
     senses: [Sense; 2],
@@ -103,6 +105,7 @@ pub(super) fn append_face_pair_branches(
 ) -> Result<()> {
     let has_skew = !isolated_contacts.is_empty()
         || !through_contacts.is_empty()
+        || !support_contacts.is_empty()
         || edges.iter().any(|edge| {
             edge.certificate.as_skew_cylinder_two_sheet().is_some()
                 || edge.certificate.as_skew_cylinder_whole_contact().is_some()
@@ -152,7 +155,7 @@ pub(super) fn append_face_pair_branches(
     };
     let annuli = [first_annulus, second_annulus];
 
-    let isolated_contacts = match prepare_isolated_contacts(
+    let mut isolated_contacts = match prepare_isolated_contacts(
         store,
         raw_faces,
         facades,
@@ -170,6 +173,16 @@ pub(super) fn append_face_pair_branches(
             return Ok(());
         }
     };
+    let Some(support_contacts) =
+        prepare_support_contacts(raw_faces, facades, support_contacts, &annuli, surfaces)
+    else {
+        acc.gaps.push(SectionGap {
+            reason: GAP_PAIR_UNRESOLVED,
+            faces: facades.to_vec(),
+        });
+        return Ok(());
+    };
+    isolated_contacts.extend(support_contacts);
     let through_contacts = match super::skew_cylinder_through_contact::prepare(
         raw_faces,
         facades,
@@ -366,7 +379,7 @@ fn prepare_isolated_contacts(
         }
         prepared.push(CertifiedSectionIsolatedContact {
             faces: facades.clone(),
-            source: contact,
+            source: SectionIsolatedContactSource::FiniteWindow(Box::new(contact)),
             endpoint: closed_stitch::CertifiedClosedEndpoint::trim_site(
                 stitch::VertexKey {
                     a: sites[0],
@@ -381,6 +394,66 @@ fn prepare_isolated_contacts(
         });
     }
     Ok(Some(prepared))
+}
+
+fn prepare_support_contacts(
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    contacts: &[SkewCylinderSupportContact],
+    annuli: &[CertifiedSourceAnnulus; 2],
+    surfaces: [&SurfaceGeom; 2],
+) -> Option<Vec<CertifiedSectionIsolatedContact>> {
+    let source_cylinders = surfaces.map(|surface| match surface {
+        SurfaceGeom::Cylinder(cylinder) => Some(*cylinder),
+        _ => None,
+    });
+    let [Some(first_cylinder), Some(second_cylinder)] = source_cylinders else {
+        return None;
+    };
+    let mut prepared = Vec::with_capacity(contacts.len());
+    for contact in contacts {
+        let certificate = contact.certificate();
+        if certificate.source_cylinders() != [first_cylinder, second_cylinder] {
+            return None;
+        }
+        let windows = certificate.source_windows();
+        let parameters = contact.surface_parameters();
+        if !finite_point(contact.point())
+            || parameters
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return None;
+        }
+        for operand in 0..2 {
+            if windows[operand][1].lo.to_bits()
+                != annuli[operand].lower().authored_height().to_bits()
+                || windows[operand][1].hi.to_bits()
+                    != annuli[operand].upper().authored_height().to_bits()
+                || parameters[operand][1] <= windows[operand][1].lo
+                || parameters[operand][1] >= windows[operand][1].hi
+            {
+                return None;
+            }
+        }
+        prepared.push(CertifiedSectionIsolatedContact {
+            faces: facades.clone(),
+            source: SectionIsolatedContactSource::SupportTangency(Box::new(contact.clone())),
+            endpoint: closed_stitch::CertifiedClosedEndpoint::trim_site(
+                stitch::VertexKey {
+                    a: stitch::SiteKey::Face(raw_faces[0]),
+                    b: stitch::SiteKey::Face(raw_faces[1]),
+                },
+                [None, None],
+                [None, None],
+            ),
+            root_scalars: [None, None],
+            roots: Vec::new(),
+            root_evidence: [None, None],
+        });
+    }
+    Some(prepared)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1370,6 +1443,7 @@ mod tests {
             &edges,
             intersections.skew_cylinder_isolated_contacts(),
             intersections.skew_cylinder_through_contacts(),
+            intersections.skew_cylinder_support_contacts(),
             &intersections.branch_graph.vertices,
             surfaces,
             face_data.map(|face| face.sense()),
@@ -1407,6 +1481,7 @@ mod tests {
             &edges,
             intersections.skew_cylinder_isolated_contacts(),
             intersections.skew_cylinder_through_contacts(),
+            intersections.skew_cylinder_support_contacts(),
             &intersections.branch_graph.vertices,
             surfaces,
             face_data.map(|face| face.sense()),

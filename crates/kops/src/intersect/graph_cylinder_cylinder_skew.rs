@@ -28,18 +28,19 @@ use kgraph::{
     PersistentSkewCylinderFiniteWindowIsolatedPointCertificate,
     PersistentSkewCylinderFiniteWindowMemberInput,
     PersistentSkewCylinderFiniteWindowThroughContactCertificate,
-    SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK,
-    SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK,
-    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
-    SkewCylinderFiniteWindowRootEventKind, SkewCylinderFiniteWindowTopologyCertificate,
-    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    PersistentSkewCylinderSupportContactCertificate, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+    SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
+    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
+    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowRootEventKind,
+    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
+    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
     SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide, SkewCylinderSheet,
     SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     certify_paired_skew_cylinder_branch_residuals,
     certify_paired_skew_cylinder_branch_subrange_residuals,
     certify_persistent_skew_cylinder_finite_window_family,
-    classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
-    plan_skew_cylinder_root_clusters,
+    certify_persistent_skew_cylinder_support_contact, classify_skew_cylinder_exact_discriminant,
+    classify_skew_cylinder_open_spans, plan_skew_cylinder_root_clusters,
 };
 
 use super::cylinder_cylinder::{compare_cylinder_windows, validate_ranges};
@@ -271,6 +272,57 @@ pub struct SkewCylinderThroughContact {
     certificate: PersistentSkewCylinderFiniteWindowThroughContactCertificate,
 }
 
+/// Exact projective-root-owned isolated tangency of two skew cylinder
+/// supports, proven strictly inside both finite source windows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderSupportContact {
+    certificate: PersistentSkewCylinderSupportContactCertificate,
+    raw_point: SurfaceSurfacePoint,
+}
+
+impl SkewCylinderSupportContact {
+    /// Sealed kgraph root, cell, and finite-window proof.
+    pub const fn certificate(&self) -> &PersistentSkewCylinderSupportContactCertificate {
+        &self.certificate
+    }
+
+    /// Deterministic representative of the exact projective point carrier.
+    pub fn point(&self) -> Point3 {
+        self.certificate.point()
+    }
+
+    /// Caller-order parameters on the two source cylinders.
+    pub fn surface_parameters(&self) -> [[f64; 2]; 2] {
+        self.certificate.source_surface_parameters()
+    }
+
+    /// Canonical raw tangent point retained by the legacy solver result.
+    pub const fn raw_point(&self) -> SurfaceSurfacePoint {
+        self.raw_point
+    }
+
+    fn mint(
+        certificate: PersistentSkewCylinderSupportContactCertificate,
+    ) -> Result<Self, IntersectionCertificateError> {
+        let parameters = certificate.source_surface_parameters();
+        let [first, second] = certificate.source_surface_points();
+        let residual = first.dist(second);
+        if !residual.is_finite() || residual > certificate.tolerance() {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        Ok(Self {
+            raw_point: SurfaceSurfacePoint {
+                point: (first + second) * 0.5,
+                uv_a: parameters[0],
+                uv_b: parameters[1],
+                residual,
+                kind: ContactKind::Tangent,
+            },
+            certificate,
+        })
+    }
+}
+
 impl SkewCylinderThroughContact {
     /// Sealed kgraph proof owning the exact branch-attached event.
     pub const fn certificate(self) -> PersistentSkewCylinderFiniteWindowThroughContactCertificate {
@@ -322,6 +374,7 @@ pub(super) struct CertifiedSkewCylinderIntersections {
     pub(super) branches: Option<Vec<CertifiedSkewCylinderBranch>>,
     pub(super) isolated_contacts: Vec<SkewCylinderIsolatedContact>,
     pub(super) through_contacts: Vec<SkewCylinderThroughContact>,
+    pub(super) support_contacts: Vec<SkewCylinderSupportContact>,
 }
 
 /// Proof and exact endpoint evidence aligned with one canonicalized raw branch.
@@ -384,14 +437,13 @@ pub(super) fn intersect_certified_skew_cylinders(
 
     let first_admission = classify_one_parameterization(cylinders);
     let (admission, parameterization_reversed) = match first_admission {
-        DiscriminantAdmission::StrictPositive(_) | DiscriminantAdmission::StrictNegative => {
-            (first_admission, false)
-        }
+        admission @ (DiscriminantAdmission::StrictPositive(_)
+        | DiscriminantAdmission::StrictNegative) => (admission, false),
         DiscriminantAdmission::NumericResolution => (
             classify_one_parameterization([cylinders[1], cylinders[0]]),
             true,
         ),
-        DiscriminantAdmission::Contact => {
+        DiscriminantAdmission::Contact(contact) => {
             let reversed = classify_one_parameterization([cylinders[1], cylinders[0]]);
             // A projection fold may look like Contact in one ruling chart
             // while the reverse chart proves two regular sheets. Conversely,
@@ -399,9 +451,9 @@ pub(super) fn intersect_certified_skew_cylinders(
             match reversed {
                 DiscriminantAdmission::StrictPositive(_) => (reversed, true),
                 DiscriminantAdmission::StrictNegative
-                | DiscriminantAdmission::Contact
+                | DiscriminantAdmission::Contact(_)
                 | DiscriminantAdmission::NumericResolution => {
-                    (DiscriminantAdmission::Contact, false)
+                    (DiscriminantAdmission::Contact(contact), false)
                 }
             }
         }
@@ -414,6 +466,7 @@ pub(super) fn intersect_certified_skew_cylinders(
             branches: None,
             isolated_contacts: Vec::new(),
             through_contacts: Vec::new(),
+            support_contacts: Vec::new(),
         }),
         DiscriminantAdmission::StrictPositive(strict_positive) => {
             let (proof_cylinders, proof_ranges) = if parameterization_reversed {
@@ -430,21 +483,60 @@ pub(super) fn intersect_certified_skew_cylinders(
                 scope,
             )
         }
-        DiscriminantAdmission::Contact => Ok(CertifiedSkewCylinderIntersections {
-            raw: contact_topology_incomplete(scope),
-            strict_miss: None,
-            branches: None,
-            isolated_contacts: Vec::new(),
-            through_contacts: Vec::new(),
-        }),
+        DiscriminantAdmission::Contact(contact) => {
+            let (proof_ranges, source_reversed) = if parameterization_reversed {
+                ([ranges[1], ranges[0]], reversed ^ true)
+            } else {
+                (ranges, reversed)
+            };
+            intersect_isolated_support_contact(
+                *contact,
+                proof_ranges,
+                source_reversed,
+                tolerance,
+                scope,
+            )
+        }
         DiscriminantAdmission::NumericResolution => Ok(CertifiedSkewCylinderIntersections {
             raw: numeric_resolution(scope, SKEW_CYLINDER_DISCRIMINANT_WORK),
             strict_miss: None,
             branches: None,
             isolated_contacts: Vec::new(),
             through_contacts: Vec::new(),
+            support_contacts: Vec::new(),
         }),
     }
+}
+
+fn intersect_isolated_support_contact(
+    contact: kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+    formula_ranges: [[ParamRange; 2]; 2],
+    source_reversed: bool,
+    tolerance: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    let formula_to_source = if source_reversed { [1, 0] } else { [0, 1] };
+    let certificate = match certify_persistent_skew_cylinder_support_contact(
+        contact,
+        formula_ranges,
+        formula_to_source,
+        tolerance,
+    ) {
+        Ok(certificate) => certificate,
+        Err(_) => {
+            return Ok(CertifiedSkewCylinderIntersections {
+                raw: contact_topology_incomplete(scope),
+                strict_miss: None,
+                branches: None,
+                isolated_contacts: Vec::new(),
+                through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
+            });
+        }
+    };
+    let support = SkewCylinderSupportContact::mint(certificate)
+        .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
+    publish_skew_topology(Vec::new(), Vec::new(), Vec::new(), vec![support])
 }
 
 fn intersect_strict_positive_two_sheet(
@@ -495,6 +587,7 @@ fn intersect_strict_positive_two_sheet(
                 branches: None,
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
             });
         }
         Err(_) => {
@@ -504,6 +597,7 @@ fn intersect_strict_positive_two_sheet(
                 branches: None,
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
             });
         }
     };
@@ -522,6 +616,7 @@ fn intersect_strict_positive_two_sheet(
                 branches: None,
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
             });
         }
     };
@@ -539,6 +634,7 @@ fn intersect_strict_positive_two_sheet(
                 branches: None,
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
             });
         }
         Err(_) => {
@@ -548,6 +644,7 @@ fn intersect_strict_positive_two_sheet(
                 branches: None,
                 isolated_contacts: Vec::new(),
                 through_contacts: Vec::new(),
+                support_contacts: Vec::new(),
             });
         }
     };
@@ -558,6 +655,7 @@ fn intersect_strict_positive_two_sheet(
             branches: None,
             isolated_contacts: Vec::new(),
             through_contacts: Vec::new(),
+            support_contacts: Vec::new(),
         });
     }
     for event in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper]
@@ -580,6 +678,7 @@ fn intersect_strict_positive_two_sheet(
                     branches: None,
                     isolated_contacts: Vec::new(),
                     through_contacts: Vec::new(),
+                    support_contacts: Vec::new(),
                 });
             }
             SkewCylinderFiniteWindowRootEventKind::Boundary
@@ -590,6 +689,7 @@ fn intersect_strict_positive_two_sheet(
                     branches: None,
                     isolated_contacts: Vec::new(),
                     through_contacts: Vec::new(),
+                    support_contacts: Vec::new(),
                 });
             }
         }
@@ -720,6 +820,7 @@ fn publish_finite_window_topology(
                             branches: None,
                             isolated_contacts: Vec::new(),
                             through_contacts: Vec::new(),
+                            support_contacts: Vec::new(),
                         });
                     }
                     let open_span = match certify_open_span_pcurve_transport(
@@ -842,7 +943,7 @@ fn publish_finite_window_topology(
             ));
         }
     }
-    publish_skew_topology(branches, isolated_contacts, through_contacts)
+    publish_skew_topology(branches, isolated_contacts, through_contacts, Vec::new())
 }
 
 fn whole_contact_residual_ranges(mut ranges: [[ParamRange; 2]; 2]) -> [[ParamRange; 2]; 2] {
@@ -900,6 +1001,7 @@ fn publish_whole_sheets(
             .collect(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
     )
 }
 
@@ -907,10 +1009,21 @@ fn publish_skew_topology(
     branches: Vec<CertifiedSkewCylinderBranch>,
     isolated_contacts: Vec<SkewCylinderIsolatedContact>,
     through_contacts: Vec<SkewCylinderThroughContact>,
+    support_contacts: Vec<SkewCylinderSupportContact>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    if !isolated_contacts.is_empty() && !support_contacts.is_empty() {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
     let points = isolated_contacts
         .iter()
         .map(|contact| contact.raw_point())
+        .chain(
+            support_contacts
+                .iter()
+                .map(SkewCylinderSupportContact::raw_point),
+        )
         .collect::<Vec<_>>();
     let curves = branches
         .iter()
@@ -924,14 +1037,55 @@ fn publish_skew_topology(
             .map_err(GraphSurfaceIntersectionError::Intersection)?
     };
     let branches = align_skew_branches(&raw, branches)?;
-    let isolated_contacts = align_skew_isolated_contacts(&raw, isolated_contacts)?;
+    let isolated_contacts = if support_contacts.is_empty() {
+        align_skew_isolated_contacts(&raw, isolated_contacts)?
+    } else {
+        isolated_contacts
+    };
+    let support_contacts = if isolated_contacts.is_empty() {
+        align_skew_support_contacts(&raw, support_contacts)?
+    } else {
+        support_contacts
+    };
     Ok(CertifiedSkewCylinderIntersections {
         raw,
         strict_miss: None,
         branches: Some(branches),
         isolated_contacts,
         through_contacts,
+        support_contacts,
     })
+}
+
+fn align_skew_support_contacts(
+    raw: &SurfaceSurfaceIntersections,
+    mut contacts: Vec<SkewCylinderSupportContact>,
+) -> GraphSurfaceIntersectionResult<Vec<SkewCylinderSupportContact>> {
+    let mut aligned = Vec::with_capacity(raw.points.len());
+    for point in &raw.points {
+        let mut matches = contacts
+            .iter()
+            .enumerate()
+            .filter(|(_, contact)| contact.raw_point() == *point);
+        let Some((index, _)) = matches.next() else {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
+        }
+        drop(matches);
+        aligned.push(contacts.remove(index));
+    }
+    if !contacts.is_empty() {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
+    Ok(aligned)
 }
 
 fn align_skew_isolated_contacts(
@@ -1024,6 +1178,7 @@ fn branch_certificate_failure(
         branches: None,
         isolated_contacts: Vec::new(),
         through_contacts: Vec::new(),
+        support_contacts: Vec::new(),
     }
 }
 
@@ -1046,6 +1201,7 @@ fn single_branch_certificate_failure(
         branches: None,
         isolated_contacts: Vec::new(),
         through_contacts: Vec::new(),
+        support_contacts: Vec::new(),
     }
 }
 
@@ -1068,6 +1224,7 @@ fn open_span_certificate_failure(
         branches: None,
         isolated_contacts: Vec::new(),
         through_contacts: Vec::new(),
+        support_contacts: Vec::new(),
     }
 }
 
@@ -1136,11 +1293,11 @@ fn raw_skew_curve(
 // The strict-positive admission certificate stays inline so the established
 // Copy certificate contract survives value handoff without indirection.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum DiscriminantAdmission {
     StrictPositive(SkewCylinderStrictPositiveTwoSheetAdmissionCertificate),
     StrictNegative,
-    Contact,
+    Contact(Box<kgraph::SkewCylinderDiscriminantContactTopologyCertificate>),
     NumericResolution,
 }
 
@@ -1153,7 +1310,9 @@ fn classify_one_parameterization(cylinders: [Cylinder; 2]) -> DiscriminantAdmiss
         Ok(SkewCylinderExactDiscriminantTopology::StrictNegative) => {
             DiscriminantAdmission::StrictNegative
         }
-        Ok(SkewCylinderExactDiscriminantTopology::Contact) => DiscriminantAdmission::Contact,
+        Ok(SkewCylinderExactDiscriminantTopology::Contact(contact)) => {
+            DiscriminantAdmission::Contact(contact)
+        }
         Err(_) => DiscriminantAdmission::NumericResolution,
     }
 }

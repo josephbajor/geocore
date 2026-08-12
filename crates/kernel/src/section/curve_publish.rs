@@ -130,7 +130,7 @@ fn publish_isolated_contacts(
             Ok(SectionIsolatedContact {
                 faces: contact.faces.clone(),
                 endpoint,
-                source: contact.source,
+                source: contact.source.clone(),
                 roots: contact.roots.clone(),
             })
         })

@@ -105,6 +105,32 @@ pub struct SkewCylinderAngularRootBracket {
     pub hi: f64,
 }
 
+/// One exact projective root of the infinite-support skew-cylinder
+/// discriminant.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderDiscriminantRoot {
+    bracket: SkewCylinderHalfAngleRootBracket,
+    repeated: bool,
+}
+
+impl SkewCylinderDiscriminantRoot {
+    /// Exact-source isolating bracket in its owning projective chart.
+    pub const fn bracket(self) -> SkewCylinderHalfAngleRootBracket {
+        self.bracket
+    }
+
+    /// Whether the exact discriminant root has even multiplicity.
+    pub const fn repeated(self) -> bool {
+        self.repeated
+    }
+
+    /// Increasing canonical-longitude enclosure derived from the exact
+    /// projective root.
+    pub fn angular_bracket(self) -> SkewCylinderAngularRootBracket {
+        angular_bracket(self.bracket)
+    }
+}
+
 #[allow(dead_code)] // Legacy lift helpers remain covered by the root-level tests.
 impl SkewCylinderAngularRootBracket {
     /// Deterministic numeric representative of this exact-source bracket.
@@ -326,6 +352,51 @@ pub struct SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
     formula_cylinders: [Cylinder; 2],
 }
 
+/// Sealed complete root-and-cell topology for a non-strict skew-cylinder
+/// discriminant.
+///
+/// Roots retain exact projective source identity. Open-cell signs remain
+/// private so discovery cannot smuggle a downstream topology verdict; the
+/// isolated-contact consumer asks this certificate to re-check its complete
+/// one-root/negative-cell obligation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderDiscriminantContactTopologyCertificate {
+    formula_cylinders: [Cylinder; 2],
+    identically_zero: bool,
+    roots: Vec<SkewCylinderDiscriminantRoot>,
+    open_cell_signs: Vec<StrictSign>,
+}
+
+impl SkewCylinderDiscriminantContactTopologyCertificate {
+    /// Exact cylinders in the ruling formula order used by the classifier.
+    pub const fn formula_cylinders(&self) -> [Cylinder; 2] {
+        self.formula_cylinders
+    }
+
+    /// Complete distinct discriminant roots in canonical cyclic order.
+    pub fn roots(&self) -> &[SkewCylinderDiscriminantRoot] {
+        &self.roots
+    }
+
+    /// Whether every discriminant coefficient is exactly zero.
+    pub const fn is_identically_zero(&self) -> bool {
+        self.identically_zero
+    }
+
+    /// Return the sole exact support-contact root only when every other
+    /// longitude is a strict miss.
+    pub fn isolated_support_root(&self) -> Option<SkewCylinderDiscriminantRoot> {
+        match (
+            self.identically_zero,
+            self.roots.as_slice(),
+            self.open_cell_signs.as_slice(),
+        ) {
+            (false, [root], [StrictSign::Negative]) if root.repeated() => Some(*root),
+            _ => None,
+        }
+    }
+}
+
 impl SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
     /// Exact cylinders in the admitted ruling formula order.
     pub const fn formula_cylinders(self) -> [Cylinder; 2] {
@@ -342,14 +413,15 @@ impl SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
 // The strict-positive admission certificate stays inline so the established
 // Copy certificate contract survives value handoff without indirection.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SkewCylinderExactDiscriminantTopology {
     /// Both regular infinite-support sheets exist over the complete cycle.
     StrictPositive(SkewCylinderStrictPositiveTwoSheetAdmissionCertificate),
     /// No real infinite-support sheet exists over the complete cycle.
     StrictNegative,
-    /// A discriminant contact or unresolved exact zero is retained.
-    Contact,
+    /// Complete exact roots and open-cell signs for a non-strict
+    /// discriminant.
+    Contact(Box<SkewCylinderDiscriminantContactTopologyCertificate>),
 }
 
 /// Classify the complete skew-cylinder discriminant in one formula order.
@@ -364,26 +436,58 @@ pub fn classify_skew_cylinder_exact_discriminant(
         });
     }
     let classification = exact_skew_cylinder_discriminant(cylinders)?;
-    let strict = match classification {
-        ExactSkewCylinderDiscriminant::Strict(sign) => Some(sign),
-        ExactSkewCylinderDiscriminant::Contact => None,
-        ExactSkewCylinderDiscriminant::Harmonic {
-            coefficients,
-            cardinal_contact,
-        } if !cardinal_contact => {
-            classify_cyclic_second_harmonic(&coefficients, work_limit)?.strict_full_cycle_sign()
+    let topology = match classification {
+        ExactSkewCylinderDiscriminant::Strict(StrictSign::Positive) => {
+            return Ok(SkewCylinderExactDiscriminantTopology::StrictPositive(
+                SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
+                    formula_cylinders: cylinders,
+                },
+            ));
         }
-        ExactSkewCylinderDiscriminant::Harmonic { .. } => None,
+        ExactSkewCylinderDiscriminant::Strict(StrictSign::Negative) => {
+            return Ok(SkewCylinderExactDiscriminantTopology::StrictNegative);
+        }
+        ExactSkewCylinderDiscriminant::Contact => CyclicSecondHarmonicTopology::IdenticallyZero,
+        ExactSkewCylinderDiscriminant::Harmonic { coefficients, .. } => {
+            classify_cyclic_second_harmonic(&coefficients, work_limit)?
+        }
     };
-    Ok(match strict {
-        Some(StrictSign::Positive) => SkewCylinderExactDiscriminantTopology::StrictPositive(
-            SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
-                formula_cylinders: cylinders,
-            },
+    if let Some(sign) = topology.strict_full_cycle_sign() {
+        return Ok(match sign {
+            StrictSign::Positive => SkewCylinderExactDiscriminantTopology::StrictPositive(
+                SkewCylinderStrictPositiveTwoSheetAdmissionCertificate {
+                    formula_cylinders: cylinders,
+                },
+            ),
+            StrictSign::Negative => SkewCylinderExactDiscriminantTopology::StrictNegative,
+        });
+    }
+    let (identically_zero, roots, open_cell_signs) = match topology.into_parts() {
+        Some((roots, open_cell_signs)) => (
+            false,
+            roots
+                .into_iter()
+                .map(|root| SkewCylinderDiscriminantRoot {
+                    bracket: SkewCylinderHalfAngleRootBracket {
+                        chart: root.bracket.chart.into(),
+                        lo: root.bracket.lo,
+                        hi: root.bracket.hi,
+                    },
+                    repeated: root.repeated,
+                })
+                .collect(),
+            open_cell_signs,
         ),
-        Some(StrictSign::Negative) => SkewCylinderExactDiscriminantTopology::StrictNegative,
-        None => SkewCylinderExactDiscriminantTopology::Contact,
-    })
+        None => (true, Vec::new(), Vec::new()),
+    };
+    Ok(SkewCylinderExactDiscriminantTopology::Contact(Box::new(
+        SkewCylinderDiscriminantContactTopologyCertificate {
+            formula_cylinders: cylinders,
+            identically_zero,
+            roots,
+            open_cell_signs,
+        },
+    )))
 }
 
 /// Build the existing exact skew-cylinder discriminant from source values.
@@ -1145,7 +1249,9 @@ impl ExactSkewCylinderAlgebra {
         // The extrema shortcut is optional: exact expansion growth may leave
         // its narrow product envelope even when direct harmonic construction
         // remains safe, so preserve the latter as the authoritative fallback.
-        if let Ok(Some(admission)) = factor_extrema_admission(&self.k, &self.l) {
+        if let Ok(Some(admission @ ExactSkewCylinderDiscriminant::Strict(_))) =
+            factor_extrema_admission(&self.k, &self.l)
+        {
             return Ok(admission);
         }
         let discriminant = ExactSecondHarmonic::constant(self.k.clone())

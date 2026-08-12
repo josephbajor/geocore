@@ -120,7 +120,7 @@ pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_THROUGH_CONTACT_EXACT_WORK_PER_BRANCH, SKEW_CYLINDER_TWO_SHEET_BRANCH_CARRIER,
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
     SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderIsolatedContact, SkewCylinderStrictDiscriminantMiss,
-    SkewCylinderThroughContact,
+    SkewCylinderSupportContact, SkewCylinderThroughContact,
 };
 pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,

@@ -24,6 +24,8 @@ mod body_distance;
 mod bounded_skew_body_properties;
 #[path = "lifecycle/bounded_skew_contact_roots.rs"]
 mod bounded_skew_contact_roots;
+#[path = "lifecycle/bounded_skew_support_contact.rs"]
+mod bounded_skew_support_contact;
 #[path = "lifecycle/bounded_skew_through_contacts.rs"]
 mod bounded_skew_through_contacts;
 #[path = "lifecycle/bounded_skew_xt.rs"]

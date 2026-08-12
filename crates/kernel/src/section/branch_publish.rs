@@ -263,9 +263,11 @@ pub(super) fn collect_certified_curved_branches(
                 }
                 let isolated_contacts = intersections.skew_cylinder_isolated_contacts();
                 let through_contacts = intersections.skew_cylinder_through_contacts();
+                let support_contacts = intersections.skew_cylinder_support_contacts();
                 let points_are_represented = intersections.raw.points.is_empty()
                     || pair_kind == CertifiedCurvedPair::CylinderCylinder
-                        && isolated_contacts.len() == intersections.raw.points.len();
+                        && isolated_contacts.len() + support_contacts.len()
+                            == intersections.raw.points.len();
                 if !intersections.raw.is_complete()
                     || !points_are_represented
                     || !intersections.raw.regions.is_empty()
@@ -301,6 +303,7 @@ pub(super) fn collect_certified_curved_branches(
                             &intersections.branch_graph.edges,
                             isolated_contacts,
                             through_contacts,
+                            support_contacts,
                             &intersections.branch_graph.vertices,
                             [surface_a, surface_b],
                             [face_a.sense, face_b.sense],

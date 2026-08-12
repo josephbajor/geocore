@@ -16,7 +16,8 @@ use kgraph::{
     SkewCylinderBranchPcurveEnclosure, SkewCylinderBranchPcurveRootCorridorCertificate,
 };
 use kops::intersect::{
-    SkewCylinderIsolatedContact, SkewCylinderOpenSpanBranchCertificate, SkewCylinderThroughContact,
+    SkewCylinderIsolatedContact, SkewCylinderOpenSpanBranchCertificate, SkewCylinderSupportContact,
+    SkewCylinderThroughContact,
 };
 
 use super::{SectionEdgeParameterInterval, SectionSourceParameterKey};
@@ -91,11 +92,62 @@ impl SectionIsolatedContactRoot {
 /// range. `endpoint` links only to the proof-keyed curved-fragment join table
 /// so the mixed stitcher can attach this point member without manufacturing a
 /// degenerate edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionIsolatedContactKind {
+    /// A strict-positive sheet reduced to a point by exact finite-window
+    /// boundary roots.
+    FiniteWindow,
+    /// A single repeated infinite-support discriminant root strictly inside
+    /// both finite source faces.
+    SupportTangency,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum SectionIsolatedContactSource {
+    FiniteWindow(Box<SkewCylinderIsolatedContact>),
+    SupportTangency(Box<SkewCylinderSupportContact>),
+}
+
+impl SectionIsolatedContactSource {
+    fn point(&self) -> Point3 {
+        match self {
+            Self::FiniteWindow(source) => source.as_ref().point(),
+            Self::SupportTangency(source) => source.point(),
+        }
+    }
+
+    fn surface_parameters(&self) -> [[f64; 2]; 2] {
+        match self {
+            Self::FiniteWindow(source) => source.as_ref().surface_parameters(),
+            Self::SupportTangency(source) => source.surface_parameters(),
+        }
+    }
+
+    fn carrier_parameter(&self) -> f64 {
+        match self {
+            Self::FiniteWindow(source) => source.as_ref().certificate().carrier_parameter(),
+            Self::SupportTangency(source) => source.certificate().carrier_parameter(),
+        }
+    }
+
+    const fn kind(&self) -> SectionIsolatedContactKind {
+        match self {
+            Self::FiniteWindow(_) => SectionIsolatedContactKind::FiniteWindow,
+            Self::SupportTangency(_) => SectionIsolatedContactKind::SupportTangency,
+        }
+    }
+}
+
+/// First-class zero-dimensional member of a body section.
+///
+/// The exact carrier is either a finite-window root event or an isolated
+/// infinite-support tangency. It is deliberately not represented by a
+/// degenerate curve or a legacy planar vertex.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionIsolatedContact {
     pub(super) faces: [FaceId; 2],
     pub(super) endpoint: usize,
-    pub(super) source: SkewCylinderIsolatedContact,
+    pub(super) source: SectionIsolatedContactSource,
     pub(super) roots: Vec<SectionIsolatedContactRoot>,
 }
 
@@ -117,7 +169,12 @@ impl SectionIsolatedContact {
 
     /// Deterministic graph carrier-chart representative of the exact event.
     pub fn carrier_parameter(&self) -> f64 {
-        self.source.certificate().carrier_parameter()
+        self.source.carrier_parameter()
+    }
+
+    /// Exact theorem stratum that owns this zero-dimensional member.
+    pub const fn kind(&self) -> SectionIsolatedContactKind {
+        self.source.kind()
     }
 
     /// Index into [`super::BodySectionGraph::curve_endpoints`].

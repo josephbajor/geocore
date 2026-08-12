@@ -16,7 +16,7 @@ use super::graph_cylinder_cylinder::{
 };
 use super::graph_cylinder_cylinder_skew::{
     CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections, SkewCylinderIsolatedContact,
-    SkewCylinderStrictDiscriminantMiss, SkewCylinderThroughContact,
+    SkewCylinderStrictDiscriminantMiss, SkewCylinderSupportContact, SkewCylinderThroughContact,
     intersect_certified_skew_cylinders,
 };
 use super::graph_cylinder_cylinder_skew_branch::build_verified_skew_cylinder_branch;
@@ -371,6 +371,7 @@ pub struct GraphSurfaceSurfaceIntersections {
     skew_cylinder_strict_discriminant_miss: Option<SkewCylinderStrictDiscriminantMiss>,
     skew_cylinder_isolated_contacts: Vec<SkewCylinderIsolatedContact>,
     skew_cylinder_through_contacts: Vec<SkewCylinderThroughContact>,
+    skew_cylinder_support_contacts: Vec<SkewCylinderSupportContact>,
 }
 
 impl GraphSurfaceSurfaceIntersections {
@@ -415,6 +416,12 @@ impl GraphSurfaceSurfaceIntersections {
     /// sealed sheet identity binds each event to one positive-length edge.
     pub fn skew_cylinder_through_contacts(&self) -> &[SkewCylinderThroughContact] {
         &self.skew_cylinder_through_contacts
+    }
+
+    /// Exact projective-root-owned isolated tangencies of two skew cylinder
+    /// supports, proven strictly inside both finite source windows.
+    pub fn skew_cylinder_support_contacts(&self) -> &[SkewCylinderSupportContact] {
+        &self.skew_cylinder_support_contacts
     }
 }
 
@@ -986,6 +993,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     let mut skew_cylinder_branches = None;
     let mut skew_cylinder_isolated_contacts = None;
     let mut skew_cylinder_through_contacts = None;
+    let mut skew_cylinder_support_contacts = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1060,6 +1068,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     branches,
                     isolated_contacts,
                     through_contacts,
+                    support_contacts,
                 } = intersect_certified_skew_cylinders(
                     cylinders,
                     ranges,
@@ -1070,6 +1079,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 skew_cylinder_branches = branches;
                 skew_cylinder_isolated_contacts = Some(isolated_contacts);
                 skew_cylinder_through_contacts = Some(through_contacts);
+                skew_cylinder_support_contacts = Some(support_contacts);
                 raw
             };
             (raw, None)
@@ -1239,6 +1249,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             offset_plane_traces,
             skew_cylinder_branches: skew_cylinder_branches.as_deref(),
             skew_cylinder_isolated_contacts: skew_cylinder_isolated_contacts.as_deref(),
+            skew_cylinder_support_contacts: skew_cylinder_support_contacts.as_deref(),
         },
         [range_a, range_b],
         &raw,
@@ -1253,6 +1264,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         skew_cylinder_strict_discriminant_miss,
         skew_cylinder_isolated_contacts: skew_cylinder_isolated_contacts.unwrap_or_default(),
         skew_cylinder_through_contacts: skew_cylinder_through_contacts.unwrap_or_default(),
+        skew_cylinder_support_contacts: skew_cylinder_support_contacts.unwrap_or_default(),
     })
 }
 
@@ -1879,13 +1891,29 @@ fn build_verified_branch_graph(
         offset_plane_traces,
         skew_cylinder_branches,
         skew_cylinder_isolated_contacts,
+        skew_cylinder_support_contacts,
     } = proof_sources;
-    if let Some(contacts) = skew_cylinder_isolated_contacts
-        && (contacts.len() != raw.points.len()
-            || contacts
-                .iter()
-                .zip(&raw.points)
-                .any(|(contact, point)| contact.raw_point() != *point))
+    let isolated_count = skew_cylinder_isolated_contacts.map_or(0, <[_]>::len);
+    let support_count = skew_cylinder_support_contacts.map_or(0, <[_]>::len);
+    if isolated_count + support_count != raw.points.len()
+        && (skew_cylinder_isolated_contacts.is_some() || skew_cylinder_support_contacts.is_some())
+    {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
+    if skew_cylinder_isolated_contacts
+        .into_iter()
+        .flatten()
+        .map(|contact| contact.raw_point())
+        .chain(
+            skew_cylinder_support_contacts
+                .into_iter()
+                .flatten()
+                .map(|contact| contact.raw_point()),
+        )
+        .zip(&raw.points)
+        .any(|(contact, point)| contact != *point)
     {
         return Err(GraphSurfaceIntersectionError::BranchCertificate(
             IntersectionCertificateError::InvalidTraceFamily,
@@ -2184,6 +2212,7 @@ struct ResolvedGraphProofSources<'a> {
     offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
     skew_cylinder_branches: Option<&'a [CertifiedSkewCylinderBranch]>,
     skew_cylinder_isolated_contacts: Option<&'a [SkewCylinderIsolatedContact]>,
+    skew_cylinder_support_contacts: Option<&'a [SkewCylinderSupportContact]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

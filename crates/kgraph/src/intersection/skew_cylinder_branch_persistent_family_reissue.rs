@@ -108,7 +108,7 @@ pub fn reissue_persistent_skew_cylinder_finite_window_family(
     {
         SkewCylinderExactDiscriminantTopology::StrictPositive(admission) => admission,
         SkewCylinderExactDiscriminantTopology::StrictNegative
-        | SkewCylinderExactDiscriminantTopology::Contact => {
+        | SkewCylinderExactDiscriminantTopology::Contact(_) => {
             return Err(IntersectionCertificateError::InvalidTraceFamily);
         }
     };
