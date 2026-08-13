@@ -1188,14 +1188,20 @@ fn prove_branch_range(
         }
         let v = roots.stored_v;
         if v.lo() <= ranges[0][1].lo || v.hi() >= ranges[0][1].hi {
-            return Err(unsupported(
-                "skew Cylinder/Cylinder canonical axial trace escapes its strict finite window",
-            ));
+            return Err(
+                IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow {
+                    formula_operand: 0,
+                    exact_source: false,
+                },
+            );
         }
         if roots.exact_v.lo() <= ranges[0][1].lo || roots.exact_v.hi() >= ranges[0][1].hi {
-            return Err(unsupported(
-                "skew Cylinder/Cylinder exact-source canonical axial trace escapes its strict finite window",
-            ));
+            return Err(
+                IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow {
+                    formula_operand: 0,
+                    exact_source: true,
+                },
+            );
         }
 
         let x = finite_interval(
@@ -1235,9 +1241,12 @@ fn prove_branch_range(
             .and_then(finite_interval)
             .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
         if height.lo() <= ranges[1][1].lo || height.hi() >= ranges[1][1].hi {
-            return Err(unsupported(
-                "skew Cylinder/Cylinder opposite axial trace escapes its strict finite window",
-            ));
+            return Err(
+                IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow {
+                    formula_operand: 1,
+                    exact_source: false,
+                },
+            );
         }
         let exact_coordinates = [0, 1, 2].map(|coordinate| {
             coefficient_proof.harmonics_true[coordinate]
@@ -1264,9 +1273,12 @@ fn prove_branch_range(
             .and_then(finite_interval)
             .ok_or(IntersectionCertificateError::NonFiniteGeometry)?;
         if exact_height.lo() <= ranges[1][1].lo || exact_height.hi() >= ranges[1][1].hi {
-            return Err(unsupported(
-                "skew Cylinder/Cylinder exact-source opposite axial trace escapes its strict finite window",
-            ));
+            return Err(
+                IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow {
+                    formula_operand: 1,
+                    exact_source: true,
+                },
+            );
         }
 
         y_positive &= normalized_y.lo() > 0.0;

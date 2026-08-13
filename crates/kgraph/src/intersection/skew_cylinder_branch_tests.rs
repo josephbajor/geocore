@@ -123,7 +123,12 @@ fn exact_source_root_height_and_longitude_enclosures_gate_near_boundary_windows(
             SkewCylinderSheet::Upper,
             1e-8,
         ),
-        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+        Err(
+            IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow {
+                formula_operand: 0,
+                exact_source: true,
+            }
+        )
     ));
 
     let height_boundary = exact_height_lower.midpoint(stored_height_lower);
@@ -137,7 +142,12 @@ fn exact_source_root_height_and_longitude_enclosures_gate_near_boundary_windows(
             SkewCylinderSheet::Upper,
             1e-8,
         ),
-        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+        Err(
+            IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow {
+                formula_operand: 1,
+                exact_source: true,
+            }
+        )
     ));
 
     let longitude_window = if exact_longitude_lower < stored_longitude_lower {

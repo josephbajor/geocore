@@ -137,6 +137,11 @@ pub mod intersection_certificate_error_code {
         known_intersection_certificate_error_code(
             "kgraph.intersection-certificate.unsupported-carrier-parameterization",
         );
+    /// A skew-cylinder trace requires exact finite-window axial partitioning.
+    pub const SKEW_CYLINDER_TRACE_OUTSIDE_AXIAL_WINDOW: ErrorCode =
+        known_intersection_certificate_error_code(
+            "kgraph.intersection-certificate.skew-cylinder-trace-outside-axial-window",
+        );
     /// The complete inverse-sphere chart lacks positive pole clearance.
     pub const SINGULAR_SPHERE_CHART: ErrorCode = known_intersection_certificate_error_code(
         "kgraph.intersection-certificate.singular-sphere-chart",
@@ -180,6 +185,7 @@ pub mod intersection_certificate_error_code {
         INVALID_TRACE_FAMILY,
         UNSUPPORTED_TRACE_PARAMETERIZATION,
         UNSUPPORTED_CARRIER_PARAMETERIZATION,
+        SKEW_CYLINDER_TRACE_OUTSIDE_AXIAL_WINDOW,
         SINGULAR_SPHERE_CHART,
         SPHERE_TRACE_OUTSIDE_WINDOW,
         INVALID_CARRIER_RANGE,
@@ -259,6 +265,15 @@ pub enum IntersectionCertificateError {
         /// Stable proof-boundary explanation.
         reason: &'static str,
     },
+    /// A skew-cylinder trace leaves one authored finite axial window and must
+    /// be partitioned by the exact finite-window occupancy theorem.
+    SkewCylinderTraceOutsideAxialWindow {
+        /// Operand in the ruling-formula order whose axial window was crossed.
+        formula_operand: u8,
+        /// Whether the exact-source enclosure, rather than the stored
+        /// evaluator enclosure, established the crossing.
+        exact_source: bool,
+    },
     /// The inverse spherical chart cannot be regular over the complete
     /// carrier interval because pole clearance was not proved positive.
     SingularSphereChart {
@@ -316,6 +331,18 @@ impl fmt::Display for IntersectionCertificateError {
             Self::UnsupportedCarrierParameterization { reason } => {
                 write!(f, "unsupported carrier parameterization: {reason}")
             }
+            Self::SkewCylinderTraceOutsideAxialWindow {
+                formula_operand,
+                exact_source,
+            } => write!(
+                f,
+                "{} skew-cylinder trace for formula operand {formula_operand} escapes its authored axial window",
+                if *exact_source {
+                    "exact-source"
+                } else {
+                    "stored"
+                }
+            ),
             Self::SingularSphereChart {
                 squared_pole_clearance,
             } => write!(
@@ -369,6 +396,7 @@ impl IntersectionCertificateError {
             | Self::NonFiniteGeometry => ErrorClass::InvalidInput,
             Self::UnsupportedTraceParameterization { .. }
             | Self::UnsupportedCarrierParameterization { .. }
+            | Self::SkewCylinderTraceOutsideAxialWindow { .. }
             | Self::SingularSphereChart { .. }
             | Self::SphereTraceOutsideWindow { .. }
             | Self::HarmonicRootClassification
@@ -391,6 +419,9 @@ impl IntersectionCertificateError {
             }
             Self::UnsupportedCarrierParameterization { .. } => {
                 code::UNSUPPORTED_CARRIER_PARAMETERIZATION
+            }
+            Self::SkewCylinderTraceOutsideAxialWindow { .. } => {
+                code::SKEW_CYLINDER_TRACE_OUTSIDE_AXIAL_WINDOW
             }
             Self::SingularSphereChart { .. } => code::SINGULAR_SPHERE_CHART,
             Self::SphereTraceOutsideWindow { .. } => code::SPHERE_TRACE_OUTSIDE_WINDOW,
@@ -421,6 +452,7 @@ impl IntersectionCertificateError {
             Self::NonFiniteResidualBound { .. } => Some(capability::FINITE_RESIDUAL_BOUND),
             Self::InvalidParameterMap { .. }
             | Self::InvalidTraceFamily
+            | Self::SkewCylinderTraceOutsideAxialWindow { .. }
             | Self::InvalidCarrierRange
             | Self::InvalidTolerance
             | Self::NonFiniteGeometry
@@ -501,6 +533,7 @@ mod certificate_error_tests {
             "kgraph.intersection-certificate.invalid-trace-family",
             "kgraph.intersection-certificate.unsupported-trace-parameterization",
             "kgraph.intersection-certificate.unsupported-carrier-parameterization",
+            "kgraph.intersection-certificate.skew-cylinder-trace-outside-axial-window",
             "kgraph.intersection-certificate.singular-sphere-chart",
             "kgraph.intersection-certificate.sphere-trace-outside-window",
             "kgraph.intersection-certificate.invalid-carrier-range",

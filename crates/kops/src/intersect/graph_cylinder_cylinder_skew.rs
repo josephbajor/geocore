@@ -1166,9 +1166,16 @@ fn intersect_strict_positive_two_sheet(
         return publish_whole_sheets(vec![*lower, *upper], reversed);
     }
 
-    if ranges
-        .iter()
-        .all(|window| window[0].width() == core::f64::consts::TAU)
+    let requires_axial_clipping = certified.iter().any(|certificate| {
+        matches!(
+            certificate,
+            Err(IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow { .. })
+        )
+    });
+    if !requires_axial_clipping
+        && ranges
+            .iter()
+            .all(|window| window[0].width() == core::f64::consts::TAU)
         && let Some(fallback) = folded_fallback
         && let Some(folded) = try_double_folded_support_fallback(fallback, tolerance, scope)?
     {
