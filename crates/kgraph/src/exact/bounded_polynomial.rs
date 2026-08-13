@@ -314,6 +314,8 @@ impl ExactPolynomial {
     /// exactly zero, `P(x) = x Q(x)` is an exact identity. A positive
     /// Bernstein bound for `Q` and `x >= lo > 0` therefore give a quantitative
     /// bound without multiplying polynomial coefficients by the tiny guard.
+    /// On a negative interval, the exact identity
+    /// `P(x) = (-x) (-Q(x))` supplies the symmetric theorem.
     pub(crate) fn positive_lower_bound_after_exact_zero_root(
         &self,
         lo: f64,
@@ -321,7 +323,6 @@ impl ExactPolynomial {
     ) -> Result<Option<f64>, RootIsolationFailure> {
         if !lo.is_finite()
             || !hi.is_finite()
-            || lo <= 0.0
             || lo >= hi
             || !self.coefficients[0].is_zero()
             || self.degree() == 0
@@ -329,13 +330,31 @@ impl ExactPolynomial {
             return Ok(None);
         }
         let quotient = Self::from_coefficients_allow_zero(self.coefficients[1..].to_vec())?;
-        // Enlarge the quotient domain back to the exact-root boundary. This
-        // avoids injecting the tiny positive guard into its affine Bernstein
-        // coefficients; containment on `[0, hi]` is stronger than needed.
-        let Some(quotient_lower) = quotient.positive_lower_bound_on_interval(0.0, hi)? else {
+        let (root_distance, quotient_lower) = if lo > 0.0 {
+            // Enlarge the quotient domain back to the exact-root boundary.
+            // This avoids injecting the tiny positive guard into its affine
+            // Bernstein coefficients; containment on `[0, hi]` is stronger
+            // than needed.
+            let Some(lower) = quotient.positive_lower_bound_on_interval(0.0, hi)? else {
+                return Ok(None);
+            };
+            (lo, lower)
+        } else if hi < 0.0 {
+            let negative_quotient = Self::from_coefficients_allow_zero(
+                quotient
+                    .coefficients
+                    .iter()
+                    .map(ExactScalar::negate)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?;
+            let Some(lower) = negative_quotient.positive_lower_bound_on_interval(lo, 0.0)? else {
+                return Ok(None);
+            };
+            (-hi, lower)
+        } else {
             return Ok(None);
         };
-        let lower = (Interval::point(lo) * Interval::point(quotient_lower)).lo();
+        let lower = (Interval::point(root_distance) * Interval::point(quotient_lower)).lo();
         Ok((lower.is_finite() && lower > 0.0).then_some(lower))
     }
 
@@ -1147,6 +1166,17 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        let negative_rooted = polynomial(&[0.0, -32.0, -16.0, -32.0]);
+        assert!(matches!(
+            negative_rooted.positive_lower_bound_on_interval(-1.0, -lo),
+            Err(RootIsolationFailure::UnsafeArithmeticEnvelope)
+        ));
+        let negative_lower = negative_rooted
+            .positive_lower_bound_after_exact_zero_root(-1.0, -lo)
+            .unwrap()
+            .unwrap();
+        assert!(negative_lower.is_finite() && negative_lower > 0.0);
     }
 
     #[test]

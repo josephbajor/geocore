@@ -251,6 +251,41 @@ fn seam_root_folded_support_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn seam_root_across_folded_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.origin() - frame.z() * 0.5),
+                0.0625,
+                1.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_center = frame.origin() - frame.y() * 0.125;
+        let second_frame =
+            Frame::new(second_center - frame.x() * 0.5, frame.x(), frame.y()).unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 0.125, 1.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn touching_support_fixture(frame: Frame) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -710,7 +745,11 @@ fn assert_seam_folded_support_component(fixture: &Fixture, graph: &BodySectionGr
     }));
 }
 
-fn assert_seam_root_folded_support_component(fixture: &Fixture, graph: &BodySectionGraph) {
+fn assert_seam_root_folded_support_component(
+    fixture: &Fixture,
+    graph: &BodySectionGraph,
+    chart_join_longitude: f64,
+) {
     assert_eq!(
         graph.completion(),
         SectionCompletion::Complete,
@@ -759,7 +798,7 @@ fn assert_seam_root_folded_support_component(fixture: &Fixture, graph: &BodySect
             SectionCurveEndpointTopology::FoldedSupportChartJoin {
                 sheet, longitude, ..
             } => {
-                assert_eq!(longitude.to_bits(), core::f64::consts::FRAC_PI_2.to_bits());
+                assert_eq!(longitude.to_bits(), chart_join_longitude.to_bits());
                 charts.push(*sheet);
             }
             topology => {
@@ -1294,8 +1333,8 @@ fn seam_root_folded_support_section_is_complete_replay_swap_and_frame_stable() {
         let swapped_replay = section(&fixture, true);
         assert_eq!(forward, replay, "frame {frame_index} forward replay");
         assert_eq!(swapped, swapped_replay, "frame {frame_index} swap replay");
-        assert_seam_root_folded_support_component(&fixture, &forward);
-        assert_seam_root_folded_support_component(&fixture, &swapped);
+        assert_seam_root_folded_support_component(&fixture, &forward, core::f64::consts::FRAC_PI_2);
+        assert_seam_root_folded_support_component(&fixture, &swapped, core::f64::consts::FRAC_PI_2);
     }
 }
 
@@ -1329,7 +1368,73 @@ fn seam_root_folded_support_boolean_refuses_distinctly_without_mutation() {
             assert_eq!(part.bodies().len(), 2);
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
-            assert_seam_root_folded_support_component(&fixture, &section(&fixture, swapped));
+            assert_seam_root_folded_support_component(
+                &fixture,
+                &section(&fixture, swapped),
+                core::f64::consts::FRAC_PI_2,
+            );
+        }
+    }
+}
+
+#[test]
+fn seam_root_across_folded_support_section_is_complete_replay_swap_and_frame_stable() {
+    for (frame_index, frame) in folded_exact_frames().into_iter().enumerate() {
+        let fixture = seam_root_across_folded_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay, "frame {frame_index} forward replay");
+        assert_eq!(swapped, swapped_replay, "frame {frame_index} swap replay");
+        assert_seam_root_folded_support_component(
+            &fixture,
+            &forward,
+            3.0 * core::f64::consts::FRAC_PI_2,
+        );
+        assert_seam_root_folded_support_component(
+            &fixture,
+            &swapped,
+            3.0 * core::f64::consts::FRAC_PI_2,
+        );
+    }
+}
+
+#[test]
+fn seam_root_across_folded_support_boolean_refuses_distinctly_without_mutation() {
+    for frame in folded_exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = seam_root_across_folded_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Intersect,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_seam_root_folded_support_component(
+                &fixture,
+                &section(&fixture, swapped),
+                3.0 * core::f64::consts::FRAC_PI_2,
+            );
         }
     }
 }
