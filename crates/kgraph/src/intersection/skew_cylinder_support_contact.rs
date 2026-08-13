@@ -49,7 +49,8 @@ pub const SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK: u64 =
 pub fn persistent_skew_cylinder_folded_support_exact_work(
     topology: &SkewCylinderFoldedSupportTopologyCertificate,
 ) -> u64 {
-    if topology.positive_cell() == SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+    if (topology.positive_cell() == SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+        && !is_short_across_seam_root_layout(topology))
         || is_seam_root_folded_chart_layout(topology)
     {
         SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK
@@ -637,6 +638,16 @@ fn is_short_between_seam_root_layout(
         && second.hi < core::f64::consts::PI
 }
 
+fn is_short_across_seam_root_layout(
+    topology: &SkewCylinderFoldedSupportTopologyCertificate,
+) -> bool {
+    let second = topology.roots()[1].angular_bracket();
+    topology.positive_cell() == SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+        && has_canonical_seam_root(topology)
+        && second.lo > core::f64::consts::PI
+        && second.hi < TAU
+}
+
 /// Certify one folded support curve whose two simple roots bound a
 /// strict-positive cell wholly inside both finite source windows.
 pub fn certify_persistent_skew_cylinder_folded_support(
@@ -651,6 +662,7 @@ pub fn certify_persistent_skew_cylinder_folded_support(
     let canonical_seam_root = has_canonical_seam_root(&topology);
     let seam_root_chart_layout = is_seam_root_folded_chart_layout(&topology);
     let short_between_seam_root_layout = is_short_between_seam_root_layout(&topology);
+    let short_across_seam_root_layout = is_short_across_seam_root_layout(&topology);
     let required_work = persistent_skew_cylinder_folded_support_exact_work(&topology);
     if work_limit < required_work {
         return Err(unsupported());
@@ -905,6 +917,50 @@ pub fn certify_persistent_skew_cylinder_folded_support(
                 ),
             ]
         }
+        SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+            if short_across_seam_root_layout =>
+        {
+            let authored = formula_windows[0][0];
+            if authored.lo.to_bits() != 0.0_f64.to_bits() || authored.hi.to_bits() != TAU.to_bits()
+            {
+                return Err(unsupported());
+            }
+            let Some(second) = tangent_projective_interval(roots[1].bracket()) else {
+                return Err(unsupported());
+            };
+            // This is the negative-projective mirror of the short cell above.
+            // Keep the seam/root represented only by the shared exact root;
+            // a radius-scaled half-epsilon inset supplies the quantitative
+            // radicand margin without inventing a zero-length seam member.
+            let root_inset = f64::EPSILON / (2.0 * topology.formula_cylinders()[0].radius());
+            let guard = crate::exact::bounded_polynomial::RootBracket {
+                lo: second.hi().next_up(),
+                hi: -root_inset,
+            };
+            let range = ParamRange::new(
+                (2.0 * kcore::math::atan2(guard.lo, 1.0) + TAU).next_up(),
+                (2.0 * kcore::math::atan2(guard.hi, 1.0) + TAU).next_down(),
+            );
+            if guard.lo >= guard.hi || !strict_guarded_range(range, authored) {
+                return Err(unsupported());
+            }
+            vec![
+                (
+                    SkewCylinderSheet::Lower,
+                    SkewCylinderHalfAngleChart::Tangent,
+                    guard,
+                    range,
+                    [Root(1), Root(0)],
+                ),
+                (
+                    SkewCylinderSheet::Upper,
+                    SkewCylinderHalfAngleChart::Tangent,
+                    guard,
+                    range,
+                    [Root(1), Root(0)],
+                ),
+            ]
+        }
         SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam => {
             let [Some(first_projective), Some(second_projective)] =
                 roots.map(|root| tangent_projective_interval(root.bracket()))
@@ -1033,6 +1089,7 @@ pub fn certify_persistent_skew_cylinder_folded_support(
     let (formula_seam_parameters, formula_seam_points) = if topology.positive_cell()
         == SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
         && !seam_root_chart_layout
+        && !short_across_seam_root_layout
     {
         let (parameters, points) =
             folded_seam_evidence(topology.formula_cylinders(), formula_windows, tolerance)?;
@@ -2323,6 +2380,24 @@ mod tests {
         ]
     }
 
+    fn bounded_short_seam_root_across_folded_support_cylinders(frame: Frame) -> [Cylinder; 2] {
+        let second_axis = frame.x() * 0.6 - frame.y() * 0.8;
+        let second_radial = frame.x() * -0.8 - frame.y() * 0.6;
+        let first_radius = 0.0625;
+        let second_radius = 0.125;
+        let offset = second_radial * second_radius - frame.x() * first_radius + second_axis * 0.125
+            - frame.z() * 0.125;
+        let reversed_first = Frame::new(frame.origin() + frame.z(), -frame.z(), frame.x()).unwrap();
+        [
+            Cylinder::new(reversed_first, first_radius).unwrap(),
+            Cylinder::new(
+                Frame::new(frame.origin() - offset, second_axis, frame.z()).unwrap(),
+                second_radius,
+            )
+            .unwrap(),
+        ]
+    }
+
     fn touching_support_windows() -> [[ParamRange; 2]; 2] {
         [
             [ParamRange::new(0.0, TAU), ParamRange::new(-2.0, 2.0)],
@@ -3065,6 +3140,78 @@ mod tests {
         )
         .unwrap();
         assert_eq!(folded.formula_residuals().len(), 2);
+        assert!(
+            folded
+                .source_endpoint_parameters()
+                .into_iter()
+                .flatten()
+                .all(|parameter| parameter[1] > 0.0 && parameter[1] < 1.0)
+        );
+    }
+
+    #[test]
+    fn short_across_seam_non_pole_layout_mints_two_members() {
+        let cylinders = bounded_short_seam_root_across_folded_support_cylinders(Frame::world());
+        let contact = match classify_skew_cylinder_exact_discriminant(
+            cylinders,
+            SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+        )
+        .unwrap()
+        {
+            SkewCylinderExactDiscriminantTopology::Contact(topology) => *topology,
+            other => panic!("expected bounded short across-seam contact, got {other:?}"),
+        };
+        let topology = certify_skew_cylinder_folded_support_topology(contact).unwrap();
+        let angular = topology
+            .roots()
+            .map(SkewCylinderDiscriminantRoot::angular_bracket);
+        assert_eq!(angular[0].lo.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(angular[0].hi.to_bits(), 0.0_f64.to_bits());
+        assert!(angular[1].lo > core::f64::consts::PI && angular[1].hi < TAU);
+        assert_eq!(
+            topology.positive_cell(),
+            SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+        );
+        assert_eq!(
+            persistent_skew_cylinder_folded_support_exact_work(&topology),
+            SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
+        );
+        assert!(
+            certify_persistent_skew_cylinder_folded_support(
+                topology.clone(),
+                bounded_touching_support_windows(),
+                [0, 1],
+                1.0e-7,
+                SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1,
+            )
+            .is_err()
+        );
+        let folded = certify_persistent_skew_cylinder_folded_support(
+            topology,
+            bounded_touching_support_windows(),
+            [0, 1],
+            1.0e-7,
+            SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+        )
+        .unwrap();
+        assert_eq!(folded.work(), SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK);
+        assert_eq!(folded.formula_residuals().len(), 2);
+        assert_eq!(
+            folded.formula_branch_endpoints(),
+            [
+                [
+                    PersistentSkewCylinderFoldedSupportEndpoint::Root(1),
+                    PersistentSkewCylinderFoldedSupportEndpoint::Root(0),
+                ],
+                [
+                    PersistentSkewCylinderFoldedSupportEndpoint::Root(1),
+                    PersistentSkewCylinderFoldedSupportEndpoint::Root(0),
+                ],
+            ]
+        );
+        assert_eq!(folded.chart_join_longitude(), None);
+        assert!(folded.seam_points().is_none());
+        assert!(folded.required_edge_tolerance() <= folded.tolerance());
         assert!(
             folded
                 .source_endpoint_parameters()

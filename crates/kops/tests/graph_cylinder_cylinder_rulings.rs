@@ -150,6 +150,23 @@ fn short_seam_root_folded_support_pair(frame: Frame) -> [Cylinder; 2] {
     [first, second]
 }
 
+fn short_seam_root_across_folded_support_pair(frame: Frame) -> [Cylinder; 2] {
+    let first_radius = 0.0625;
+    let second_radius = 0.125;
+    let second_axis = frame.x() * 0.6 - frame.y() * 0.8;
+    let second_radial = frame.x() * -0.8 - frame.y() * 0.6;
+    let offset = second_radial * second_radius - frame.x() * first_radius + second_axis * 0.125
+        - frame.z() * 0.125;
+    let reversed_first = Frame::new(frame.origin() + frame.z(), -frame.z(), frame.x()).unwrap();
+    let first = Cylinder::new(reversed_first, first_radius).unwrap();
+    let second = Cylinder::new(
+        Frame::new(frame.origin() - offset, second_axis, frame.z()).unwrap(),
+        second_radius,
+    )
+    .unwrap();
+    [first, second]
+}
+
 fn non_right_angle_axis_pair(frame: Frame, offset: f64, second_radius: f64) -> [Cylinder; 2] {
     let first = Cylinder::new(frame, 1.0).unwrap();
     let second = Cylinder::new(
@@ -390,6 +407,14 @@ fn assert_folded_support_result(
     result: &kops::intersect::GraphSurfaceSurfaceIntersections,
     sources: [kgraph::SurfaceHandle; 2],
 ) {
+    assert_folded_support_result_in_root_order(result, sources, [0, 1]);
+}
+
+fn assert_folded_support_result_in_root_order(
+    result: &kops::intersect::GraphSurfaceSurfaceIntersections,
+    sources: [kgraph::SurfaceHandle; 2],
+    root_order: [usize; 2],
+) {
     assert_eq!(result.branch_graph.source_surfaces, sources);
     assert!(result.raw.is_complete());
     assert!(result.raw.points.is_empty());
@@ -411,7 +436,8 @@ fn assert_folded_support_result(
             .all(|root| !root.repeated())
     );
     assert!(folded.certificate().required_edge_tolerance() <= folded.certificate().tolerance());
-    for (root_ordinal, vertex) in result.branch_graph.vertices.iter().enumerate() {
+    for (vertex_index, vertex) in result.branch_graph.vertices.iter().enumerate() {
+        let root_ordinal = root_order[vertex_index];
         assert_eq!(
             vertex.event,
             IntersectionBranchVertexEvent::FoldedSupportJoin { root_ordinal }
@@ -431,8 +457,12 @@ fn assert_folded_support_result(
         assert_eq!(
             edge.endpoint_events,
             [
-                IntersectionBranchEndpointEvent::FoldedSupportJoin { root_ordinal: 0 },
-                IntersectionBranchEndpointEvent::FoldedSupportJoin { root_ordinal: 1 },
+                IntersectionBranchEndpointEvent::FoldedSupportJoin {
+                    root_ordinal: root_order[0],
+                },
+                IntersectionBranchEndpointEvent::FoldedSupportJoin {
+                    root_ordinal: root_order[1],
+                },
             ]
         );
         assert!(edge.carrier_range.width() > 0.0);
@@ -1958,6 +1988,145 @@ fn short_seam_root_folded_support_owns_atomic_two_member_work() {
 
     let exact = run(SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK);
     assert_folded_support_result(exact.result().unwrap(), [first_handle, second_handle]);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied = run(SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1);
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+        allowed: SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0
+    );
+}
+
+#[test]
+fn short_seam_root_across_folded_support_publishes_two_root_joined_members() {
+    let rotated = Frame::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let windows = [
+        cylinder_window(range(0.0, 1.0)),
+        cylinder_window(range(0.0, 1.0)),
+    ];
+    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+        let [first, second] = short_seam_root_across_folded_support_pair(frame);
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(forward, replay, "{name} changed across replay");
+        assert_folded_support_result_in_root_order(&forward, [first_handle, second_handle], [1, 0]);
+        assert_folded_support_result_in_root_order(
+            &reversed,
+            [second_handle, first_handle],
+            [1, 0],
+        );
+        for result in [&forward, &reversed] {
+            let [folded] = result.skew_cylinder_folded_support_curves() else {
+                panic!("{name}: expected one short across-seam folded component")
+            };
+            let angular = folded
+                .certificate()
+                .topology()
+                .roots()
+                .map(|root| root.angular_bracket());
+            assert_eq!(angular[0].lo.to_bits(), 0.0_f64.to_bits());
+            assert_eq!(angular[0].hi.to_bits(), 0.0_f64.to_bits());
+            assert!(
+                angular[1].lo > core::f64::consts::PI && angular[1].hi < core::f64::consts::TAU
+            );
+            assert_eq!(
+                folded.certificate().topology().positive_cell(),
+                kgraph::SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+            );
+            assert_eq!(folded.certificate().formula_residuals().len(), 2);
+            assert_eq!(folded.certificate().chart_join_longitude(), None);
+            assert!(folded.certificate().seam_points().is_none());
+        }
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    }
+}
+
+#[test]
+fn short_seam_root_across_folded_support_owns_atomic_two_member_work() {
+    let [first, second] = short_seam_root_across_folded_support_pair(Frame::world());
+    let windows = [
+        cylinder_window(range(0.0, 1.0)),
+        cylinder_window(range(0.0, 1.0)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+    let run = |allowed| {
+        let context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(
+                BudgetPlan::new([LimitSpec::new(
+                    SKEW_CYLINDER_OPEN_SPAN_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            );
+        intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            &context,
+        )
+    };
+
+    let exact = run(SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK);
+    assert_folded_support_result_in_root_order(
+        exact.result().unwrap(),
+        [first_handle, second_handle],
+        [1, 0],
+    );
     assert_eq!(
         observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
         SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
