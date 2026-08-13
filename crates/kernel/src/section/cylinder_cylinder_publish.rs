@@ -804,7 +804,8 @@ mod tests {
                     endpoints
                 }
                 SectionCurveFragmentSpan::BoundedProcedural { .. }
-                | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+                | SectionCurveFragmentSpan::FoldedSupport { .. }
+                | SectionCurveFragmentSpan::TouchingSupport { .. } => {
                     panic!(
                         "parallel-cylinder fixture unexpectedly published a bounded procedural fragment"
                     )

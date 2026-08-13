@@ -100,6 +100,53 @@ pub struct SkewCylinderFoldedSupportSeamEndpointProof {
     pub surface_parameters: [[f64; 2]; 2],
 }
 
+/// Exact repeated-root continuation identity and metric representative for
+/// one endpoint of a touching-support member.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderTouchingSupportRootEndpointProof {
+    /// Smooth-continuation port; each port joins one member from each sheet.
+    pub continuation: u8,
+    /// Projective chart retaining the exact repeated-root identity.
+    pub half_angle_chart: SkewCylinderHalfAngleChartProof,
+    /// Isolating interval in the owning half-angle chart.
+    pub half_angle_bracket: [f64; 2],
+    /// Hidden strict-positive carrier coordinate used by the evaluator.
+    pub inside_parameter: f64,
+    /// Exact-root-owned deterministic model-space representative.
+    pub point: Point3,
+    /// Caller-order source parameters at the repeated support join.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
+/// Exact authored periodic-seam identity for one touching-support sheet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderTouchingSupportSeamEndpointProof {
+    /// Ordered touching-support sheet owning this seam join.
+    pub sheet: SkewCylinderSheet,
+    /// Hidden strict-positive carrier coordinate used by the evaluator.
+    pub inside_parameter: f64,
+    /// Deterministic model-space representative at canonical longitude zero.
+    pub point: Point3,
+    /// Caller-order source parameters at the exact authored seam.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
+/// Exact regular tangent/cotangent chart-transition identity for one
+/// touching-support sheet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderTouchingSupportChartJoinEndpointProof {
+    /// Ordered touching-support sheet owning this chart join.
+    pub sheet: SkewCylinderSheet,
+    /// Exact authored first-cylinder longitude of the chart transition.
+    pub longitude: f64,
+    /// Hidden strict-positive carrier coordinate used by the evaluator.
+    pub inside_parameter: f64,
+    /// Deterministic model-space representative at the exact chart join.
+    pub point: Point3,
+    /// Caller-order source parameters at the exact chart join.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
 /// Exact topological evidence attached to one branch endpoint slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -110,6 +157,12 @@ pub enum IntersectionBranchEndpointProof {
     SkewCylinderFoldedSupportRoot(SkewCylinderFoldedSupportRootEndpointProof),
     /// Exact authored seam shared by the two guarded pieces of one sheet.
     SkewCylinderFoldedSupportSeam(SkewCylinderFoldedSupportSeamEndpointProof),
+    /// Repeated support root with one exact smooth-continuation port.
+    SkewCylinderTouchingSupportRoot(SkewCylinderTouchingSupportRootEndpointProof),
+    /// Exact authored seam shared by two touching-support members of one sheet.
+    SkewCylinderTouchingSupportSeam(SkewCylinderTouchingSupportSeamEndpointProof),
+    /// Exact tangent/cotangent chart join shared by two members of one sheet.
+    SkewCylinderTouchingSupportChartJoin(SkewCylinderTouchingSupportChartJoinEndpointProof),
 }
 
 impl IntersectionBranchEndpointProof {
@@ -213,4 +266,80 @@ impl IntersectionBranchEndpointProof {
             Some(proof)
         }
     }
+
+    pub(super) fn validated_touching_support_root(
+        self,
+        parameter: f64,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderTouchingSupportRootEndpointProof> {
+        let Self::SkewCylinderTouchingSupportRoot(proof) = self else {
+            return None;
+        };
+        if proof.continuation > 1
+            || proof.inside_parameter != parameter
+            || !proof.half_angle_bracket[0].is_finite()
+            || !proof.half_angle_bracket[1].is_finite()
+            || proof.half_angle_bracket[0] > proof.half_angle_bracket[1]
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || !valid_surface_parameters(proof.surface_parameters, surface_ranges)
+        {
+            None
+        } else {
+            Some(proof)
+        }
+    }
+
+    pub(super) fn validated_touching_support_seam(
+        self,
+        parameter: f64,
+        sheet: SkewCylinderSheet,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderTouchingSupportSeamEndpointProof> {
+        let Self::SkewCylinderTouchingSupportSeam(proof) = self else {
+            return None;
+        };
+        if proof.sheet != sheet
+            || proof.inside_parameter != parameter
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || !valid_surface_parameters(proof.surface_parameters, surface_ranges)
+        {
+            None
+        } else {
+            Some(proof)
+        }
+    }
+
+    pub(super) fn validated_touching_support_chart_join(
+        self,
+        parameter: f64,
+        sheet: SkewCylinderSheet,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderTouchingSupportChartJoinEndpointProof> {
+        let Self::SkewCylinderTouchingSupportChartJoin(proof) = self else {
+            return None;
+        };
+        if proof.sheet != sheet
+            || proof.inside_parameter != parameter
+            || !proof.longitude.is_finite()
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || !valid_surface_parameters(proof.surface_parameters, surface_ranges)
+        {
+            None
+        } else {
+            Some(proof)
+        }
+    }
+}
+
+fn valid_surface_parameters(
+    parameters: [[f64; 2]; 2],
+    surface_ranges: [[ParamRange; 2]; 2],
+) -> bool {
+    parameters.into_iter().flatten().all(f64::is_finite)
+        && parameters
+            .into_iter()
+            .zip(surface_ranges)
+            .all(|(parameters, ranges)| {
+                ranges[0].contains(parameters[0]) && ranges[1].contains(parameters[1])
+            })
 }

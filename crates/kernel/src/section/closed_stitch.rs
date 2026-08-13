@@ -99,6 +99,13 @@ impl ClosedBranchSource {
         })
     }
 
+    pub(crate) fn from_touching_section_branch(
+        branch_index: usize,
+        branch: &SectionBranch,
+    ) -> Option<Self> {
+        Self::from_folded_section_branch(branch_index, branch)
+    }
+
     /// Exact endpoint identity for the graph-owned parameter seam.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn period_seam(self) -> CertifiedClosedEndpoint {
@@ -201,6 +208,22 @@ pub(crate) enum CertifiedClosedEndpointKey {
     /// The exact authored periodic seam shared by two guarded pieces of one
     /// ordered folded-support sheet.
     FoldedSupportSeam { faces: [RawFaceId; 2], sheet: u8 },
+    /// One exact repeated support root, split into two smooth continuation
+    /// ports that each join opposite sheets.
+    TouchingSupportRoot {
+        faces: [RawFaceId; 2],
+        continuation: u8,
+        chart: u8,
+        projective_bits: [u64; 2],
+    },
+    /// Exact authored periodic seam on one touching-support sheet.
+    TouchingSupportSeam { faces: [RawFaceId; 2], sheet: u8 },
+    /// Exact regular tangent/cotangent chart join on one touching-support sheet.
+    TouchingSupportChartJoin {
+        faces: [RawFaceId; 2],
+        sheet: u8,
+        longitude_bits: u64,
+    },
 }
 
 /// One directed fragment endpoint and its metric consistency evidence.
@@ -248,6 +271,45 @@ impl CertifiedClosedEndpoint {
     pub(crate) const fn folded_support_seam(faces: [RawFaceId; 2], sheet: u8) -> Self {
         Self {
             key: CertifiedClosedEndpointKey::FoldedSupportSeam { faces, sheet },
+            edge_parameters: [None, None],
+        }
+    }
+
+    pub(crate) const fn touching_support_root(
+        faces: [RawFaceId; 2],
+        continuation: u8,
+        chart: u8,
+        projective_bits: [u64; 2],
+    ) -> Self {
+        Self {
+            key: CertifiedClosedEndpointKey::TouchingSupportRoot {
+                faces,
+                continuation,
+                chart,
+                projective_bits,
+            },
+            edge_parameters: [None, None],
+        }
+    }
+
+    pub(crate) const fn touching_support_seam(faces: [RawFaceId; 2], sheet: u8) -> Self {
+        Self {
+            key: CertifiedClosedEndpointKey::TouchingSupportSeam { faces, sheet },
+            edge_parameters: [None, None],
+        }
+    }
+
+    pub(crate) const fn touching_support_chart_join(
+        faces: [RawFaceId; 2],
+        sheet: u8,
+        longitude_bits: u64,
+    ) -> Self {
+        Self {
+            key: CertifiedClosedEndpointKey::TouchingSupportChartJoin {
+                faces,
+                sheet,
+                longitude_bits,
+            },
             edge_parameters: [None, None],
         }
     }
@@ -616,7 +678,10 @@ fn endpoint_is_valid(endpoint: CertifiedClosedEndpoint, source: ClosedFragmentSo
                     )
         }
         CertifiedClosedEndpointKey::FoldedSupportRoot { faces, .. }
-        | CertifiedClosedEndpointKey::FoldedSupportSeam { faces, .. } => {
+        | CertifiedClosedEndpointKey::FoldedSupportSeam { faces, .. }
+        | CertifiedClosedEndpointKey::TouchingSupportRoot { faces, .. }
+        | CertifiedClosedEndpointKey::TouchingSupportSeam { faces, .. }
+        | CertifiedClosedEndpointKey::TouchingSupportChartJoin { faces, .. } => {
             faces == source.faces && endpoint.edge_parameters == [None, None]
         }
     }
@@ -667,7 +732,10 @@ fn intersect_parameter_evidence(
     match key {
         CertifiedClosedEndpointKey::PeriodSeam { .. }
         | CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
-        | CertifiedClosedEndpointKey::FoldedSupportSeam { .. } => {
+        | CertifiedClosedEndpointKey::FoldedSupportSeam { .. }
+        | CertifiedClosedEndpointKey::TouchingSupportRoot { .. }
+        | CertifiedClosedEndpointKey::TouchingSupportSeam { .. }
+        | CertifiedClosedEndpointKey::TouchingSupportChartJoin { .. } => {
             (current == [None, None] && incoming == [None, None]).then_some([None, None])
         }
         CertifiedClosedEndpointKey::TrimSite { site, .. } => {
@@ -1062,6 +1130,89 @@ mod tests {
                 ))
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn repeated_root_touching_members_form_one_six_fragment_cycle() {
+        let ids = ids();
+        let sources: [ClosedBranchSource; 6] =
+            core::array::from_fn(|ordinal| branch(&ids, ordinal, [0, 1]));
+        let root_zero = CertifiedClosedEndpoint::touching_support_root(
+            sources[0].faces,
+            0,
+            0,
+            [(-1.0_f64).to_bits(); 2],
+        );
+        let root_one = CertifiedClosedEndpoint::touching_support_root(
+            sources[0].faces,
+            1,
+            0,
+            [(-1.0_f64).to_bits(); 2],
+        );
+        let lower_seam = CertifiedClosedEndpoint::touching_support_seam(sources[0].faces, 0);
+        let upper_seam = CertifiedClosedEndpoint::touching_support_seam(sources[0].faces, 1);
+        let lower_chart = CertifiedClosedEndpoint::touching_support_chart_join(
+            sources[0].faces,
+            0,
+            core::f64::consts::FRAC_PI_2.to_bits(),
+        );
+        let upper_chart = CertifiedClosedEndpoint::touching_support_chart_join(
+            sources[0].faces,
+            1,
+            core::f64::consts::FRAC_PI_2.to_bits(),
+        );
+        let fragments = [
+            arc(
+                sources[0].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                lower_seam,
+                lower_chart,
+            ),
+            arc(
+                sources[1].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                lower_chart,
+                root_zero,
+            ),
+            arc(
+                sources[2].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_one,
+                lower_seam,
+            ),
+            arc(
+                sources[3].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                upper_chart,
+                upper_seam,
+            ),
+            arc(
+                sources[4].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_zero,
+                upper_chart,
+            ),
+            arc(
+                sources[5].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                upper_seam,
+                root_one,
+            ),
+        ];
+
+        let result = stitch_closed_fragments(&fragments);
+        assert_eq!(result.completion, ClosedStitchCompletion::Complete);
+        assert!(result.defects.is_empty());
+        assert_eq!(result.vertices.len(), 6);
+        assert_eq!(result.chains.len(), 1);
+        assert!(result.chains[0].closed);
+        assert_eq!(result.chains[0].fragments.len(), 6);
+        assert!(
+            result
+                .vertices
+                .iter()
+                .all(|vertex| vertex.incoming == 1 && vertex.outgoing == 1)
         );
     }
 

@@ -307,6 +307,65 @@ impl ExactPolynomial {
         Ok((lower.is_finite() && lower > 0.0).then_some(lower))
     }
 
+    /// Strict positive Bernstein lower bound with a fixed subdivision budget.
+    ///
+    /// This extends the same convex-hull theorem used by
+    /// [`Self::positive_lower_bound_on_interval`]. Subdivision changes only
+    /// conditioning: every accepted leaf independently owns a quantitative
+    /// positive bound, and an inconclusive leaf fails closed when the caller's
+    /// exact cell allowance is exhausted.
+    pub(crate) fn positive_lower_bound_on_interval_subdivided(
+        &self,
+        lo: f64,
+        hi: f64,
+        cell_budget: usize,
+    ) -> Result<Option<f64>, RootIsolationFailure> {
+        match self.positive_lower_bound_on_interval(lo, hi) {
+            Ok(Some(lower)) => return Ok(Some(lower)),
+            Ok(None) | Err(RootIsolationFailure::UnsafeArithmeticEnvelope) => {}
+            Err(error) => return Err(error),
+        }
+        if cell_budget == 0 {
+            return Ok(None);
+        }
+
+        let mut pending = vec![(lo, hi)];
+        let mut visited = 0_usize;
+        let mut lower = f64::INFINITY;
+        while let Some((cell_lo, cell_hi)) = pending.pop() {
+            visited = visited.saturating_add(1);
+            if visited > cell_budget {
+                return Err(RootIsolationFailure::IsolationLimit);
+            }
+            match self.positive_lower_bound_on_interval(cell_lo, cell_hi) {
+                Ok(Some(cell_lower)) => lower = lower.min(cell_lower),
+                Ok(None) | Err(RootIsolationFailure::UnsafeArithmeticEnvelope) => {
+                    let midpoint = if cell_lo < 0.0 && cell_hi > 0.0 {
+                        0.0
+                    } else {
+                        cell_lo * 0.5 + cell_hi * 0.5
+                    };
+                    if !(cell_lo < midpoint && midpoint < cell_hi) {
+                        return Err(RootIsolationFailure::ParameterResolution);
+                    }
+                    // Prove the larger-magnitude side first. The remaining
+                    // nested side approaches a small endpoint geometrically,
+                    // keeping affine Bernstein widths inside exact
+                    // subtraction's arithmetic envelope.
+                    if cell_lo.abs() >= cell_hi.abs() {
+                        pending.push((midpoint, cell_hi));
+                        pending.push((cell_lo, midpoint));
+                    } else {
+                        pending.push((cell_lo, midpoint));
+                        pending.push((midpoint, cell_hi));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok((lower.is_finite() && lower > 0.0).then_some(lower))
+    }
+
     pub fn side_sign(
         &self,
         parameter: f64,

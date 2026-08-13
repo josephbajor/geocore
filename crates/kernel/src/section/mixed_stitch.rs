@@ -405,6 +405,10 @@ fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<DirectedEndpoin
             departure: endpoints[0].endpoint(),
             arrival: endpoints[1].endpoint(),
         }),
+        SectionCurveFragmentSpan::TouchingSupport { endpoints } => Some(DirectedEndpointPair {
+            departure: endpoints[0].endpoint(),
+            arrival: endpoints[1].endpoint(),
+        }),
     }
 }
 

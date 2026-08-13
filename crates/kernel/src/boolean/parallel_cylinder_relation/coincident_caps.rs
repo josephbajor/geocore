@@ -425,7 +425,8 @@ pub(crate) fn certify_coincident_cap_relation(
             }
             SectionCurveFragmentSpan::Whole
             | SectionCurveFragmentSpan::BoundedProcedural { .. }
-            | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+            | SectionCurveFragmentSpan::FoldedSupport { .. }
+            | SectionCurveFragmentSpan::TouchingSupport { .. } => {
                 return Err(ParallelCylinderRelationGap::SectionLayout);
             }
         }

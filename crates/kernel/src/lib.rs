@@ -357,8 +357,8 @@ pub use section::{
     SectionSkewCylinderPcurveCellCertificate, SectionSkewCylinderPcurveEnclosure,
     SectionSkewCylinderRootChart, SectionSkewCylinderRootCorridorCertificate,
     SectionSkewCylinderStrictDiscriminantMiss, SectionSourceParameterKey, SectionThroughContact,
-    SectionThroughContactRoot, SectionUvCircle, SectionUvCurve, SectionUvLine,
-    SectionUvParameterInterval, SectionVertex,
+    SectionThroughContactRoot, SectionTouchingSupportFragmentEnd, SectionTouchingSupportSheet,
+    SectionUvCircle, SectionUvCurve, SectionUvLine, SectionUvParameterInterval, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

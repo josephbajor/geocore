@@ -16,7 +16,8 @@ use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError,
     SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK,
-    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SkewCylinderAxialBoundary, SkewCylinderSheet,
+    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+    SkewCylinderAxialBoundary, SkewCylinderSheet,
 };
 use kops::intersect::{
     ContactKind, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
@@ -54,6 +55,17 @@ fn perpendicular_axis_pair(frame: Frame, offset: f64, second_radius: f64) -> [Cy
     let second = Cylinder::new(
         Frame::new(frame.origin() + frame.y() * offset, frame.x(), frame.y()).unwrap(),
         second_radius,
+    )
+    .unwrap();
+    [first, second]
+}
+
+fn touching_body_axis_pair(frame: Frame) -> [Cylinder; 2] {
+    let first = Cylinder::new(frame.with_origin(frame.origin() - frame.z() * 0.5), 0.25).unwrap();
+    let second_center = frame.origin() + frame.y() * 0.125;
+    let second = Cylinder::new(
+        Frame::new(second_center - frame.x() * 0.5, frame.x(), frame.y()).unwrap(),
+        0.375,
     )
     .unwrap();
     [first, second]
@@ -1552,6 +1564,163 @@ fn seam_folded_support_owns_atomic_four_member_work() {
         resource: ResourceKind::Work,
         consumed: SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK,
         allowed: SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0
+    );
+}
+
+#[test]
+fn repeated_positive_support_touch_publishes_six_members_and_six_exact_joins() {
+    let rotated = Frame::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let windows = [
+        cylinder_window(range(0.0, 1.0)),
+        cylinder_window(range(0.0, 1.0)),
+    ];
+    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+        let [first, second] = touching_body_axis_pair(frame);
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(forward, replay, "{name} changed across replay");
+        for (result, sources) in [
+            (&forward, [first_handle, second_handle]),
+            (&reversed, [second_handle, first_handle]),
+        ] {
+            assert_eq!(result.branch_graph.source_surfaces, sources);
+            assert!(result.raw.is_complete(), "{name}: {:#?}", result.raw);
+            assert!(result.raw.points.is_empty());
+            assert_eq!(result.raw.curves.len(), 6);
+            assert_eq!(result.branch_graph.edges.len(), 6);
+            assert_eq!(result.branch_graph.vertices.len(), 6);
+            assert!(result.skew_cylinder_folded_support_curves().is_empty());
+            let [touching] = result.skew_cylinder_touching_support_curves() else {
+                panic!("{name}: expected one repeated-root touching component")
+            };
+            assert_eq!(touching.certificate().formula_residuals().len(), 6);
+            let root_joins = result
+                .branch_graph
+                .vertices
+                .iter()
+                .filter(|vertex| {
+                    matches!(
+                        vertex.event,
+                        IntersectionBranchVertexEvent::TouchingSupportRootJoin { .. }
+                    )
+                })
+                .count();
+            let seam_joins = result
+                .branch_graph
+                .vertices
+                .iter()
+                .filter(|vertex| {
+                    matches!(
+                        vertex.event,
+                        IntersectionBranchVertexEvent::TouchingSupportSeamJoin { .. }
+                    )
+                })
+                .count();
+            let chart_joins = result
+                .branch_graph
+                .vertices
+                .iter()
+                .filter(|vertex| {
+                    matches!(
+                        vertex.event,
+                        IntersectionBranchVertexEvent::TouchingSupportChartJoin { .. }
+                    )
+                })
+                .count();
+            assert_eq!((root_joins, seam_joins, chart_joins), (2, 2, 2));
+        }
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    }
+}
+
+#[test]
+fn repeated_positive_support_touch_owns_atomic_six_member_work() {
+    let [first, second] = touching_body_axis_pair(Frame::world());
+    let windows = [
+        cylinder_window(range(0.0, 1.0)),
+        cylinder_window(range(0.0, 1.0)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+    let run = |allowed| {
+        let context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(
+                BudgetPlan::new([LimitSpec::new(
+                    SKEW_CYLINDER_OPEN_SPAN_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            );
+        intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            &context,
+        )
+    };
+
+    let exact = run(SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK);
+    assert_eq!(exact.result().unwrap().branch_graph.edges.len(), 6);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied = run(SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK - 1);
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+        allowed: SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK - 1,
     };
     assert!(matches!(
         denied.result(),

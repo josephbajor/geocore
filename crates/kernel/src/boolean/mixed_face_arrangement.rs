@@ -618,7 +618,8 @@ fn adapt_fragment(
             Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
         }
         SectionCurveFragmentSpan::BoundedProcedural { .. }
-        | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+        | SectionCurveFragmentSpan::FoldedSupport { .. }
+        | SectionCurveFragmentSpan::TouchingSupport { .. } => {
             return Err(MixedFaceArrangementError::BoundedProceduralFragment(key));
         }
     };
@@ -648,7 +649,8 @@ fn adapt_fragment(
             (end.endpoint(), root)
         }),
         SectionCurveFragmentSpan::BoundedProcedural { .. }
-        | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+        | SectionCurveFragmentSpan::FoldedSupport { .. }
+        | SectionCurveFragmentSpan::TouchingSupport { .. } => {
             return Err(MixedFaceArrangementError::BoundedProceduralFragment(key));
         }
     };

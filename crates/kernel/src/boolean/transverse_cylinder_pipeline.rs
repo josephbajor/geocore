@@ -38,6 +38,7 @@ pub(super) fn execute_transverse_cylinder_boolean(
             matches!(
                 fragment.span(),
                 crate::section::SectionCurveFragmentSpan::FoldedSupport { .. }
+                    | crate::section::SectionCurveFragmentSpan::TouchingSupport { .. }
             )
         })
     {

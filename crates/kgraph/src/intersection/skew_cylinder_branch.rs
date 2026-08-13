@@ -85,16 +85,18 @@ pub use persistent_family::{
 
 #[path = "skew_cylinder_axial_bound.rs"]
 mod axial_bound;
+pub(crate) use axial_bound::SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BERNSTEIN_CELLS;
 pub use axial_bound::{
     ExactSkewCylinderDiscriminant, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
-    SkewCylinderAngularRootBracket, SkewCylinderAxialBoundProvenance,
-    SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary, SkewCylinderAxialRelation,
-    SkewCylinderAxialRoot, SkewCylinderAxialRootFailure,
+    SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK, SkewCylinderAngularRootBracket,
+    SkewCylinderAxialBoundProvenance, SkewCylinderAxialBoundTopology, SkewCylinderAxialBoundary,
+    SkewCylinderAxialRelation, SkewCylinderAxialRoot, SkewCylinderAxialRootFailure,
     SkewCylinderDiscriminantContactTopologyCertificate, SkewCylinderDiscriminantRoot,
     SkewCylinderExactDiscriminantTopology, SkewCylinderFoldedSupportCellLocation,
     SkewCylinderFoldedSupportTopologyCertificate, SkewCylinderHalfAngleChart,
     SkewCylinderHalfAngleRootBracket, SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
-    certify_skew_cylinder_folded_support_topology, classify_skew_cylinder_axial_bound,
+    SkewCylinderTouchingSupportTopologyCertificate, certify_skew_cylinder_folded_support_topology,
+    certify_skew_cylinder_touching_support_topology, classify_skew_cylinder_axial_bound,
     classify_skew_cylinder_exact_discriminant, exact_skew_cylinder_discriminant,
 };
 use axial_bound::{cotangent_projective_interval, tangent_projective_interval};
@@ -105,9 +107,13 @@ pub use support_contact::{
     PersistentSkewCylinderFoldedSupportCertificate, PersistentSkewCylinderFoldedSupportEndpoint,
     PersistentSkewCylinderSupportContactAxialLocation,
     PersistentSkewCylinderSupportContactBoundaryPlan,
-    PersistentSkewCylinderSupportContactCertificate, SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
-    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, certify_persistent_skew_cylinder_folded_support,
+    PersistentSkewCylinderSupportContactCertificate,
+    PersistentSkewCylinderTouchingSupportCertificate,
+    PersistentSkewCylinderTouchingSupportEndpoint, SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+    certify_persistent_skew_cylinder_folded_support,
     certify_persistent_skew_cylinder_support_contact,
+    certify_persistent_skew_cylinder_touching_support,
     plan_persistent_skew_cylinder_support_contact_boundaries,
 };
 
@@ -594,7 +600,7 @@ fn certify_validated_branch(
     ranges: [[ParamRange; 2]; 2],
     tolerance: f64,
 ) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
-    certify_validated_branch_impl(algebra, ranges, tolerance, None, false)
+    certify_validated_branch_impl(algebra, ranges, tolerance, None, false, false)
 }
 
 fn certify_validated_branch_with_exact_radicand_lower(
@@ -602,6 +608,7 @@ fn certify_validated_branch_with_exact_radicand_lower(
     ranges: [[ParamRange; 2]; 2],
     tolerance: f64,
     radicand_lower_bounds: RadicandLowerBounds,
+    permit_sheet_tube_overlap: bool,
 ) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
     certify_validated_branch_impl(
         algebra,
@@ -609,6 +616,7 @@ fn certify_validated_branch_with_exact_radicand_lower(
         tolerance,
         Some(radicand_lower_bounds),
         true,
+        permit_sheet_tube_overlap,
     )
 }
 
@@ -618,6 +626,7 @@ fn certify_validated_branch_impl(
     tolerance: f64,
     radicand_lower_bounds: Option<RadicandLowerBounds>,
     folded_position_identity: bool,
+    permit_sheet_tube_overlap: bool,
 ) -> Result<PairedSkewCylinderBranchResidualCertificate, IntersectionCertificateError> {
     let proof = prove_branch_range(algebra, ranges, radicand_lower_bounds)?;
     algebra.longitude_offset = proof.longitude_offset;
@@ -643,7 +652,7 @@ fn certify_validated_branch_impl(
                 trace: PairedTrace::Second,
             })?
             .hi();
-    if separation <= paired_tube_width {
+    if !permit_sheet_tube_overlap && separation <= paired_tube_width {
         return Err(unsupported(
             "skew Cylinder/Cylinder sheet separation is not wider than both residual tubes",
         ));
@@ -881,6 +890,7 @@ fn stored_radicand_lower_bound(
     algebra: BranchAlgebra,
     chart: SkewCylinderHalfAngleChart,
     projective: RootBracket,
+    subdivision_budget: usize,
 ) -> Option<f64> {
     if !projective.lo.is_finite() || !projective.hi.is_finite() || projective.lo >= projective.hi {
         return None;
@@ -921,9 +931,16 @@ fn stored_radicand_lower_bound(
         k.sub(&numerator_square[4]).ok()?,
     ])
     .ok()?;
-    let numerator_lower = polynomial
-        .positive_lower_bound_on_interval(projective.lo, projective.hi)
-        .ok()??;
+    let numerator_lower = if subdivision_budget == 0 {
+        polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi)
+    } else {
+        polynomial.positive_lower_bound_on_interval_subdivided(
+            projective.lo,
+            projective.hi,
+            subdivision_budget,
+        )
+    }
+    .ok()??;
     let projective_interval = Interval::new(projective.lo, projective.hi);
     let denominator = (Interval::point(1.0) + projective_interval.square()).square();
     let lower = Interval::point(numerator_lower)

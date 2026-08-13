@@ -6,6 +6,7 @@ use kernel::{
     BodySectionGraph, SectionBranchTopology, SectionCurveEndpointTopology,
     SectionCurveFragmentSpan, SectionFoldedSupportSheet, SectionIsolatedContactKind,
     SectionPeriodicEmbeddingGap, SectionSite, SectionSkewCylinderAxialBoundary,
+    SectionTouchingSupportSheet,
 };
 
 struct Fixture {
@@ -200,6 +201,41 @@ fn seam_folded_support_fixture(frame: Frame) -> Fixture {
             Frame::new(second_center - frame.y() * 1.25, frame.y(), frame.x()).unwrap();
         let second = edit
             .create_cylinder(CylinderRequest::new(second_frame, 2.0, 2.5))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
+fn touching_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.origin() - frame.z() * 0.5),
+                0.25,
+                1.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_center = frame.origin() + frame.y() * 0.125;
+        let second_frame =
+            Frame::new(second_center - frame.x() * 0.5, frame.x(), frame.y()).unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 0.375, 1.0))
             .unwrap()
             .into_result()
             .unwrap()
@@ -535,6 +571,95 @@ fn assert_seam_folded_support_component(fixture: &Fixture, graph: &BodySectionGr
     }));
 }
 
+fn assert_touching_support_component(fixture: &Fixture, graph: &BodySectionGraph) {
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty(), "{:#?}", graph.gaps());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
+    assert!(graph.rings().is_empty());
+    assert!(graph.isolated_contacts().is_empty());
+    assert!(graph.through_contacts().is_empty());
+    assert_eq!(graph.branches().len(), 6);
+    assert_eq!(graph.curve_fragments().len(), 6);
+    assert_eq!(graph.curve_endpoints().len(), 6);
+    assert_eq!(graph.curve_components().len(), 1);
+    let component = &graph.curve_components()[0];
+    assert!(component.closed());
+    assert_eq!(component.fragments().len(), 6);
+
+    let mut endpoint_incidence = vec![0_usize; 6];
+    for &fragment_index in component.fragments() {
+        let fragment = &graph.curve_fragments()[fragment_index];
+        let branch = &graph.branches()[fragment.branch()];
+        assert_eq!(branch.topology(), SectionBranchTopology::Open);
+        assert!(branch.embedding_certificate().is_none());
+        let SectionCurveFragmentSpan::TouchingSupport { endpoints } = fragment.span() else {
+            panic!("touching support retained a non-touching fragment")
+        };
+        for endpoint in endpoints.iter() {
+            endpoint_incidence[endpoint.endpoint()] += 1;
+            let local = fixture.frame.to_local(endpoint.point());
+            assert!((local.x * local.x + local.y * local.y - 0.0625).abs() <= 1.0e-12);
+            assert!((-0.375..=0.375).contains(&local.z));
+        }
+    }
+    assert_eq!(endpoint_incidence, vec![2, 2, 2, 2, 2, 2]);
+
+    let mut root_ports = Vec::new();
+    let mut seams = Vec::new();
+    let mut charts = Vec::new();
+    for endpoint in graph.curve_endpoints() {
+        match endpoint.topology() {
+            SectionCurveEndpointTopology::TouchingSupportRootJoin {
+                continuation,
+                root_interval,
+                ..
+            } => {
+                assert!(root_interval.lo().is_finite());
+                assert!(root_interval.hi().is_finite());
+                assert!(root_interval.lo() <= root_interval.hi());
+                root_ports.push(*continuation);
+            }
+            SectionCurveEndpointTopology::TouchingSupportSeamJoin { sheet, .. } => {
+                seams.push(*sheet);
+            }
+            SectionCurveEndpointTopology::TouchingSupportChartJoin {
+                sheet, longitude, ..
+            } => {
+                assert_eq!(longitude.to_bits(), core::f64::consts::FRAC_PI_2.to_bits());
+                charts.push(*sheet);
+            }
+            topology => panic!("touching support acquired an unexpected endpoint: {topology:?}"),
+        }
+    }
+    root_ports.sort_unstable();
+    let sheet_key = |sheet: &SectionTouchingSupportSheet| match sheet {
+        SectionTouchingSupportSheet::Lower => 0,
+        SectionTouchingSupportSheet::Upper => 1,
+    };
+    seams.sort_by_key(sheet_key);
+    charts.sort_by_key(sheet_key);
+    let expected_sheets = vec![
+        SectionTouchingSupportSheet::Lower,
+        SectionTouchingSupportSheet::Upper,
+    ];
+    assert_eq!(root_ports, vec![0, 1]);
+    assert_eq!(seams, expected_sheets);
+    assert_eq!(charts, expected_sheets);
+    assert_eq!(graph.periodic_face_embeddings().len(), 2);
+    assert!(graph.periodic_face_embeddings().iter().all(|embedding| {
+        matches!(
+            embedding.gap(),
+            Some(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve { .. })
+        )
+    }));
+}
+
 #[test]
 fn isolated_support_contact_section_is_complete_replay_swap_and_frame_stable() {
     for frame in exact_frames() {
@@ -801,6 +926,59 @@ fn seam_folded_support_boolean_refuses_distinctly_without_mutation() {
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
             assert_seam_folded_support_component(&fixture, &section(&fixture, swapped));
+        }
+    }
+}
+
+#[test]
+fn touching_support_section_is_complete_replay_swap_and_frame_stable() {
+    for (frame_index, frame) in folded_exact_frames().into_iter().enumerate() {
+        let fixture = touching_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay, "frame {frame_index} forward replay");
+        assert_eq!(swapped, swapped_replay, "frame {frame_index} swap replay");
+        assert_touching_support_component(&fixture, &forward);
+        assert_touching_support_component(&fixture, &swapped);
+    }
+}
+
+#[test]
+fn touching_support_boolean_refuses_distinctly_without_mutation() {
+    for frame in folded_exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = touching_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Intersect,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+                ),
+                "{outcome:?}"
+            );
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_touching_support_component(&fixture, &section(&fixture, swapped));
         }
     }
 }

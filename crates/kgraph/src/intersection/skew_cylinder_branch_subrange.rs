@@ -9,6 +9,8 @@ pub(super) struct FoldedRadicandGuard {
     pub(super) chart: SkewCylinderHalfAngleChart,
     pub(super) projective: RootBracket,
     pub(super) source_lower: f64,
+    pub(super) stored_subdivision_budget: usize,
+    pub(super) permit_sheet_tube_overlap: bool,
 }
 
 /// Certify one strict, non-wrapping subrange of a finite skew-cylinder sheet.
@@ -74,6 +76,7 @@ pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
         algebra,
         radicand_guard.chart,
         radicand_guard.projective,
+        radicand_guard.stored_subdivision_budget,
     )
         .ok_or_else(|| {
             unsupported(
@@ -88,6 +91,7 @@ pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
             stored: stored_radicand_lower,
             source: radicand_guard.source_lower,
         },
+        radicand_guard.permit_sheet_tube_overlap,
     )
 }
 

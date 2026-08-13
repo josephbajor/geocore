@@ -55,10 +55,14 @@ pub(super) fn build_verified_skew_cylinder_branch(
             (false, CertifiedSkewCylinderBranchProof::FoldedSupport(certificate)) => {
                 IntersectionBranchCertificate::SkewCylinderFoldedSupport(certificate)
             }
+            (false, CertifiedSkewCylinderBranchProof::TouchingSupport(certificate)) => {
+                IntersectionBranchCertificate::SkewCylinderTouchingSupport(certificate)
+            }
             (true, CertifiedSkewCylinderBranchProof::OpenSpan(_))
             | (false, CertifiedSkewCylinderBranchProof::TwoSheet(_))
             | (false, CertifiedSkewCylinderBranchProof::WholeContact(_))
-            | (true, CertifiedSkewCylinderBranchProof::FoldedSupport(_)) => {
+            | (true, CertifiedSkewCylinderBranchProof::FoldedSupport(_))
+            | (true, CertifiedSkewCylinderBranchProof::TouchingSupport(_)) => {
                 return Err(GraphSurfaceIntersectionError::BranchCertificate(
                     kgraph::IntersectionCertificateError::InvalidTraceFamily,
                 ));

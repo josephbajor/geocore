@@ -121,12 +121,15 @@ pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_TWO_SHEET_EXACT_WORK, SKEW_CYLINDER_TWO_SHEET_INCOMPLETE,
     SKEW_CYLINDER_TWO_SHEET_WORK, SkewCylinderFoldedSupportCurve, SkewCylinderIsolatedContact,
     SkewCylinderStrictDiscriminantMiss, SkewCylinderSupportContact, SkewCylinderThroughContact,
+    SkewCylinderTouchingSupportCurve,
 };
 pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
     SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderFoldedSupportSeamEndpointProof,
     SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
+    SkewCylinderTouchingSupportChartJoinEndpointProof,
+    SkewCylinderTouchingSupportRootEndpointProof, SkewCylinderTouchingSupportSeamEndpointProof,
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
@@ -136,9 +139,10 @@ pub use graph_surface::{
     IntersectionBranchVertexEvent, NURBS_TRACE_CERTIFICATE_WORK, PERSISTENT_DESCRIPTOR_FAILURE,
     PersistentIntersectionBranchEdge, PersistentIntersectionBranchGraph,
     SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS, SkewCylinderFoldedSupportBranchCertificate,
-    SkewCylinderOpenSpanBranchCertificate, SkewCylinderWholeContactBranchCertificate,
-    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
-    intersect_bounded_graph_surfaces_with_context, persist_verified_graph_surface_intersections,
+    SkewCylinderOpenSpanBranchCertificate, SkewCylinderTouchingSupportBranchCertificate,
+    SkewCylinderWholeContactBranchCertificate, intersect_bounded_graph_surfaces,
+    intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
+    persist_verified_graph_surface_intersections,
 };
 pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;

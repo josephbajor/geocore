@@ -1375,7 +1375,8 @@ fn mixed_fragment_family(fragment: &SectionCurveFragment) -> MixedFragmentFamily
             panic!("mixed slab fixture must not publish a whole branch")
         }
         SectionCurveFragmentSpan::BoundedProcedural { .. }
-        | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+        | SectionCurveFragmentSpan::FoldedSupport { .. }
+        | SectionCurveFragmentSpan::TouchingSupport { .. } => {
             panic!("mixed slab fixture must not publish a procedural branch")
         }
     }
@@ -1393,7 +1394,8 @@ fn fragment_endpoint_indices(fragment: &SectionCurveFragment) -> [usize; 2] {
             panic!("mixed slab fixture must not publish a whole branch")
         }
         SectionCurveFragmentSpan::BoundedProcedural { .. }
-        | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+        | SectionCurveFragmentSpan::FoldedSupport { .. }
+        | SectionCurveFragmentSpan::TouchingSupport { .. } => {
             panic!("mixed slab fixture must not publish a procedural branch")
         }
     }
@@ -1537,7 +1539,8 @@ fn collect_mixed_endpoint_occurrences(
                 panic!("mixed slab fixture must not publish a whole branch")
             }
             SectionCurveFragmentSpan::BoundedProcedural { .. }
-            | SectionCurveFragmentSpan::FoldedSupport { .. } => {
+            | SectionCurveFragmentSpan::FoldedSupport { .. }
+            | SectionCurveFragmentSpan::TouchingSupport { .. } => {
                 panic!("mixed slab fixture must not publish a procedural branch")
             }
         }
@@ -1671,7 +1674,10 @@ fn root_scalar_signature(graph: &BodySectionGraph) -> Vec<(EdgeId, usize, [u64; 
             SectionCurveEndpointTopology::ParameterSeam { .. }
             | SectionCurveEndpointTopology::ThroughContact { .. }
             | SectionCurveEndpointTopology::FoldedSupportJoin { .. }
-            | SectionCurveEndpointTopology::FoldedSupportSeamJoin { .. } => None,
+            | SectionCurveEndpointTopology::FoldedSupportSeamJoin { .. }
+            | SectionCurveEndpointTopology::TouchingSupportRootJoin { .. }
+            | SectionCurveEndpointTopology::TouchingSupportSeamJoin { .. }
+            | SectionCurveEndpointTopology::TouchingSupportChartJoin { .. } => None,
         })
         .map(|key| {
             let enclosure = key.root_parameter_enclosure();

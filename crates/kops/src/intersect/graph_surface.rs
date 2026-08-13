@@ -8,7 +8,8 @@
 use super::error::IntersectionError;
 pub use super::graph_branch_certificate::{
     IntersectionBranchCertificate, SkewCylinderFoldedSupportBranchCertificate,
-    SkewCylinderOpenSpanBranchCertificate, SkewCylinderWholeContactBranchCertificate,
+    SkewCylinderOpenSpanBranchCertificate, SkewCylinderTouchingSupportBranchCertificate,
+    SkewCylinderWholeContactBranchCertificate,
 };
 use super::graph_cylinder_cylinder::{
     ParallelCylinderExteriorRadialSeparation, build_verified_cylinder_cylinder_ruling_branch,
@@ -18,7 +19,7 @@ use super::graph_cylinder_cylinder_skew::{
     CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections,
     SkewCylinderFoldedSupportCurve, SkewCylinderIsolatedContact,
     SkewCylinderStrictDiscriminantMiss, SkewCylinderSupportContact, SkewCylinderThroughContact,
-    intersect_certified_skew_cylinders,
+    SkewCylinderTouchingSupportCurve, intersect_certified_skew_cylinders,
 };
 use super::graph_cylinder_cylinder_skew_branch::build_verified_skew_cylinder_branch;
 use super::graph_plane_cylinder::{
@@ -292,6 +293,21 @@ pub enum IntersectionBranchVertexEvent {
         /// Ordered folded-support sheet owning the join.
         sheet: kgraph::SkewCylinderSheet,
     },
+    /// Repeated support root joined through one exact cross-sheet continuation port.
+    TouchingSupportRootJoin {
+        /// Exact smooth-continuation port identity.
+        continuation: u8,
+    },
+    /// Exact authored periodic seam on one touching-support sheet.
+    TouchingSupportSeamJoin {
+        /// Ordered touching-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
+    /// Exact tangent/cotangent chart transition on one touching-support sheet.
+    TouchingSupportChartJoin {
+        /// Ordered touching-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
 }
 
 /// End condition for one endpoint slot of an intersection branch.
@@ -316,6 +332,21 @@ pub enum IntersectionBranchEndpointEvent {
     /// Exact authored periodic seam joining two guarded pieces of one folded sheet.
     FoldedSupportSeamJoin {
         /// Ordered folded-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
+    /// Repeated support root joined through one exact cross-sheet continuation port.
+    TouchingSupportRootJoin {
+        /// Exact smooth-continuation port identity.
+        continuation: u8,
+    },
+    /// Exact authored periodic seam on one touching-support sheet.
+    TouchingSupportSeamJoin {
+        /// Ordered touching-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
+    /// Exact tangent/cotangent chart transition on one touching-support sheet.
+    TouchingSupportChartJoin {
+        /// Ordered touching-support sheet owning the join.
         sheet: kgraph::SkewCylinderSheet,
     },
 }
@@ -395,6 +426,7 @@ pub struct GraphSurfaceSurfaceIntersections {
     skew_cylinder_through_contacts: Vec<SkewCylinderThroughContact>,
     skew_cylinder_support_contacts: Vec<SkewCylinderSupportContact>,
     skew_cylinder_folded_support_curves: Vec<SkewCylinderFoldedSupportCurve>,
+    skew_cylinder_touching_support_curves: Vec<SkewCylinderTouchingSupportCurve>,
 }
 
 impl GraphSurfaceSurfaceIntersections {
@@ -452,6 +484,13 @@ impl GraphSurfaceSurfaceIntersections {
     /// sheet edges sharing exact support-root and optional authored-seam joins.
     pub fn skew_cylinder_folded_support_curves(&self) -> &[SkewCylinderFoldedSupportCurve] {
         &self.skew_cylinder_folded_support_curves
+    }
+
+    /// Exact repeated-root touching-support components, each represented by
+    /// six guarded sheet edges with exact cross-sheet root continuations,
+    /// authored seams, and regular chart joins.
+    pub fn skew_cylinder_touching_support_curves(&self) -> &[SkewCylinderTouchingSupportCurve] {
+        &self.skew_cylinder_touching_support_curves
     }
 }
 
@@ -1025,6 +1064,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     let mut skew_cylinder_through_contacts = None;
     let mut skew_cylinder_support_contacts = None;
     let mut skew_cylinder_folded_support_curves = None;
+    let mut skew_cylinder_touching_support_curves = None;
     let (raw, march_traces) = match fields {
         [
             ResolvedGraphSurfaceField::Plane {
@@ -1101,6 +1141,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     through_contacts,
                     support_contacts,
                     folded_support_curves,
+                    touching_support_curves,
                 } = intersect_certified_skew_cylinders(
                     cylinders,
                     ranges,
@@ -1113,6 +1154,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 skew_cylinder_through_contacts = Some(through_contacts);
                 skew_cylinder_support_contacts = Some(support_contacts);
                 skew_cylinder_folded_support_curves = Some(folded_support_curves);
+                skew_cylinder_touching_support_curves = Some(touching_support_curves);
                 raw
             };
             (raw, None)
@@ -1299,6 +1341,8 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         skew_cylinder_through_contacts: skew_cylinder_through_contacts.unwrap_or_default(),
         skew_cylinder_support_contacts: skew_cylinder_support_contacts.unwrap_or_default(),
         skew_cylinder_folded_support_curves: skew_cylinder_folded_support_curves
+            .unwrap_or_default(),
+        skew_cylinder_touching_support_curves: skew_cylinder_touching_support_curves
             .unwrap_or_default(),
     })
 }
@@ -2290,6 +2334,149 @@ fn build_verified_branch_graph(
                         IntersectionBranchVertexEvent::FoldedSupportSeamJoin { sheet },
                     )
                 }
+                Some(
+                    proof @ IntersectionBranchEndpointProof::SkewCylinderTouchingSupportRoot(_),
+                ) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let proof = proof
+                        .validated_touching_support_root(parameter, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let touching = certificate.as_skew_cylinder_touching_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    let expected_root = touching.touching_certificate().topology().root().bracket();
+                    let expected_chart = match expected_root.chart {
+                        kgraph::SkewCylinderHalfAngleChart::Tangent => {
+                            super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Tangent
+                        }
+                        kgraph::SkewCylinderHalfAngleChart::Cotangent => {
+                            super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Cotangent
+                        }
+                    };
+                    let endpoint = kgraph::PersistentSkewCylinderTouchingSupportEndpoint::Root {
+                        continuation: proof.continuation,
+                    };
+                    if proof.half_angle_chart != expected_chart
+                        || proof.half_angle_bracket != [expected_root.lo, expected_root.hi]
+                        || proof.point != touching.touching_certificate().endpoint_point(endpoint)
+                        || proof.surface_parameters
+                            != touching.touching_certificate().source_parameters(endpoint)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::TouchingSupportRootJoin {
+                            continuation: proof.continuation,
+                        },
+                        IntersectionBranchVertexEvent::TouchingSupportRootJoin {
+                            continuation: proof.continuation,
+                        },
+                    )
+                }
+                Some(
+                    proof @ IntersectionBranchEndpointProof::SkewCylinderTouchingSupportSeam(_),
+                ) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let sheet = match &carrier {
+                        CurveDescriptor::SkewCylinderBranch(carrier) => carrier.sheet(),
+                        _ => {
+                            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ));
+                        }
+                    };
+                    let proof = proof
+                        .validated_touching_support_seam(parameter, sheet, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let touching = certificate.as_skew_cylinder_touching_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    let endpoint =
+                        kgraph::PersistentSkewCylinderTouchingSupportEndpoint::Seam(sheet);
+                    if proof.point != touching.touching_certificate().endpoint_point(endpoint)
+                        || proof.surface_parameters
+                            != touching.touching_certificate().source_parameters(endpoint)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::TouchingSupportSeamJoin { sheet },
+                        IntersectionBranchVertexEvent::TouchingSupportSeamJoin { sheet },
+                    )
+                }
+                Some(
+                    proof
+                    @ IntersectionBranchEndpointProof::SkewCylinderTouchingSupportChartJoin(_),
+                ) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let sheet = match &carrier {
+                        CurveDescriptor::SkewCylinderBranch(carrier) => carrier.sheet(),
+                        _ => {
+                            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ));
+                        }
+                    };
+                    let proof = proof
+                        .validated_touching_support_chart_join(parameter, sheet, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let touching = certificate.as_skew_cylinder_touching_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    let endpoint =
+                        kgraph::PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(sheet);
+                    if proof.longitude.to_bits()
+                        != touching
+                            .touching_certificate()
+                            .chart_join_longitude()
+                            .to_bits()
+                        || proof.point != touching.touching_certificate().endpoint_point(endpoint)
+                        || proof.surface_parameters
+                            != touching.touching_certificate().source_parameters(endpoint)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::TouchingSupportChartJoin { sheet },
+                        IntersectionBranchVertexEvent::TouchingSupportChartJoin { sheet },
+                    )
+                }
                 None => {
                     let boundary_surfaces = [
                         on_window_boundary(
@@ -2349,6 +2536,9 @@ fn build_verified_branch_graph(
                 vertex_event,
                 IntersectionBranchVertexEvent::FoldedSupportJoin { .. }
                     | IntersectionBranchVertexEvent::FoldedSupportSeamJoin { .. }
+                    | IntersectionBranchVertexEvent::TouchingSupportRootJoin { .. }
+                    | IntersectionBranchVertexEvent::TouchingSupportSeamJoin { .. }
+                    | IntersectionBranchVertexEvent::TouchingSupportChartJoin { .. }
             ) {
                 vertices
                     .iter()

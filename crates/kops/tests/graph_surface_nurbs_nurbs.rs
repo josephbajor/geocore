@@ -127,9 +127,8 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
             kops::intersect::IntersectionBranchTopology::Open
         );
         assert_eq!(
-            result.branch_graph.edges[0]
-                .endpoint_events
-                .map(|event| match event {
+            result.branch_graph.edges[0].endpoint_events.map(|event| {
+                match event {
                     kops::intersect::IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
                         surfaces,
                     } => surfaces,
@@ -141,10 +140,20 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
                     }
                     | kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportSeamJoin {
                         ..
-                    } => {
-                        panic!("an open NURBS branch cannot end at a folded-cylinder join")
                     }
-                }),
+                    | kops::intersect::IntersectionBranchEndpointEvent::TouchingSupportRootJoin {
+                        ..
+                    }
+                    | kops::intersect::IntersectionBranchEndpointEvent::TouchingSupportSeamJoin {
+                        ..
+                    }
+                    | kops::intersect::IntersectionBranchEndpointEvent::TouchingSupportChartJoin {
+                        ..
+                    } => {
+                        panic!("an open NURBS branch cannot end at a support-cylinder join")
+                    }
+                }
+            }),
             [[true, true], [true, true]]
         );
         let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();

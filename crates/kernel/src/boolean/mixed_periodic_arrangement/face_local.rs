@@ -108,6 +108,9 @@ fn bounded_fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize;
         SectionCurveFragmentSpan::FoldedSupport { endpoints } => {
             Some(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
         }
+        SectionCurveFragmentSpan::TouchingSupport { endpoints } => {
+            Some(endpoints.each_ref().map(|endpoint| endpoint.endpoint()))
+        }
     }
 }
 

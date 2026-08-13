@@ -1204,9 +1204,12 @@ fn adapt_endpoint(
             }
         }
         CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
-        | CertifiedClosedEndpointKey::FoldedSupportSeam { .. } => {
+        | CertifiedClosedEndpointKey::FoldedSupportSeam { .. }
+        | CertifiedClosedEndpointKey::TouchingSupportRoot { .. }
+        | CertifiedClosedEndpointKey::TouchingSupportSeam { .. }
+        | CertifiedClosedEndpointKey::TouchingSupportChartJoin { .. } => {
             return Err(inconsistent_topology(
-                "ruling publisher cannot author a folded support root",
+                "ruling publisher cannot author a support-curve endpoint",
             ));
         }
     };

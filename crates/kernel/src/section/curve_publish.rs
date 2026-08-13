@@ -267,6 +267,28 @@ fn publish_closed_fragments(
                     })),
                 }
             }
+            ClosedFragmentEvidenceSpan::TouchingSupport { ends } => {
+                let Some(endpoint_indices) = fragment_endpoints
+                    .get(input_index)
+                    .copied()
+                    .flatten()
+                    .flatten()
+                else {
+                    return Err(inconsistent_topology(
+                        "certified touching support member lacks stitched endpoint indices",
+                    ));
+                };
+                SectionCurveFragmentSpan::TouchingSupport {
+                    endpoints: Box::new(core::array::from_fn(|end| {
+                        super::SectionTouchingSupportFragmentEnd {
+                            endpoint: endpoint_indices[end],
+                            point: ends[end].point,
+                            carrier_parameter: ends[end].carrier_parameter,
+                            surface_parameters: ends[end].surface_parameters,
+                        }
+                    })),
+                }
+            }
         };
         fragments.push(SectionCurveFragment {
             branch: evidence.branch,
@@ -397,6 +419,68 @@ fn adapt_closed_endpoint(
                 },
             }
         }
+        closed_stitch::CertifiedClosedEndpointKey::TouchingSupportRoot {
+            faces,
+            continuation,
+            chart,
+            projective_bits,
+        } => {
+            if root_scalars != [None, None] || vertex.edge_parameters != [None, None] {
+                return Err(inconsistent_topology(
+                    "touching support root retained source-edge scalar evidence",
+                ));
+            }
+            SectionCurveEndpointTopology::TouchingSupportRootJoin {
+                faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                continuation,
+                root_chart: if chart == 0 {
+                    super::SectionSkewCylinderRootChart::TangentHalfAngle
+                } else if chart == 1 {
+                    super::SectionSkewCylinderRootChart::CotangentHalfAngle
+                } else {
+                    return Err(inconsistent_topology(
+                        "touching support root retained an invalid projective chart",
+                    ));
+                },
+                root_interval: super::SectionSkewCylinderInterval::from_bounds(
+                    f64::from_bits(projective_bits[0]),
+                    f64::from_bits(projective_bits[1]),
+                ),
+            }
+        }
+        closed_stitch::CertifiedClosedEndpointKey::TouchingSupportSeam { faces, sheet } => {
+            if root_scalars != [None, None] || vertex.edge_parameters != [None, None] {
+                return Err(inconsistent_topology(
+                    "touching support seam retained source-edge scalar evidence",
+                ));
+            }
+            SectionCurveEndpointTopology::TouchingSupportSeamJoin {
+                faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                sheet: touching_sheet(sheet)?,
+            }
+        }
+        closed_stitch::CertifiedClosedEndpointKey::TouchingSupportChartJoin {
+            faces,
+            sheet,
+            longitude_bits,
+        } => {
+            if root_scalars != [None, None] || vertex.edge_parameters != [None, None] {
+                return Err(inconsistent_topology(
+                    "touching support chart join retained source-edge scalar evidence",
+                ));
+            }
+            let longitude = f64::from_bits(longitude_bits);
+            if !longitude.is_finite() {
+                return Err(inconsistent_topology(
+                    "touching support chart join retained a non-finite longitude",
+                ));
+            }
+            SectionCurveEndpointTopology::TouchingSupportChartJoin {
+                faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                sheet: touching_sheet(sheet)?,
+                longitude,
+            }
+        }
     };
     Ok(SectionCurveEndpoint {
         topology,
@@ -404,6 +488,16 @@ fn adapt_closed_endpoint(
             .edge_parameters
             .map(|value| value.map(SectionEdgeParameterInterval::from_interval)),
     })
+}
+
+fn touching_sheet(sheet: u8) -> Result<super::SectionTouchingSupportSheet> {
+    match sheet {
+        0 => Ok(super::SectionTouchingSupportSheet::Lower),
+        1 => Ok(super::SectionTouchingSupportSheet::Upper),
+        _ => Err(inconsistent_topology(
+            "touching support endpoint retained an invalid sheet",
+        )),
+    }
 }
 
 fn adapt_curve_fragment_end(

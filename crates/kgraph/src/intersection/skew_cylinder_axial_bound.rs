@@ -415,6 +415,56 @@ pub struct SkewCylinderFoldedSupportTopologyCertificate {
     positive_cell: SkewCylinderFoldedSupportCellLocation,
 }
 
+/// Sealed exact topology of two regular support sheets meeting at one
+/// repeated discriminant root.
+///
+/// The sole complementary cyclic cell is strictly positive. The repeated
+/// root is therefore a support touch inside an otherwise two-sheet curve,
+/// rather than an isolated zero-dimensional contact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkewCylinderTouchingSupportTopologyCertificate {
+    topology: SkewCylinderDiscriminantContactTopologyCertificate,
+}
+
+pub(crate) const SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BERNSTEIN_CELLS: usize = 256;
+
+/// Fixed exact Bernstein-cell allowance for one touching-support member's two
+/// radicand margins: 256 cells seal the exact source polynomial and another
+/// 256 seal the rounded evaluator polynomial. Exhausting either allowance
+/// remains a typed refusal.
+pub const SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK: u64 =
+    2 * SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BERNSTEIN_CELLS as u64;
+
+impl SkewCylinderTouchingSupportTopologyCertificate {
+    /// Exact cylinders in ruling-formula order.
+    pub const fn formula_cylinders(&self) -> [Cylinder; 2] {
+        self.topology.formula_cylinders
+    }
+
+    /// The sole exact repeated support-touch root.
+    pub fn root(&self) -> SkewCylinderDiscriminantRoot {
+        self.topology.roots[0]
+    }
+
+    /// Original complete exact discriminant topology.
+    pub const fn topology(&self) -> &SkewCylinderDiscriminantContactTopologyCertificate {
+        &self.topology
+    }
+
+    pub(crate) fn positive_radicand_lower_bound(
+        &self,
+        chart: SkewCylinderHalfAngleChart,
+        projective: RootBracket,
+    ) -> Result<f64, SkewCylinderAxialRootFailure> {
+        positive_radicand_lower_bound(
+            &self.topology,
+            chart,
+            projective,
+            SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BERNSTEIN_CELLS,
+        )
+    }
+}
+
 impl SkewCylinderFoldedSupportTopologyCertificate {
     /// Exact cylinders in ruling-formula order.
     pub const fn formula_cylinders(&self) -> [Cylinder; 2] {
@@ -445,28 +495,44 @@ impl SkewCylinderFoldedSupportTopologyCertificate {
         chart: SkewCylinderHalfAngleChart,
         projective: RootBracket,
     ) -> Result<f64, SkewCylinderAxialRootFailure> {
-        if projective.lo >= projective.hi {
-            return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
-        }
-        let polynomial = self.topology.exact_discriminant_root_polynomial(chart)?;
-        let numerator = polynomial
-            .positive_lower_bound_on_interval(projective.lo, projective.hi)?
-            .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?;
-        let projective_interval = kcore::interval::Interval::new(projective.lo, projective.hi);
-        // The exact topology polynomial is `4 * (K - L²)` after the
-        // half-angle denominator is cleared. Recover a lower bound for the
-        // unscaled radicand consumed by the branch evaluator.
-        let denominator = kcore::interval::Interval::point(4.0)
-            * (kcore::interval::Interval::point(1.0) + projective_interval.square()).square();
-        let lower = kcore::interval::Interval::point(numerator)
-            .checked_div(denominator)
-            .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?
-            .lo();
-        if lower.is_finite() && lower > 0.0 {
-            Ok(lower)
-        } else {
-            Err(SkewCylinderAxialRootFailure::InconsistentTopology)
-        }
+        positive_radicand_lower_bound(&self.topology, chart, projective, 0)
+    }
+}
+
+fn positive_radicand_lower_bound(
+    topology: &SkewCylinderDiscriminantContactTopologyCertificate,
+    chart: SkewCylinderHalfAngleChart,
+    projective: RootBracket,
+    subdivision_budget: usize,
+) -> Result<f64, SkewCylinderAxialRootFailure> {
+    if projective.lo >= projective.hi {
+        return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+    }
+    let polynomial = topology.exact_discriminant_root_polynomial(chart)?;
+    let numerator = if subdivision_budget == 0 {
+        polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi)
+    } else {
+        polynomial.positive_lower_bound_on_interval_subdivided(
+            projective.lo,
+            projective.hi,
+            subdivision_budget,
+        )
+    }?
+    .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?;
+    let projective_interval = kcore::interval::Interval::new(projective.lo, projective.hi);
+    // The exact topology polynomial is `4 * (K - L²)` after the half-angle
+    // denominator is cleared. Recover a lower bound for the unscaled
+    // radicand consumed by the branch evaluator.
+    let denominator = kcore::interval::Interval::point(4.0)
+        * (kcore::interval::Interval::point(1.0) + projective_interval.square()).square();
+    let lower = kcore::interval::Interval::point(numerator)
+        .checked_div(denominator)
+        .ok_or(SkewCylinderAxialRootFailure::InconsistentTopology)?
+        .lo();
+    if lower.is_finite() && lower > 0.0 {
+        Ok(lower)
+    } else {
+        Err(SkewCylinderAxialRootFailure::InconsistentTopology)
     }
 }
 
@@ -496,6 +562,23 @@ pub fn certify_skew_cylinder_folded_support_topology(
         topology,
         positive_cell,
     })
+}
+
+/// Seal one repeated discriminant root with a strict-positive complementary
+/// cell as a touching-support topology.
+pub fn certify_skew_cylinder_touching_support_topology(
+    topology: SkewCylinderDiscriminantContactTopologyCertificate,
+) -> Result<SkewCylinderTouchingSupportTopologyCertificate, SkewCylinderAxialRootFailure> {
+    match (
+        topology.identically_zero,
+        topology.roots.as_slice(),
+        topology.open_cell_signs.as_slice(),
+    ) {
+        (false, [root], [StrictSign::Positive]) if root.repeated() => {
+            Ok(SkewCylinderTouchingSupportTopologyCertificate { topology })
+        }
+        _ => Err(SkewCylinderAxialRootFailure::InconsistentTopology),
+    }
 }
 
 impl SkewCylinderDiscriminantContactTopologyCertificate {

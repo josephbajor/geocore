@@ -716,6 +716,16 @@ pub enum SectionFoldedSupportSheet {
     Upper,
 }
 
+/// Ordered sheet owning a seam or chart join of a repeated-root touching
+/// skew-cylinder support curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionTouchingSupportSheet {
+    /// Negative-square-root member away from the repeated root.
+    Lower,
+    /// Positive-square-root member away from the repeated root.
+    Upper,
+}
+
 /// Exact combinatorial identity of one stitched section-fragment endpoint.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -759,6 +769,35 @@ pub enum SectionCurveEndpointTopology {
         faces: [FaceId; 2],
         /// Ordered sheet owning the seam join.
         sheet: SectionFoldedSupportSheet,
+    },
+    /// Exact repeated discriminant root joined through one smooth
+    /// cross-sheet continuation port.
+    TouchingSupportRootJoin {
+        /// Source faces in operand order.
+        faces: [FaceId; 2],
+        /// Exact smooth-continuation port identity.
+        continuation: u8,
+        /// Projective chart and isolating interval retaining source identity.
+        root_chart: SectionSkewCylinderRootChart,
+        /// Exact rational enclosure of the repeated source support root.
+        root_interval: SectionSkewCylinderInterval,
+    },
+    /// Exact authored periodic seam on one touching-support sheet.
+    TouchingSupportSeamJoin {
+        /// Source faces in operand order.
+        faces: [FaceId; 2],
+        /// Ordered sheet owning the seam join.
+        sheet: SectionTouchingSupportSheet,
+    },
+    /// Exact regular tangent/cotangent chart transition on one
+    /// touching-support sheet.
+    TouchingSupportChartJoin {
+        /// Source faces in operand order.
+        faces: [FaceId; 2],
+        /// Ordered sheet owning the chart join.
+        sheet: SectionTouchingSupportSheet,
+        /// Exact authored first-cylinder longitude of the transition.
+        longitude: f64,
     },
 }
 
@@ -876,6 +915,38 @@ impl SectionFoldedSupportFragmentEnd {
     }
 }
 
+/// One physical root, seam, or chart-join end of a guarded repeated-root
+/// touching-support member.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionTouchingSupportFragmentEnd {
+    endpoint: usize,
+    point: Point3,
+    carrier_parameter: f64,
+    surface_parameters: [[f64; 2]; 2],
+}
+
+impl SectionTouchingSupportFragmentEnd {
+    /// Index into [`BodySectionGraph::curve_endpoints`].
+    pub const fn endpoint(&self) -> usize {
+        self.endpoint
+    }
+
+    /// Physical exact-event point, distinct from the guarded carrier bound.
+    pub const fn point(&self) -> Point3 {
+        self.point
+    }
+
+    /// Guarded interior parameter bounding the active residual certificate.
+    pub const fn carrier_parameter(&self) -> f64 {
+        self.carrier_parameter
+    }
+
+    /// Surface parameters of the physical exact event, in operand order.
+    pub const fn surface_parameters(&self) -> [[f64; 2]; 2] {
+        self.surface_parameters
+    }
+}
+
 impl SectionCurveFragmentEnd {
     /// Index into [`BodySectionGraph::curve_endpoints`].
     pub const fn endpoint(&self) -> usize {
@@ -929,6 +1000,13 @@ pub enum SectionCurveFragmentSpan {
     FoldedSupport {
         /// Physical start/end events and guarded interior carrier bounds.
         endpoints: Box<[SectionFoldedSupportFragmentEnd; 2]>,
+    },
+    /// One guarded member of a repeated-root touching-support component,
+    /// bounded by exact cross-sheet root continuations, authored seams, or
+    /// regular chart-transition joins.
+    TouchingSupport {
+        /// Physical start/end events and guarded interior carrier bounds.
+        endpoints: Box<[SectionTouchingSupportFragmentEnd; 2]>,
     },
 }
 
@@ -1513,6 +1591,9 @@ enum ClosedFragmentEvidenceSpan {
         wraps_pcurve_seam: bool,
     },
     FoldedSupport {
+        ends: [FoldedSupportEndEvidence; 2],
+    },
+    TouchingSupport {
         ends: [FoldedSupportEndEvidence; 2],
     },
 }

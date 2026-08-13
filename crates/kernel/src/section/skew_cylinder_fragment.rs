@@ -111,6 +111,10 @@ pub(super) fn append_face_pair_branches(
                 || edge.certificate.as_skew_cylinder_whole_contact().is_some()
                 || edge.certificate.as_skew_cylinder_open_span().is_some()
                 || edge.certificate.as_skew_cylinder_folded_support().is_some()
+                || edge
+                    .certificate
+                    .as_skew_cylinder_touching_support()
+                    .is_some()
         });
     if !has_skew {
         for edge in edges {
@@ -134,6 +138,10 @@ pub(super) fn append_face_pair_branches(
             || edge.certificate.as_skew_cylinder_whole_contact().is_some()
             || edge.certificate.as_skew_cylinder_open_span().is_some()
             || edge.certificate.as_skew_cylinder_folded_support().is_some()
+            || edge
+                .certificate
+                .as_skew_cylinder_touching_support()
+                .is_some()
     }) {
         acc.gaps.push(SectionGap {
             reason: GAP_PAIR_UNRESOLVED,
@@ -644,6 +652,32 @@ fn prepare_skew_face_pair(
             )));
             continue;
         }
+        if edge
+            .certificate
+            .as_skew_cylinder_touching_support()
+            .is_some()
+        {
+            let Some((branch, fragment, evidence)) = prepare_touching_support_member(
+                raw_faces,
+                facades,
+                edge,
+                vertices,
+                surfaces,
+                senses,
+                branch_index,
+            )?
+            else {
+                return Ok(PreparedSkewFacePair::Gap(GAP_CLOSED_STITCH));
+            };
+            prepared.push(PreparedSkewBranch::Whole(Box::new(
+                PreparedWholeSkewBranch {
+                    branch,
+                    fragment,
+                    evidence,
+                },
+            )));
+            continue;
+        }
         match prepare_open_span(
             store,
             raw_faces,
@@ -861,6 +895,191 @@ fn prepare_folded_support_member(
             span: ClosedFragmentEvidenceSpan::FoldedSupport { ends },
         },
     )))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_touching_support_member(
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    edge: &IntersectionBranchEdge,
+    vertices: &[kops::intersect::IntersectionBranchVertex],
+    surfaces: [&SurfaceGeom; 2],
+    senses: [Sense; 2],
+    branch_index: usize,
+) -> Result<
+    Option<(
+        SectionBranch,
+        closed_stitch::ClosedCurveFragment,
+        ClosedFragmentEvidence,
+    )>,
+> {
+    let Some(touching) = edge.certificate.as_skew_cylinder_touching_support() else {
+        return Ok(None);
+    };
+    let certificate = touching.residual_certificate();
+    let Some((carrier, source_pcurves)) = validate_open_graph_edge(edge, certificate) else {
+        return Ok(None);
+    };
+    let range = edge.carrier_range;
+    // The exact repeated root intentionally lets the two sheet tubes meet at
+    // their physical endpoint. Orientation is therefore sampled at the
+    // certified interior midpoint, where this member remains regular.
+    let orientation_sample = carrier.eval_derivs(range.lerp(0.5), 1);
+    let Some(flipped) = super::cylinder_cylinder_publish::canonical_flip(
+        surfaces[0],
+        senses[0],
+        surfaces[1],
+        senses[1],
+        orientation_sample.d[0],
+        orientation_sample.d[1],
+    ) else {
+        return Ok(None);
+    };
+    let section_carrier = SectionSkewCylinderBranchCarrier::new(carrier, range, flipped);
+    let pcurves =
+        source_pcurves.map(|pcurve| SectionSkewCylinderBranchPcurve::new(pcurve, range, flipped));
+    let graph_slots = if flipped { [1, 0] } else { [0, 1] };
+    let mut sites = Vec::with_capacity(2);
+    let mut closed_ends = Vec::with_capacity(2);
+    let mut public_ends = Vec::with_capacity(2);
+    for (section_slot, graph_slot) in graph_slots.into_iter().enumerate() {
+        let graph_parameter = if graph_slot == 0 { range.lo } else { range.hi };
+        let section_parameter = if section_slot == 0 {
+            range.lo
+        } else {
+            range.hi
+        };
+        let Some(vertex) = vertices.get(edge.endpoint_vertices[graph_slot]).copied() else {
+            return Ok(None);
+        };
+        let proof = edge.endpoint_proofs[graph_slot];
+        let closed_end = match (vertex.event, proof) {
+            (
+                IntersectionBranchVertexEvent::TouchingSupportRootJoin { continuation },
+                Some(IntersectionBranchEndpointProof::SkewCylinderTouchingSupportRoot(proof)),
+            ) => {
+                if proof.continuation != continuation
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                {
+                    return Ok(None);
+                }
+                let chart = match proof.half_angle_chart {
+                    SkewCylinderHalfAngleChartProof::Tangent => 0,
+                    SkewCylinderHalfAngleChartProof::Cotangent => 1,
+                };
+                closed_stitch::CertifiedClosedEndpoint::touching_support_root(
+                    raw_faces,
+                    continuation,
+                    chart,
+                    proof.half_angle_bracket.map(f64::to_bits),
+                )
+            }
+            (
+                IntersectionBranchVertexEvent::TouchingSupportSeamJoin { sheet },
+                Some(IntersectionBranchEndpointProof::SkewCylinderTouchingSupportSeam(proof)),
+            ) => {
+                if proof.sheet != sheet
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                {
+                    return Ok(None);
+                }
+                closed_stitch::CertifiedClosedEndpoint::touching_support_seam(
+                    raw_faces,
+                    sheet_ordinal(sheet),
+                )
+            }
+            (
+                IntersectionBranchVertexEvent::TouchingSupportChartJoin { sheet },
+                Some(IntersectionBranchEndpointProof::SkewCylinderTouchingSupportChartJoin(proof)),
+            ) => {
+                if proof.sheet != sheet
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                    || proof.longitude.to_bits()
+                        != touching
+                            .touching_certificate()
+                            .chart_join_longitude()
+                            .to_bits()
+                {
+                    return Ok(None);
+                }
+                closed_stitch::CertifiedClosedEndpoint::touching_support_chart_join(
+                    raw_faces,
+                    sheet_ordinal(sheet),
+                    proof.longitude.to_bits(),
+                )
+            }
+            _ => return Ok(None),
+        };
+        if section_carrier.eval(section_parameter).dist(vertex.point)
+            > touching.touching_certificate().tolerance()
+        {
+            return Ok(None);
+        }
+        closed_ends.push(closed_end);
+        sites.push(SectionFragmentSite {
+            point: vertex.point,
+            surface_parameters: vertex.surface_parameters,
+            surface_window_boundaries: [false; 2],
+        });
+        public_ends.push(FoldedSupportEndEvidence {
+            point: vertex.point,
+            carrier_parameter: section_parameter,
+            surface_parameters: vertex.surface_parameters,
+        });
+    }
+    let [start, end] = closed_ends
+        .try_into()
+        .expect("two touching-support endpoints");
+    let ends = public_ends
+        .try_into()
+        .expect("two touching-support endpoint records");
+    let branch = SectionBranch {
+        faces: facades.clone(),
+        carrier: SectionCarrier::SkewCylinderBranch(section_carrier),
+        range,
+        topology: SectionBranchTopology::Open,
+        pcurves: pcurves.map(SectionUvCurve::SkewCylinderBranch),
+        fragment_sites: sites,
+        endpoint_sites: [0, 1],
+        evidence: SectionBranchEvidence {
+            residual_bounds: certificate.residual_bounds(),
+            tolerance: certificate.tolerance(),
+        },
+        skew_cylinder_embedding: None,
+        ruling_recertification: None,
+        ruling_parameter_flipped: false,
+    };
+    let Some(source) =
+        closed_stitch::ClosedBranchSource::from_touching_section_branch(branch_index, &branch)
+    else {
+        return Ok(None);
+    };
+    Ok(Some((
+        branch,
+        closed_stitch::ClosedCurveFragment {
+            source: source.fragment(0),
+            orientation: closed_stitch::ClosedFragmentOrientation::AlongCarrier,
+            span: closed_stitch::ClosedFragmentSpan::Arc { start, end },
+        },
+        ClosedFragmentEvidence {
+            branch: branch_index,
+            ordinal: 0,
+            span: ClosedFragmentEvidenceSpan::TouchingSupport { ends },
+        },
+    )))
+}
+
+const fn sheet_ordinal(sheet: kgraph::SkewCylinderSheet) -> u8 {
+    match sheet {
+        kgraph::SkewCylinderSheet::Lower => 0,
+        kgraph::SkewCylinderSheet::Upper => 1,
+    }
 }
 
 fn prepare_whole_closed_branch(

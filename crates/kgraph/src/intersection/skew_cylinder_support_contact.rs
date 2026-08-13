@@ -24,9 +24,10 @@ use super::{
 };
 use super::{
     PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK, PairedSkewCylinderBranchResidualCertificate,
-    SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK, SkewCylinderAxialBoundProvenance,
+    SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK,
+    SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK, SkewCylinderAxialBoundProvenance,
     SkewCylinderAxialBoundary, SkewCylinderFoldedSupportCellLocation,
-    SkewCylinderFoldedSupportTopologyCertificate,
+    SkewCylinderFoldedSupportTopologyCertificate, SkewCylinderTouchingSupportTopologyCertificate,
 };
 use crate::IntersectionCertificateError;
 
@@ -47,6 +48,14 @@ pub const SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK: u64 =
 pub const SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK: u64 =
     4 * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK;
 
+/// Exact logical work for the six guarded members of one generic repeated-root
+/// touching-support component. Each member owns two 256-cell exact Bernstein
+/// allowances for its source and stored-evaluator positive-radicand margins in
+/// addition to the established guarded open-span proof.
+pub const SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK: u64 = 6
+    * (PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
+        + SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK);
+
 /// Exact topology owning one end of a guarded folded-support member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistentSkewCylinderFoldedSupportEndpoint {
@@ -54,6 +63,20 @@ pub enum PersistentSkewCylinderFoldedSupportEndpoint {
     Root(usize),
     /// The exact authored periodic seam on one ordered sheet.
     Seam(SkewCylinderSheet),
+}
+
+/// Exact topology owning one end of a guarded touching-support member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistentSkewCylinderTouchingSupportEndpoint {
+    /// The shared repeated support root plus its smooth-continuation port.
+    Root {
+        /// Exact smooth-continuation port pairing opposite sheets.
+        continuation: u8,
+    },
+    /// The exact authored periodic seam on one ordered sheet.
+    Seam(SkewCylinderSheet),
+    /// The exact tangent/cotangent transition longitude on one ordered sheet.
+    ChartJoin(SkewCylinderSheet),
 }
 
 /// Persistent exact-topology-owned carrier proof for one folded support curve
@@ -73,6 +96,117 @@ pub struct PersistentSkewCylinderFoldedSupportCertificate {
     formula_seam_points: Option<[Vec3; 2]>,
     required_edge_tolerance: f64,
     tolerance: f64,
+}
+
+/// Persistent exact-topology-owned carrier proof for two regular support
+/// sheets meeting at one repeated discriminant root.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersistentSkewCylinderTouchingSupportCertificate {
+    topology: SkewCylinderTouchingSupportTopologyCertificate,
+    formula_windows: [[ParamRange; 2]; 2],
+    formula_to_source: [usize; 2],
+    formula_root_longitude: Interval,
+    chart_join_longitude: f64,
+    guarded_ranges: Vec<ParamRange>,
+    formula_residuals: Vec<PairedSkewCylinderBranchResidualCertificate>,
+    formula_branch_endpoints: Vec<[PersistentSkewCylinderTouchingSupportEndpoint; 2]>,
+    formula_root_parameters: [[f64; 2]; 2],
+    formula_root_point: Vec3,
+    formula_seam_parameters: [[[f64; 2]; 2]; 2],
+    formula_seam_points: [Vec3; 2],
+    formula_chart_join_parameters: [[[f64; 2]; 2]; 2],
+    formula_chart_join_points: [Vec3; 2],
+    required_edge_tolerance: f64,
+    tolerance: f64,
+}
+
+impl PersistentSkewCylinderTouchingSupportCertificate {
+    /// Complete exact repeated-root/strict-positive-cell topology.
+    pub const fn topology(&self) -> &SkewCylinderTouchingSupportTopologyCertificate {
+        &self.topology
+    }
+
+    /// Exact-source repeated-root longitude enclosure.
+    pub const fn formula_root_longitude(&self) -> Interval {
+        self.formula_root_longitude
+    }
+
+    /// Exact regular longitude where tangent/cotangent guarded charts meet.
+    pub const fn chart_join_longitude(&self) -> f64 {
+        self.chart_join_longitude
+    }
+
+    /// Strict-positive guarded carrier ranges in branch publication order.
+    pub fn guarded_ranges(&self) -> &[ParamRange] {
+        &self.guarded_ranges
+    }
+
+    /// Guarded paired residual certificates in branch publication order.
+    pub fn formula_residuals(&self) -> &[PairedSkewCylinderBranchResidualCertificate] {
+        &self.formula_residuals
+    }
+
+    /// Exact endpoint identities aligned with the guarded residual members.
+    pub fn formula_branch_endpoints(
+        &self,
+    ) -> &[[PersistentSkewCylinderTouchingSupportEndpoint; 2]] {
+        &self.formula_branch_endpoints
+    }
+
+    /// Caller/source-order finite windows.
+    pub fn source_windows(&self) -> [[ParamRange; 2]; 2] {
+        permute_formula_to_source(self.formula_windows, self.formula_to_source)
+    }
+
+    /// Deterministic endpoint representative for one guarded branch end.
+    pub fn endpoint_point(&self, endpoint: PersistentSkewCylinderTouchingSupportEndpoint) -> Vec3 {
+        match endpoint {
+            PersistentSkewCylinderTouchingSupportEndpoint::Root { .. } => self.formula_root_point,
+            PersistentSkewCylinderTouchingSupportEndpoint::Seam(sheet) => {
+                self.formula_seam_points[sheet_ordinal(sheet)]
+            }
+            PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(sheet) => {
+                self.formula_chart_join_points[sheet_ordinal(sheet)]
+            }
+        }
+    }
+
+    /// Caller-order source parameters for one guarded branch end.
+    pub fn source_parameters(
+        &self,
+        endpoint: PersistentSkewCylinderTouchingSupportEndpoint,
+    ) -> [[f64; 2]; 2] {
+        let formula = match endpoint {
+            PersistentSkewCylinderTouchingSupportEndpoint::Root { .. } => {
+                self.formula_root_parameters
+            }
+            PersistentSkewCylinderTouchingSupportEndpoint::Seam(sheet) => {
+                self.formula_seam_parameters[sheet_ordinal(sheet)]
+            }
+            PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(sheet) => {
+                self.formula_chart_join_parameters[sheet_ordinal(sheet)]
+            }
+        };
+        permute_formula_to_source(formula, self.formula_to_source)
+    }
+
+    /// Complete metric envelope joining guarded evaluators to their exact
+    /// repeated-root, authored-seam, or chart-join endpoint points.
+    pub const fn required_edge_tolerance(&self) -> f64 {
+        self.required_edge_tolerance
+    }
+
+    /// Requested residual tolerance.
+    pub const fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// Fixed logical work represented by all guarded branches.
+    pub fn work(&self) -> u64 {
+        self.formula_residuals.len() as u64
+            * (PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
+                + SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK)
+    }
 }
 
 impl PersistentSkewCylinderFoldedSupportCertificate {
@@ -511,6 +645,8 @@ pub fn certify_persistent_skew_cylinder_folded_support(
                     chart: projective_chart,
                     projective: projective_guard,
                     source_lower: exact_radicand_lower,
+                    stored_subdivision_budget: 0,
+                    permit_sheet_tube_overlap: false,
                 },
             )?,
         );
@@ -616,6 +752,304 @@ pub fn certify_persistent_skew_cylinder_folded_support(
     })
 }
 
+/// Certify one generic repeated-root touching-support component.
+///
+/// The sole repeated root must lie strictly inside one tangent half chart.
+/// Three guarded pieces per sheet cover the positive cyclic cell: an exact
+/// authored seam and one exact tangent/cotangent chart join partition the
+/// otherwise wrapping carrier. Smooth continuation swaps sheets at the
+/// repeated root and is retained by two proof-owned continuation ports.
+pub fn certify_persistent_skew_cylinder_touching_support(
+    topology: SkewCylinderTouchingSupportTopologyCertificate,
+    formula_windows: [[ParamRange; 2]; 2],
+    formula_to_source: [usize; 2],
+    tolerance: f64,
+    work_limit: u64,
+) -> Result<PersistentSkewCylinderTouchingSupportCertificate, IntersectionCertificateError> {
+    validate_inputs(formula_windows, formula_to_source, tolerance)?;
+    if work_limit < SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK {
+        return Err(unsupported());
+    }
+    let authored = formula_windows[0][0];
+    if authored.lo.to_bits() != 0.0_f64.to_bits() || authored.hi.to_bits() != TAU.to_bits() {
+        return Err(unsupported());
+    }
+    let root = topology.root();
+    let angular = root.angular_bracket();
+    let root_in_first_half = angular.lo > 0.0 && angular.hi < core::f64::consts::PI;
+    let root_in_second_half = angular.lo > core::f64::consts::PI && angular.hi < TAU;
+    if !root.repeated() || !(root_in_first_half || root_in_second_half) {
+        return Err(unsupported());
+    }
+    let evidence = root_evidence(topology.topology(), root, formula_windows, true)?;
+    if evidence
+        .exact_heights
+        .into_iter()
+        .zip(formula_windows)
+        .any(|(height, window)| !strictly_inside(height, window[1]))
+    {
+        return Err(unsupported());
+    }
+    let chart_join_longitude = if root_in_first_half {
+        3.0 * core::f64::consts::FRAC_PI_2
+    } else {
+        core::f64::consts::FRAC_PI_2
+    };
+    let formula_root_longitude = evidence.formula_longitude_enclosures[0];
+    let radius_scale = topology
+        .formula_cylinders()
+        .into_iter()
+        .map(|cylinder| cylinder.radius())
+        .fold(0.0_f64, f64::max);
+    let root_inset = tolerance / (64.0 * radius_scale);
+    if !root_inset.is_finite() || root_inset <= 0.0 {
+        return Err(unsupported());
+    }
+    let root_before = (angular.strict_before_side() - root_inset).next_down();
+    let root_after = (angular.strict_after_side() + root_inset).next_up();
+    let seam_inset = 2.0_f64.powi(-40);
+    let seam_after = authored.lo + seam_inset;
+    let seam_before = authored.hi - seam_inset;
+
+    use PersistentSkewCylinderTouchingSupportEndpoint::{ChartJoin, Root, Seam};
+    let branch_specs = if root_in_first_half {
+        let ranges = [
+            (
+                SkewCylinderHalfAngleChart::Tangent,
+                ParamRange::new(seam_after, root_before),
+                [Seam(SkewCylinderSheet::Lower), Root { continuation: 0 }],
+            ),
+            (
+                SkewCylinderHalfAngleChart::Cotangent,
+                ParamRange::new(root_after, chart_join_longitude.next_down()),
+                [
+                    Root { continuation: 1 },
+                    ChartJoin(SkewCylinderSheet::Lower),
+                ],
+            ),
+            (
+                SkewCylinderHalfAngleChart::Tangent,
+                ParamRange::new(chart_join_longitude.next_up(), seam_before),
+                [
+                    ChartJoin(SkewCylinderSheet::Lower),
+                    Seam(SkewCylinderSheet::Lower),
+                ],
+            ),
+        ];
+        touching_support_sheet_specs(ranges)
+    } else {
+        let ranges = [
+            (
+                SkewCylinderHalfAngleChart::Tangent,
+                ParamRange::new(seam_after, chart_join_longitude.next_down()),
+                [
+                    Seam(SkewCylinderSheet::Lower),
+                    ChartJoin(SkewCylinderSheet::Lower),
+                ],
+            ),
+            (
+                SkewCylinderHalfAngleChart::Cotangent,
+                ParamRange::new(chart_join_longitude.next_up(), root_before),
+                [
+                    ChartJoin(SkewCylinderSheet::Lower),
+                    Root { continuation: 0 },
+                ],
+            ),
+            (
+                SkewCylinderHalfAngleChart::Tangent,
+                ParamRange::new(root_after, seam_before),
+                [Root { continuation: 1 }, Seam(SkewCylinderSheet::Lower)],
+            ),
+        ];
+        touching_support_sheet_specs(ranges)
+    };
+    if branch_specs.len() != 6
+        || branch_specs
+            .iter()
+            .any(|(_, _, range, _)| !strict_guarded_range(*range, authored))
+    {
+        return Err(unsupported());
+    }
+
+    let mut formula_residuals = Vec::with_capacity(branch_specs.len());
+    for (sheet, chart, guarded_range, _) in &branch_specs {
+        let projective = projective_guard(*chart, *guarded_range).ok_or_else(|| {
+            unsupported_reason("touching support projective guard is not finite and ordered")
+        })?;
+        let source_lower = topology
+            .positive_radicand_lower_bound(*chart, projective)
+            .map_err(|_error| {
+                unsupported_reason("touching support guard lacks an exact positive radicand bound")
+            })?;
+        formula_residuals.push(
+            super::subrange::certify_paired_skew_cylinder_folded_guarded_residuals(
+                topology.formula_cylinders(),
+                formula_windows,
+                *guarded_range,
+                *sheet,
+                tolerance,
+                super::subrange::FoldedRadicandGuard {
+                    chart: *chart,
+                    projective,
+                    source_lower,
+                    stored_subdivision_budget:
+                        super::SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BERNSTEIN_CELLS,
+                    permit_sheet_tube_overlap: true,
+                },
+            )?,
+        );
+    }
+
+    let mut root_algebra = evidence.algebra;
+    let raw_root_longitude = root_algebra
+        .authored_pcurve_derivs(1, evidence.carrier_parameter, 0)
+        .d[0]
+        .x;
+    let lifted_root = fit_full_period_parameter(raw_root_longitude, formula_windows[1][0])
+        .expect("root evidence already retained an opposite longitude lift");
+    root_algebra.longitude_offset = lifted_root - raw_root_longitude;
+    let formula_root_parameters = [0, 1].map(|operand| {
+        let uv = root_algebra
+            .authored_pcurve_derivs(operand, evidence.carrier_parameter, 0)
+            .d[0];
+        [uv.x, uv.y]
+    });
+    let root_points = [
+        topology.formula_cylinders()[0].eval(formula_root_parameters[0]),
+        topology.formula_cylinders()[1].eval(formula_root_parameters[1]),
+    ];
+    if root_points[0].dist(root_points[1]) > tolerance {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    let formula_root_point = (root_points[0] + root_points[1]) * 0.5;
+    let (formula_seam_parameters, formula_seam_points) = folded_regular_join_evidence(
+        topology.formula_cylinders(),
+        formula_windows,
+        authored.lo,
+        tolerance,
+    )
+    .map_err(|_| unsupported_reason("touching support lacks authored-seam join evidence"))?;
+    let (formula_chart_join_parameters, formula_chart_join_points) = folded_regular_join_evidence(
+        topology.formula_cylinders(),
+        formula_windows,
+        chart_join_longitude,
+        tolerance,
+    )
+    .map_err(|_| unsupported_reason("touching support lacks chart-join evidence"))?;
+
+    let point_for_endpoint = |endpoint| match endpoint {
+        Root { .. } => formula_root_point,
+        Seam(sheet) => formula_seam_points[sheet_ordinal(sheet)],
+        ChartJoin(sheet) => formula_chart_join_points[sheet_ordinal(sheet)],
+    };
+    let mut required_edge_tolerance = formula_residuals
+        .iter()
+        .flat_map(|residual| residual.residual_bounds())
+        .fold(0.0, f64::max);
+    for (residual, (_, _, _, endpoints)) in formula_residuals.iter().zip(&branch_specs) {
+        let carrier = residual.carrier();
+        let traces = residual.traces();
+        for (parameter, point) in [residual.carrier_range().lo, residual.carrier_range().hi]
+            .into_iter()
+            .zip(endpoints.map(point_for_endpoint))
+        {
+            required_edge_tolerance =
+                required_edge_tolerance.max(carrier.eval(parameter).dist(point));
+            for trace in traces {
+                let uv = trace.pcurve().eval(parameter);
+                required_edge_tolerance =
+                    required_edge_tolerance.max(trace.surface().eval([uv.x, uv.y]).dist(point));
+            }
+        }
+    }
+    required_edge_tolerance = required_edge_tolerance.next_up();
+    if !required_edge_tolerance.is_finite() || required_edge_tolerance > tolerance {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+
+    Ok(PersistentSkewCylinderTouchingSupportCertificate {
+        topology,
+        formula_windows,
+        formula_to_source,
+        formula_root_longitude,
+        chart_join_longitude,
+        guarded_ranges: branch_specs.iter().map(|(_, _, range, _)| *range).collect(),
+        formula_residuals,
+        formula_branch_endpoints: branch_specs
+            .into_iter()
+            .map(|(_, _, _, endpoints)| endpoints)
+            .collect(),
+        formula_root_parameters,
+        formula_root_point,
+        formula_seam_parameters,
+        formula_seam_points,
+        formula_chart_join_parameters,
+        formula_chart_join_points,
+        required_edge_tolerance,
+        tolerance,
+    })
+}
+
+type TouchingSupportBaseSpec = (
+    SkewCylinderHalfAngleChart,
+    ParamRange,
+    [PersistentSkewCylinderTouchingSupportEndpoint; 2],
+);
+
+type TouchingSupportBranchSpec = (
+    SkewCylinderSheet,
+    SkewCylinderHalfAngleChart,
+    ParamRange,
+    [PersistentSkewCylinderTouchingSupportEndpoint; 2],
+);
+
+fn touching_support_sheet_specs(
+    lower: [TouchingSupportBaseSpec; 3],
+) -> Vec<TouchingSupportBranchSpec> {
+    let upper = lower.map(|(chart, range, endpoints)| {
+        let endpoints = endpoints.map(|endpoint| match endpoint {
+            PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation } => {
+                PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation }
+            }
+            PersistentSkewCylinderTouchingSupportEndpoint::Seam(_) => {
+                PersistentSkewCylinderTouchingSupportEndpoint::Seam(SkewCylinderSheet::Upper)
+            }
+            PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(_) => {
+                PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(SkewCylinderSheet::Upper)
+            }
+        });
+        (chart, range, endpoints)
+    });
+    lower
+        .into_iter()
+        .map(|(chart, range, endpoints)| (SkewCylinderSheet::Lower, chart, range, endpoints))
+        .chain(
+            upper.into_iter().map(|(chart, range, endpoints)| {
+                (SkewCylinderSheet::Upper, chart, range, endpoints)
+            }),
+        )
+        .collect()
+}
+
+fn projective_guard(
+    chart: SkewCylinderHalfAngleChart,
+    range: ParamRange,
+) -> Option<crate::exact::bounded_polynomial::RootBracket> {
+    let projective = [range.lo, range.hi].map(|parameter| {
+        let (sin, cos) = kcore::math::sincos(parameter);
+        match chart {
+            SkewCylinderHalfAngleChart::Tangent => sin / (1.0 + cos),
+            SkewCylinderHalfAngleChart::Cotangent => sin / (1.0 - cos),
+        }
+    });
+    if projective.into_iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let lo = projective[0].min(projective[1]);
+    let hi = projective[0].max(projective[1]);
+    (lo < hi).then_some(crate::exact::bounded_polynomial::RootBracket { lo, hi })
+}
+
 fn strict_guarded_range(range: ParamRange, authored: ParamRange) -> bool {
     range.is_finite() && range.width() > 0.0 && range.lo > authored.lo && range.hi < authored.hi
 }
@@ -644,13 +1078,29 @@ fn folded_seam_evidence(
     formula_windows: [[ParamRange; 2]; 2],
     tolerance: f64,
 ) -> Result<FormulaFoldedSeamEvidence, IntersectionCertificateError> {
+    folded_regular_join_evidence(
+        cylinders,
+        formula_windows,
+        formula_windows[0][0].lo,
+        tolerance,
+    )
+}
+
+fn folded_regular_join_evidence(
+    cylinders: [Cylinder; 2],
+    formula_windows: [[ParamRange; 2]; 2],
+    carrier_parameter: f64,
+    tolerance: f64,
+) -> Result<FormulaFoldedSeamEvidence, IntersectionCertificateError> {
+    if !formula_windows[0][0].contains(carrier_parameter) {
+        return Err(unsupported());
+    }
     let mut parameters = [[[0.0; 2]; 2]; 2];
     let mut points = [Vec3::default(); 2];
     for sheet in [SkewCylinderSheet::Lower, SkewCylinderSheet::Upper] {
         let ordinal = sheet_ordinal(sheet);
         let mut algebra = build_algebra(cylinders, formula_windows[0][0], sheet)
             .ok_or(IntersectionCertificateError::InvalidTraceFamily)?;
-        let carrier_parameter = formula_windows[0][0].lo;
         let raw_longitude = algebra.authored_pcurve_derivs(1, carrier_parameter, 0).d[0].x;
         let lifted = fit_full_period_parameter(raw_longitude, formula_windows[1][0])
             .ok_or_else(unsupported)?;
@@ -1041,7 +1491,9 @@ mod tests {
     use crate::{
         SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
         SkewCylinderFoldedSupportCellLocation, certify_persistent_skew_cylinder_folded_support,
-        certify_skew_cylinder_folded_support_topology, classify_skew_cylinder_exact_discriminant,
+        certify_persistent_skew_cylinder_touching_support,
+        certify_skew_cylinder_folded_support_topology,
+        certify_skew_cylinder_touching_support_topology, classify_skew_cylinder_exact_discriminant,
     };
 
     fn cylinders(offset: f64) -> [Cylinder; 2] {
@@ -1087,6 +1539,24 @@ mod tests {
                 2.0,
             )
             .unwrap(),
+        ]
+    }
+
+    fn touching_support_cylinders(frame: Frame) -> [Cylinder; 2] {
+        [
+            Cylinder::new(frame, 1.0).unwrap(),
+            Cylinder::new(
+                Frame::new(frame.origin() + frame.y() * 0.5, frame.x(), frame.y()).unwrap(),
+                1.5,
+            )
+            .unwrap(),
+        ]
+    }
+
+    fn touching_support_windows() -> [[ParamRange; 2]; 2] {
+        [
+            [ParamRange::new(0.0, TAU), ParamRange::new(-2.0, 2.0)],
+            [ParamRange::new(0.0, TAU), ParamRange::new(-2.0, 2.0)],
         ]
     }
 
@@ -1330,5 +1800,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn repeated_positive_support_touch_mints_six_cross_sheet_members_atomically() {
+        let contact = match classify_skew_cylinder_exact_discriminant(
+            touching_support_cylinders(Frame::world()),
+            SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+        )
+        .unwrap()
+        {
+            SkewCylinderExactDiscriminantTopology::Contact(topology) => *topology,
+            other => panic!("expected rooted contact topology, got {other:?}"),
+        };
+        let topology = certify_skew_cylinder_touching_support_topology(contact).unwrap();
+        assert!(topology.root().repeated());
+        assert!(
+            certify_persistent_skew_cylinder_touching_support(
+                topology.clone(),
+                touching_support_windows(),
+                [0, 1],
+                1.0e-7,
+                SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK - 1,
+            )
+            .is_err()
+        );
+        let touching = certify_persistent_skew_cylinder_touching_support(
+            topology,
+            touching_support_windows(),
+            [0, 1],
+            1.0e-7,
+            SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+        )
+        .unwrap();
+        assert_eq!(touching.work(), SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK);
+        assert_eq!(touching.formula_residuals().len(), 6);
+        assert_eq!(touching.formula_branch_endpoints().len(), 6);
+        let mut root_ports = touching
+            .formula_branch_endpoints()
+            .iter()
+            .flatten()
+            .filter_map(|endpoint| match endpoint {
+                PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation } => {
+                    Some(*continuation)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        root_ports.sort_unstable();
+        assert_eq!(root_ports, vec![0, 0, 1, 1]);
+        assert!(touching.required_edge_tolerance() <= touching.tolerance());
     }
 }
