@@ -78,6 +78,13 @@ pub(super) fn certify_paired_skew_cylinder_folded_guarded_residuals(
         radicand_guard.projective,
         radicand_guard.stored_subdivision_budget,
     )
+    .or_else(|| {
+        semantic_perpendicular_radicand_lower_bound(
+            algebra,
+            radicand_guard.chart,
+            radicand_guard.projective,
+        )
+    })
         .ok_or_else(|| {
             unsupported(
                 "folded skew Cylinder/Cylinder evaluator radicand lacks an exact positive Bernstein margin",

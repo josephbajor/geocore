@@ -961,6 +961,88 @@ fn stored_radicand_lower_bound(
     (lower.is_finite() && lower > 0.0).then_some(lower)
 }
 
+fn semantic_perpendicular_radicand_lower_bound(
+    algebra: BranchAlgebra,
+    chart: SkewCylinderHalfAngleChart,
+    projective: RootBracket,
+) -> Option<f64> {
+    let [first, second] = algebra.cylinders;
+    if first.frame().z().dot(second.frame().z()) != 0.0 {
+        return None;
+    }
+    let normal = first.frame().z().cross(second.frame().z()).normalized()?;
+    let offset = first.frame().origin() - second.frame().origin();
+    let constant_value = offset.dot(normal);
+    let cosine_value = first.frame().x().dot(normal) * first.radius();
+    let radius_value = second.radius();
+    let at_zero = (offset + first.frame().x() * first.radius()).dot(normal);
+    let at_pi = (offset - first.frame().x() * first.radius()).dot(normal);
+    let cosine = ExactScalar::from_f64(cosine_value).ok()?;
+    let radius = ExactScalar::from_f64(radius_value).ok()?;
+    let constant = if at_zero == radius_value {
+        radius.sub(&cosine).ok()?
+    } else if at_zero == -radius_value {
+        radius.negate().ok()?.sub(&cosine).ok()?
+    } else if at_pi == radius_value {
+        radius.add(&cosine).ok()?
+    } else if at_pi == -radius_value {
+        radius.negate().ok()?.add(&cosine).ok()?
+    } else {
+        ExactScalar::from_f64(constant_value).ok()?
+    };
+    let sine = ExactScalar::from_f64(first.frame().y().dot(normal) * first.radius()).ok()?;
+    let radius_squared = radius.mul(&radius).ok()?;
+    let numerator = match chart {
+        SkewCylinderHalfAngleChart::Tangent => [
+            constant.add(&cosine).ok()?,
+            sine.scale(2.0).ok()?,
+            constant.sub(&cosine).ok()?,
+        ],
+        SkewCylinderHalfAngleChart::Cotangent => [
+            constant.sub(&cosine).ok()?,
+            sine.scale(2.0).ok()?,
+            constant.add(&cosine).ok()?,
+        ],
+    };
+    let numerator_square = [
+        numerator[0].mul(&numerator[0]).ok()?,
+        numerator[0].mul(&numerator[1]).ok()?.scale(2.0).ok()?,
+        numerator[1]
+            .mul(&numerator[1])
+            .ok()?
+            .add(&numerator[0].mul(&numerator[2]).ok()?.scale(2.0).ok()?)
+            .ok()?,
+        numerator[1].mul(&numerator[2]).ok()?.scale(2.0).ok()?,
+        numerator[2].mul(&numerator[2]).ok()?,
+    ];
+    let polynomial = ExactPolynomial::new(vec![
+        radius_squared.sub(&numerator_square[0]).ok()?,
+        ExactScalar::zero().sub(&numerator_square[1]).ok()?,
+        radius_squared
+            .scale(2.0)
+            .ok()?
+            .sub(&numerator_square[2])
+            .ok()?,
+        ExactScalar::zero().sub(&numerator_square[3]).ok()?,
+        radius_squared.sub(&numerator_square[4]).ok()?,
+    ])
+    .ok()?;
+    let numerator_lower =
+        match polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi) {
+            Ok(Some(lower)) => Some(lower),
+            Ok(None) | Err(RootIsolationFailure::UnsafeArithmeticEnvelope) => polynomial
+                .positive_lower_bound_after_exact_zero_root(projective.lo, projective.hi)
+                .ok()?,
+            Err(_) => return None,
+        }?;
+    let denominator =
+        (Interval::point(1.0) + Interval::new(projective.lo, projective.hi).square()).square();
+    let lower = Interval::point(numerator_lower)
+        .checked_div(denominator)?
+        .lo();
+    (lower.is_finite() && lower > 0.0).then_some(lower)
+}
+
 fn cell_root_enclosures(
     algebra: BranchAlgebra,
     coefficients: CoefficientProof,

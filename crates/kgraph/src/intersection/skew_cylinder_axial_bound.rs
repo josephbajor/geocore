@@ -711,7 +711,32 @@ pub fn classify_skew_cylinder_exact_discriminant(
             provided: work_limit,
         });
     }
-    let classification = exact_skew_cylinder_discriminant(cylinders)?;
+    let algebra = ExactSkewCylinderAlgebra::new(cylinders)?;
+    let (mut classification, mut used_semantic_perpendicular) = match algebra.discriminant() {
+        Ok(classification) => (classification, false),
+        Err(general_failure) => {
+            let Some(discriminant) = algebra.semantic_perpendicular_discriminant()? else {
+                return Err(general_failure);
+            };
+            let cardinal_contact = discriminant.cardinal_contact().unwrap_or(false);
+            (
+                ExactSkewCylinderDiscriminant::Harmonic {
+                    coefficients: discriminant.coefficients(),
+                    cardinal_contact,
+                },
+                true,
+            )
+        }
+    };
+    if let Some(discriminant) = algebra.semantic_perpendicular_discriminant()?
+        && discriminant.cardinal_contact()?
+    {
+        classification = ExactSkewCylinderDiscriminant::Harmonic {
+            cardinal_contact: true,
+            coefficients: discriminant.coefficients(),
+        };
+        used_semantic_perpendicular = true;
+    }
     let topology = match classification {
         ExactSkewCylinderDiscriminant::Strict(StrictSign::Positive) => {
             return Ok(SkewCylinderExactDiscriminantTopology::StrictPositive(
@@ -725,7 +750,16 @@ pub fn classify_skew_cylinder_exact_discriminant(
         }
         ExactSkewCylinderDiscriminant::Contact => CyclicSecondHarmonicTopology::IdenticallyZero,
         ExactSkewCylinderDiscriminant::Harmonic { coefficients, .. } => {
-            classify_cyclic_second_harmonic(&coefficients, work_limit)?
+            match classify_cyclic_second_harmonic(&coefficients, work_limit) {
+                Ok(topology) => topology,
+                Err(general_failure) if !used_semantic_perpendicular => {
+                    let Some(discriminant) = algebra.semantic_perpendicular_discriminant()? else {
+                        return Err(general_failure.into());
+                    };
+                    classify_cyclic_second_harmonic(&discriminant.coefficients(), work_limit)?
+                }
+                Err(failure) => return Err(failure.into()),
+            }
         }
     };
     if let Some(sign) = topology.strict_full_cycle_sign() {
@@ -1538,6 +1572,59 @@ impl ExactSkewCylinderAlgebra {
             coefficients: discriminant.coefficients(),
             cardinal_contact,
         })
+    }
+
+    /// Rebuild `4 * (r² - q(u)²)` in semantic frame coordinates when the
+    /// authored axes are exactly perpendicular. Axial reparameterizations
+    /// leave this discriminant unchanged, but can enlarge the general dual
+    /// determinant expansions enough to exceed their fixed safe envelope.
+    fn semantic_perpendicular_discriminant(
+        &self,
+    ) -> Result<Option<ExactSecondHarmonic>, SkewCylinderAxialRootFailure> {
+        let [first, second] = self.cylinders;
+        let first_axis = first.frame().z();
+        let second_axis = second.frame().z();
+        if first_axis.dot(second_axis) != 0.0 {
+            return Ok(None);
+        }
+        let normal = first_axis
+            .cross(second_axis)
+            .normalized()
+            .ok_or(SkewCylinderAxialRootFailure::DegenerateExactSource)?;
+        let offset = first.frame().origin() - second.frame().origin();
+        let constant_value = offset.dot(normal);
+        let cosine_value = first.frame().x().dot(normal) * first.radius();
+        let sine_value = first.frame().y().dot(normal) * first.radius();
+        let radius_value = second.radius();
+        let at_zero = (offset + first.frame().x() * first.radius()).dot(normal);
+        let at_pi = (offset - first.frame().x() * first.radius()).dot(normal);
+        let radius = ExactScalar::from_f64(radius_value)?;
+        let cosine = ExactScalar::from_f64(cosine_value)?;
+        // Preserve an authored cardinal support relation under the same
+        // rounded dot/add semantics used by Frame coordinates. Reconstructing
+        // the constant from that equality retains its exact polynomial factor
+        // instead of re-expanding two independently rounded coordinates.
+        let constant = if at_zero == radius_value {
+            radius.sub(&cosine)?
+        } else if at_zero == -radius_value {
+            radius.negate()?.sub(&cosine)?
+        } else if at_pi == radius_value {
+            radius.add(&cosine)?
+        } else if at_pi == -radius_value {
+            radius.negate()?.add(&cosine)?
+        } else {
+            ExactScalar::from_f64(constant_value)?
+        };
+        let transverse = ExactFirstHarmonic {
+            constant,
+            cosine,
+            sine: ExactScalar::from_f64(sine_value)?,
+        };
+        let radius_squared = radius.mul(&radius)?;
+        let discriminant = ExactSecondHarmonic::constant(radius_squared)
+            .sub(&transverse.square()?)?
+            .scale(&ExactScalar::from_f64(4.0)?)?;
+        Ok(Some(discriminant))
     }
 
     fn axial_equation(
