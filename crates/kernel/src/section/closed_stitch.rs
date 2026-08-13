@@ -212,6 +212,7 @@ pub(crate) enum CertifiedClosedEndpointKey {
     /// ports that each join opposite sheets.
     TouchingSupportRoot {
         faces: [RawFaceId; 2],
+        root_ordinal: u8,
         continuation: u8,
         chart: u8,
         projective_bits: [u64; 2],
@@ -277,6 +278,7 @@ impl CertifiedClosedEndpoint {
 
     pub(crate) const fn touching_support_root(
         faces: [RawFaceId; 2],
+        root_ordinal: u8,
         continuation: u8,
         chart: u8,
         projective_bits: [u64; 2],
@@ -284,6 +286,7 @@ impl CertifiedClosedEndpoint {
         Self {
             key: CertifiedClosedEndpointKey::TouchingSupportRoot {
                 faces,
+                root_ordinal,
                 continuation,
                 chart,
                 projective_bits,
@@ -1142,10 +1145,12 @@ mod tests {
             sources[0].faces,
             0,
             0,
+            0,
             [(-1.0_f64).to_bits(); 2],
         );
         let root_one = CertifiedClosedEndpoint::touching_support_root(
             sources[0].faces,
+            0,
             1,
             0,
             [(-1.0_f64).to_bits(); 2],
@@ -1208,6 +1213,101 @@ mod tests {
         assert_eq!(result.chains.len(), 1);
         assert!(result.chains[0].closed);
         assert_eq!(result.chains[0].fragments.len(), 6);
+        assert!(
+            result
+                .vertices
+                .iter()
+                .all(|vertex| vertex.incoming == 1 && vertex.outgoing == 1)
+        );
+    }
+
+    #[test]
+    fn two_repeated_root_touching_members_form_two_closed_crossing_cycles() {
+        let ids = ids();
+        let sources: [ClosedBranchSource; 6] =
+            core::array::from_fn(|ordinal| branch(&ids, ordinal, [0, 1]));
+        let root_zero_before = CertifiedClosedEndpoint::touching_support_root(
+            sources[0].faces,
+            0,
+            0,
+            0,
+            [(-1.0_f64).to_bits(); 2],
+        );
+        let root_zero_after = CertifiedClosedEndpoint::touching_support_root(
+            sources[0].faces,
+            0,
+            1,
+            0,
+            [(-1.0_f64).to_bits(); 2],
+        );
+        let root_one_before = CertifiedClosedEndpoint::touching_support_root(
+            sources[0].faces,
+            1,
+            0,
+            0,
+            [(-1.0_f64).to_bits(); 2],
+        );
+        let root_one_after = CertifiedClosedEndpoint::touching_support_root(
+            sources[0].faces,
+            1,
+            1,
+            0,
+            [(-1.0_f64).to_bits(); 2],
+        );
+        let lower_seam = CertifiedClosedEndpoint::touching_support_seam(sources[0].faces, 0);
+        let upper_seam = CertifiedClosedEndpoint::touching_support_seam(sources[0].faces, 1);
+        let fragments = [
+            arc(
+                sources[0].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                lower_seam,
+                root_zero_before,
+            ),
+            arc(
+                sources[1].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_zero_after,
+                root_one_before,
+            ),
+            arc(
+                sources[2].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_one_after,
+                lower_seam,
+            ),
+            arc(
+                sources[3].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_zero_before,
+                upper_seam,
+            ),
+            arc(
+                sources[4].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_one_before,
+                root_zero_after,
+            ),
+            arc(
+                sources[5].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                upper_seam,
+                root_one_after,
+            ),
+        ];
+
+        let result = stitch_closed_fragments(&fragments);
+        assert_eq!(result.completion, ClosedStitchCompletion::Complete);
+        assert!(result.defects.is_empty());
+        assert_eq!(result.vertices.len(), 6);
+        assert_eq!(result.chains.len(), 2);
+        assert!(result.chains.iter().all(|chain| chain.closed));
+        let mut chain_sizes = result
+            .chains
+            .iter()
+            .map(|chain| chain.fragments.len())
+            .collect::<Vec<_>>();
+        chain_sizes.sort_unstable();
+        assert_eq!(chain_sizes, vec![2, 4]);
         assert!(
             result
                 .vertices

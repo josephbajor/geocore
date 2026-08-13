@@ -334,8 +334,8 @@ impl SkewCylinderFoldedSupportCurve {
     }
 }
 
-/// One exact repeated-root touching-support component represented by six
-/// guarded sheet members and exact root, seam, and chart-transition joins.
+/// One exact repeated-root touching-support family represented by six guarded
+/// sheet members and exact root, seam, and chart-transition joins.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkewCylinderTouchingSupportCurve {
     certificate: PersistentSkewCylinderTouchingSupportCertificate,
@@ -541,6 +541,11 @@ pub(super) fn intersect_certified_skew_cylinders(
             match reversed {
                 DiscriminantAdmission::StrictPositive(_) => (reversed, true),
                 DiscriminantAdmission::Contact(reversed_contact)
+                    if prefers_double_touching_chart_roots(&reversed_contact, &contact) =>
+                {
+                    (DiscriminantAdmission::Contact(reversed_contact), true)
+                }
+                DiscriminantAdmission::Contact(reversed_contact)
                     if cylinders[0].radius() > cylinders[1].radius() =>
                 {
                     // Folded/contact publication uses the smaller-radius
@@ -611,6 +616,31 @@ pub(super) fn intersect_certified_skew_cylinders(
             touching_support_curves: Vec::new(),
         }),
     }
+}
+
+fn prefers_double_touching_chart_roots(
+    candidate: &kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+    current: &kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+) -> bool {
+    is_double_touching_chart_root_layout(candidate)
+        && !is_double_touching_chart_root_layout(current)
+}
+
+fn is_double_touching_chart_root_layout(
+    topology: &kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+) -> bool {
+    let Ok(topology) = certify_skew_cylinder_touching_support_topology(topology.clone()) else {
+        return false;
+    };
+    let [first, second] = topology.roots() else {
+        return false;
+    };
+    let first = first.angular_bracket();
+    let second = second.angular_bracket();
+    first.lo.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
+        && first.hi.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
+        && second.lo.to_bits() == (3.0 * core::f64::consts::FRAC_PI_2).to_bits()
+        && second.hi.to_bits() == (3.0 * core::f64::consts::FRAC_PI_2).to_bits()
 }
 
 fn intersect_isolated_support_contact(
@@ -815,7 +845,7 @@ fn intersect_touching_support_contact(
         certificate: certificate.clone(),
         source_reversed,
     };
-    let root = certificate.topology().root().bracket();
+    let roots = certificate.topology().roots();
     let branches = touching
         .residuals()
         .into_iter()
@@ -829,9 +859,14 @@ fn intersect_touching_support_contact(
                     range.hi
                 };
                 Some(match endpoint {
-                    PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation } => {
+                    PersistentSkewCylinderTouchingSupportEndpoint::Root {
+                        root: root_identity,
+                        continuation,
+                    } => {
+                        let root = roots[usize::from(root_identity.ordinal())].bracket();
                         IntersectionBranchEndpointProof::SkewCylinderTouchingSupportRoot(
                             SkewCylinderTouchingSupportRootEndpointProof {
+                                root: root_identity,
                                 continuation,
                                 half_angle_chart: match root.chart {
                                     SkewCylinderHalfAngleChart::Tangent => {

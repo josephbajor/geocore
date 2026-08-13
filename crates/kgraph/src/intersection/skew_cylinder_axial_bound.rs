@@ -415,12 +415,12 @@ pub struct SkewCylinderFoldedSupportTopologyCertificate {
     positive_cell: SkewCylinderFoldedSupportCellLocation,
 }
 
-/// Sealed exact topology of two regular support sheets meeting at one
-/// repeated discriminant root.
+/// Sealed exact topology of two regular support sheets meeting at one or two
+/// repeated discriminant roots.
 ///
-/// The sole complementary cyclic cell is strictly positive. The repeated
-/// root is therefore a support touch inside an otherwise two-sheet curve,
-/// rather than an isolated zero-dimensional contact.
+/// Every complementary cyclic cell is strictly positive. Each repeated root
+/// is therefore a support touch inside an otherwise two-sheet curve, rather
+/// than an isolated zero-dimensional contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkewCylinderTouchingSupportTopologyCertificate {
     topology: SkewCylinderDiscriminantContactTopologyCertificate,
@@ -441,9 +441,17 @@ impl SkewCylinderTouchingSupportTopologyCertificate {
         self.topology.formula_cylinders
     }
 
-    /// The sole exact repeated support-touch root.
+    /// First exact repeated support-touch root in canonical cyclic order.
+    ///
+    /// Retained for source compatibility with the original one-root layout;
+    /// use [`Self::roots`] when consuming the complete topology.
     pub fn root(&self) -> SkewCylinderDiscriminantRoot {
         self.topology.roots[0]
+    }
+
+    /// Complete repeated support-touch roots in canonical cyclic order.
+    pub fn roots(&self) -> &[SkewCylinderDiscriminantRoot] {
+        &self.topology.roots
     }
 
     /// Original complete exact discriminant topology.
@@ -564,8 +572,8 @@ pub fn certify_skew_cylinder_folded_support_topology(
     })
 }
 
-/// Seal one repeated discriminant root with a strict-positive complementary
-/// cell as a touching-support topology.
+/// Seal one or two repeated discriminant roots whose every complementary cell
+/// is strict positive as a touching-support topology.
 pub fn certify_skew_cylinder_touching_support_topology(
     topology: SkewCylinderDiscriminantContactTopologyCertificate,
 ) -> Result<SkewCylinderTouchingSupportTopologyCertificate, SkewCylinderAxialRootFailure> {
@@ -575,6 +583,11 @@ pub fn certify_skew_cylinder_touching_support_topology(
         topology.open_cell_signs.as_slice(),
     ) {
         (false, [root], [StrictSign::Positive]) if root.repeated() => {
+            Ok(SkewCylinderTouchingSupportTopologyCertificate { topology })
+        }
+        (false, [first, second], [StrictSign::Positive, StrictSign::Positive])
+            if first.repeated() && second.repeated() =>
+        {
             Ok(SkewCylinderTouchingSupportTopologyCertificate { topology })
         }
         _ => Err(SkewCylinderAxialRootFailure::InconsistentTopology),

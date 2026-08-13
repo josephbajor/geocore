@@ -295,6 +295,8 @@ pub enum IntersectionBranchVertexEvent {
     },
     /// Repeated support root joined through one exact cross-sheet continuation port.
     TouchingSupportRootJoin {
+        /// Ordinal in the exact canonical repeated-root cycle.
+        root_ordinal: u8,
         /// Exact smooth-continuation port identity.
         continuation: u8,
     },
@@ -336,6 +338,8 @@ pub enum IntersectionBranchEndpointEvent {
     },
     /// Repeated support root joined through one exact cross-sheet continuation port.
     TouchingSupportRootJoin {
+        /// Ordinal in the exact canonical repeated-root cycle.
+        root_ordinal: u8,
         /// Exact smooth-continuation port identity.
         continuation: u8,
     },
@@ -486,9 +490,9 @@ impl GraphSurfaceSurfaceIntersections {
         &self.skew_cylinder_folded_support_curves
     }
 
-    /// Exact repeated-root touching-support components, each represented by
-    /// six guarded sheet edges with exact cross-sheet root continuations,
-    /// authored seams, and regular chart joins.
+    /// Exact repeated-root touching-support families, each represented by six
+    /// guarded sheet edges with exact cross-sheet root continuations, authored
+    /// seams, and regular chart joins.
     pub fn skew_cylinder_touching_support_curves(&self) -> &[SkewCylinderTouchingSupportCurve] {
         &self.skew_cylinder_touching_support_curves
     }
@@ -2352,7 +2356,15 @@ fn build_verified_branch_graph(
                             IntersectionCertificateError::InvalidTraceFamily,
                         ),
                     )?;
-                    let expected_root = touching.touching_certificate().topology().root().bracket();
+                    let expected_root = touching
+                        .touching_certificate()
+                        .topology()
+                        .roots()
+                        .get(usize::from(proof.root.ordinal()))
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?
+                        .bracket();
                     let expected_chart = match expected_root.chart {
                         kgraph::SkewCylinderHalfAngleChart::Tangent => {
                             super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Tangent
@@ -2362,6 +2374,7 @@ fn build_verified_branch_graph(
                         }
                     };
                     let endpoint = kgraph::PersistentSkewCylinderTouchingSupportEndpoint::Root {
+                        root: proof.root,
                         continuation: proof.continuation,
                     };
                     if proof.half_angle_chart != expected_chart
@@ -2378,9 +2391,11 @@ fn build_verified_branch_graph(
                         proof.point,
                         proof.surface_parameters,
                         IntersectionBranchEndpointEvent::TouchingSupportRootJoin {
+                            root_ordinal: proof.root.ordinal(),
                             continuation: proof.continuation,
                         },
                         IntersectionBranchVertexEvent::TouchingSupportRootJoin {
+                            root_ordinal: proof.root.ordinal(),
                             continuation: proof.continuation,
                         },
                     )

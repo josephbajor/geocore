@@ -955,10 +955,14 @@ fn prepare_touching_support_member(
         let proof = edge.endpoint_proofs[graph_slot];
         let closed_end = match (vertex.event, proof) {
             (
-                IntersectionBranchVertexEvent::TouchingSupportRootJoin { continuation },
+                IntersectionBranchVertexEvent::TouchingSupportRootJoin {
+                    root_ordinal,
+                    continuation,
+                },
                 Some(IntersectionBranchEndpointProof::SkewCylinderTouchingSupportRoot(proof)),
             ) => {
-                if proof.continuation != continuation
+                if proof.root.ordinal() != root_ordinal
+                    || proof.continuation != continuation
                     || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
                     || proof.point != vertex.point
                     || proof.surface_parameters != vertex.surface_parameters
@@ -971,6 +975,7 @@ fn prepare_touching_support_member(
                 };
                 closed_stitch::CertifiedClosedEndpoint::touching_support_root(
                     raw_faces,
+                    root_ordinal,
                     continuation,
                     chart,
                     proof.half_angle_bracket.map(f64::to_bits),

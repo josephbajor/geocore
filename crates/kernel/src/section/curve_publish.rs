@@ -421,6 +421,7 @@ fn adapt_closed_endpoint(
         }
         closed_stitch::CertifiedClosedEndpointKey::TouchingSupportRoot {
             faces,
+            root_ordinal,
             continuation,
             chart,
             projective_bits,
@@ -432,6 +433,7 @@ fn adapt_closed_endpoint(
             }
             SectionCurveEndpointTopology::TouchingSupportRootJoin {
                 faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                root_ordinal,
                 continuation,
                 root_chart: if chart == 0 {
                     super::SectionSkewCylinderRootChart::TangentHalfAngle

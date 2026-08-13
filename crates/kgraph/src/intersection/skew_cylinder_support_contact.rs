@@ -1,13 +1,10 @@
-//! Persistent exact-root carrier for one isolated skew-cylinder support
-//! tangency.
+//! Persistent exact-root carriers for bounded skew-cylinder support contact.
 //!
-//! The existing cyclic second-harmonic theorem proves that exactly one
-//! repeated discriminant root exists and that every complementary longitude
-//! is a strict miss. This module binds that exact projective root to a finite
-//! pair of full-period cylinder windows. Outward interval evaluation proves
-//! the common support point is inside both axial windows or exactly incident
-//! to an authored axial bound; rounded analytic evaluation supplies only its
-//! deterministic representative.
+//! The cyclic second-harmonic theorem seals isolated support points, folded
+//! support curves, and one- or two-repeated-root touching curves before this
+//! module binds them to finite full-period cylinder windows. Outward interval
+//! evaluation owns support incidence and strict-positive member corridors;
+//! rounded analytic evaluation supplies only deterministic representatives.
 
 use kcore::interval::Interval;
 use kgeom::curve::Curve;
@@ -32,7 +29,7 @@ use super::{
 use crate::IntersectionCertificateError;
 
 const TAU: f64 = core::f64::consts::TAU;
-const UNSUPPORTED_REASON: &str = "skew Cylinder/Cylinder support contact is not one isolated repeated root inside or exactly on the boundary of two full-period finite windows";
+const UNSUPPORTED_REASON: &str = "skew Cylinder/Cylinder support contact is not a certified one- or two-repeated-root layout inside or exactly on the boundary of two full-period finite windows";
 
 type FormulaFoldedEndpointParameters = [[[f64; 2]; 2]; 2];
 type FormulaFoldedSeamEvidence = (FormulaFoldedEndpointParameters, [Vec3; 2]);
@@ -48,8 +45,8 @@ pub const SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK: u64 =
 pub const SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK: u64 =
     4 * PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK;
 
-/// Exact logical work for the six guarded members of one generic repeated-root
-/// touching-support component. Each member owns two 256-cell exact Bernstein
+/// Exact logical work for the six guarded members of one repeated-root
+/// touching-support family. Each member owns two 256-cell exact Bernstein
 /// allowances for its source and stored-evaluator positive-radicand margins in
 /// addition to the established guarded open-span proof.
 pub const SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK: u64 = 6
@@ -75,6 +72,29 @@ pub enum PersistentSkewCylinderTouchingSupportChartJoin {
     Second,
 }
 
+/// Proof-owned ordinal in a one-or-two-root touching-support cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistentSkewCylinderTouchingSupportRoot {
+    /// First repeated root in canonical cyclic order.
+    First,
+    /// Second repeated root in canonical cyclic order.
+    Second,
+}
+
+impl PersistentSkewCylinderTouchingSupportRoot {
+    /// Zero-based canonical root ordinal.
+    pub const fn ordinal(self) -> u8 {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
+
+    const fn index(self) -> usize {
+        self.ordinal() as usize
+    }
+}
+
 impl PersistentSkewCylinderTouchingSupportChartJoin {
     const fn ordinal(self) -> usize {
         match self {
@@ -89,6 +109,8 @@ impl PersistentSkewCylinderTouchingSupportChartJoin {
 pub enum PersistentSkewCylinderTouchingSupportEndpoint {
     /// The shared repeated support root plus its smooth-continuation port.
     Root {
+        /// Identity in the exact canonical repeated-root cycle.
+        root: PersistentSkewCylinderTouchingSupportRoot,
         /// Exact smooth-continuation port pairing opposite sheets.
         continuation: u8,
     },
@@ -129,13 +151,13 @@ pub struct PersistentSkewCylinderTouchingSupportCertificate {
     topology: SkewCylinderTouchingSupportTopologyCertificate,
     formula_windows: [[ParamRange; 2]; 2],
     formula_to_source: [usize; 2],
-    formula_root_longitude: Interval,
+    formula_root_longitudes: Vec<Interval>,
     chart_join_longitudes: Vec<f64>,
     guarded_ranges: Vec<ParamRange>,
     formula_residuals: Vec<PairedSkewCylinderBranchResidualCertificate>,
     formula_branch_endpoints: Vec<[PersistentSkewCylinderTouchingSupportEndpoint; 2]>,
-    formula_root_parameters: [[f64; 2]; 2],
-    formula_root_point: Vec3,
+    formula_root_parameters: [[[f64; 2]; 2]; 2],
+    formula_root_points: [Vec3; 2],
     formula_seam_parameters: [[[f64; 2]; 2]; 2],
     formula_seam_points: [Vec3; 2],
     formula_chart_join_parameters: [FormulaFoldedEndpointParameters; 2],
@@ -151,8 +173,13 @@ impl PersistentSkewCylinderTouchingSupportCertificate {
     }
 
     /// Exact-source repeated-root longitude enclosure.
-    pub const fn formula_root_longitude(&self) -> Interval {
-        self.formula_root_longitude
+    pub fn formula_root_longitude(&self) -> Interval {
+        self.formula_root_longitudes[0]
+    }
+
+    /// Complete exact-source repeated-root longitude enclosures.
+    pub fn formula_root_longitudes(&self) -> &[Interval] {
+        &self.formula_root_longitudes
     }
 
     /// Exact regular longitudes where tangent/cotangent guarded charts meet.
@@ -202,7 +229,9 @@ impl PersistentSkewCylinderTouchingSupportCertificate {
     /// Deterministic endpoint representative for one guarded branch end.
     pub fn endpoint_point(&self, endpoint: PersistentSkewCylinderTouchingSupportEndpoint) -> Vec3 {
         match endpoint {
-            PersistentSkewCylinderTouchingSupportEndpoint::Root { .. } => self.formula_root_point,
+            PersistentSkewCylinderTouchingSupportEndpoint::Root { root, .. } => {
+                self.formula_root_points[root.index()]
+            }
             PersistentSkewCylinderTouchingSupportEndpoint::Seam(sheet) => {
                 self.formula_seam_points[sheet_ordinal(sheet)]
             }
@@ -218,8 +247,8 @@ impl PersistentSkewCylinderTouchingSupportCertificate {
         endpoint: PersistentSkewCylinderTouchingSupportEndpoint,
     ) -> [[f64; 2]; 2] {
         let formula = match endpoint {
-            PersistentSkewCylinderTouchingSupportEndpoint::Root { .. } => {
-                self.formula_root_parameters
+            PersistentSkewCylinderTouchingSupportEndpoint::Root { root, .. } => {
+                self.formula_root_parameters[root.index()]
             }
             PersistentSkewCylinderTouchingSupportEndpoint::Seam(sheet) => {
                 self.formula_seam_parameters[sheet_ordinal(sheet)]
@@ -793,14 +822,15 @@ pub fn certify_persistent_skew_cylinder_folded_support(
     })
 }
 
-/// Certify one generic repeated-root touching-support component.
+/// Certify one one- or two-repeated-root touching-support family.
 ///
-/// The sole repeated root may lie strictly inside one tangent half chart or
-/// exactly on the authored periodic seam. Three guarded pieces per sheet
-/// cover the positive cyclic cell. An interior root uses the authored seam
-/// and one regular chart join; a seam root uses both regular chart joins.
-/// Smooth continuation swaps sheets at the repeated root and is retained by
-/// two proof-owned continuation ports.
+/// A single repeated root may lie strictly inside one tangent half chart or
+/// exactly on the authored periodic seam. An interior root uses the authored
+/// seam and one regular chart join; a seam root uses both regular chart joins.
+/// The exact equal-radius orthogonal layout instead owns two repeated roots at
+/// the two half-chart transitions and uses the authored seam. In every layout,
+/// three guarded pieces per sheet cover the strict-positive cyclic cells and
+/// every smooth root continuation retains its proof-owned root and port.
 pub fn certify_persistent_skew_cylinder_touching_support(
     topology: SkewCylinderTouchingSupportTopologyCertificate,
     formula_windows: [[ParamRange; 2]; 2],
@@ -816,41 +846,36 @@ pub fn certify_persistent_skew_cylinder_touching_support(
     if authored.lo.to_bits() != 0.0_f64.to_bits() || authored.hi.to_bits() != TAU.to_bits() {
         return Err(unsupported());
     }
-    let root = topology.root();
-    let angular = root.angular_bracket();
-    let root_on_seam =
-        angular.lo.to_bits() == 0.0_f64.to_bits() && angular.hi.to_bits() == 0.0_f64.to_bits();
-    let root_in_first_half = angular.lo > 0.0 && angular.hi < core::f64::consts::PI;
-    let root_in_second_half = angular.lo > core::f64::consts::PI && angular.hi < TAU;
-    if !root.repeated() || !(root_on_seam || root_in_first_half || root_in_second_half) {
+    let roots = topology.roots();
+    if !matches!(roots.len(), 1 | 2) || roots.iter().any(|root| !root.repeated()) {
         return Err(unsupported());
     }
-    let evidence = root_evidence(
-        topology.topology(),
-        root,
-        formula_windows,
-        root_on_seam,
-        true,
-    )?;
-    if evidence
-        .exact_heights
-        .into_iter()
-        .zip(formula_windows)
-        .any(|(height, window)| !strictly_inside(height, window[1]))
-    {
-        return Err(unsupported());
-    }
-    let chart_join_longitudes = if root_on_seam {
-        vec![
-            core::f64::consts::FRAC_PI_2,
-            3.0 * core::f64::consts::FRAC_PI_2,
-        ]
-    } else if root_in_first_half {
-        vec![3.0 * core::f64::consts::FRAC_PI_2]
-    } else {
-        vec![core::f64::consts::FRAC_PI_2]
+    let root_on_seam = |root: SkewCylinderDiscriminantRoot| {
+        let angular = root.angular_bracket();
+        angular.lo.to_bits() == 0.0_f64.to_bits() && angular.hi.to_bits() == 0.0_f64.to_bits()
     };
-    let formula_root_longitude = evidence.formula_longitude_enclosures[0];
+    let root_evidence = roots
+        .iter()
+        .copied()
+        .map(|root| {
+            root_evidence(
+                topology.topology(),
+                root,
+                formula_windows,
+                root_on_seam(root),
+                true,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if root_evidence.iter().any(|evidence| {
+        evidence
+            .exact_heights
+            .into_iter()
+            .zip(formula_windows)
+            .any(|(height, window)| !strictly_inside(height, window[1]))
+    }) {
+        return Err(unsupported());
+    }
     let radius_scale = topology
         .formula_cylinders()
         .into_iter()
@@ -860,119 +885,226 @@ pub fn certify_persistent_skew_cylinder_touching_support(
     if !root_inset.is_finite() || root_inset <= 0.0 {
         return Err(unsupported());
     }
-    let root_before = (angular.strict_before_side() - root_inset).next_down();
-    let root_after = (angular.strict_after_side() + root_inset).next_up();
     let seam_inset = 2.0_f64.powi(-40);
     let seam_after = authored.lo + seam_inset;
     let seam_before = authored.hi - seam_inset;
 
     use PersistentSkewCylinderTouchingSupportChartJoin::{First, Second};
     use PersistentSkewCylinderTouchingSupportEndpoint::{ChartJoin, Root, Seam};
-    let branch_specs = if root_on_seam {
-        let ranges = [
-            (
-                SkewCylinderHalfAngleChart::Tangent,
-                ParamRange::new(root_after, chart_join_longitudes[0].next_down()),
-                [
-                    Root { continuation: 0 },
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: First,
-                    },
-                ],
-            ),
-            (
-                SkewCylinderHalfAngleChart::Cotangent,
-                ParamRange::new(
-                    chart_join_longitudes[0].next_up(),
-                    chart_join_longitudes[1].next_down(),
+    use PersistentSkewCylinderTouchingSupportRoot::{First as FirstRoot, Second as SecondRoot};
+    let guarded_root = |root: SkewCylinderDiscriminantRoot| {
+        let angular = root.angular_bracket();
+        (
+            (angular.strict_before_side() - root_inset).next_down(),
+            (angular.strict_after_side() + root_inset).next_up(),
+        )
+    };
+    let (branch_specs, chart_join_longitudes, seam_is_root) = if let [root] = roots {
+        let angular = root.angular_bracket();
+        let on_seam = root_on_seam(*root);
+        let root_in_first_half = angular.lo > 0.0 && angular.hi < core::f64::consts::PI;
+        let root_in_second_half = angular.lo > core::f64::consts::PI && angular.hi < TAU;
+        if !(on_seam || root_in_first_half || root_in_second_half) {
+            return Err(unsupported());
+        }
+        let (root_before, root_after) = guarded_root(*root);
+        let chart_join_longitudes = if on_seam {
+            vec![
+                core::f64::consts::FRAC_PI_2,
+                3.0 * core::f64::consts::FRAC_PI_2,
+            ]
+        } else if root_in_first_half {
+            vec![3.0 * core::f64::consts::FRAC_PI_2]
+        } else {
+            vec![core::f64::consts::FRAC_PI_2]
+        };
+        let lower = if on_seam {
+            [
+                (
+                    SkewCylinderHalfAngleChart::Tangent,
+                    ParamRange::new(root_after, chart_join_longitudes[0].next_down()),
+                    [
+                        Root {
+                            root: FirstRoot,
+                            continuation: 0,
+                        },
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: First,
+                        },
+                    ],
                 ),
-                [
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: First,
-                    },
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: Second,
-                    },
-                ],
-            ),
-            (
-                SkewCylinderHalfAngleChart::Tangent,
-                ParamRange::new(chart_join_longitudes[1].next_up(), root_before),
-                [
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: Second,
-                    },
-                    Root { continuation: 1 },
-                ],
-            ),
-        ];
-        touching_support_sheet_specs(ranges)
-    } else if root_in_first_half {
+                (
+                    SkewCylinderHalfAngleChart::Cotangent,
+                    ParamRange::new(
+                        chart_join_longitudes[0].next_up(),
+                        chart_join_longitudes[1].next_down(),
+                    ),
+                    [
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: First,
+                        },
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: Second,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderHalfAngleChart::Tangent,
+                    ParamRange::new(chart_join_longitudes[1].next_up(), root_before),
+                    [
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: Second,
+                        },
+                        Root {
+                            root: FirstRoot,
+                            continuation: 1,
+                        },
+                    ],
+                ),
+            ]
+        } else if root_in_first_half {
+            [
+                (
+                    SkewCylinderHalfAngleChart::Tangent,
+                    ParamRange::new(seam_after, root_before),
+                    [
+                        Seam(SkewCylinderSheet::Lower),
+                        Root {
+                            root: FirstRoot,
+                            continuation: 0,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderHalfAngleChart::Cotangent,
+                    ParamRange::new(root_after, chart_join_longitudes[0].next_down()),
+                    [
+                        Root {
+                            root: FirstRoot,
+                            continuation: 1,
+                        },
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: First,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderHalfAngleChart::Tangent,
+                    ParamRange::new(chart_join_longitudes[0].next_up(), seam_before),
+                    [
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: First,
+                        },
+                        Seam(SkewCylinderSheet::Lower),
+                    ],
+                ),
+            ]
+        } else {
+            [
+                (
+                    SkewCylinderHalfAngleChart::Tangent,
+                    ParamRange::new(seam_after, chart_join_longitudes[0].next_down()),
+                    [
+                        Seam(SkewCylinderSheet::Lower),
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: First,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderHalfAngleChart::Cotangent,
+                    ParamRange::new(chart_join_longitudes[0].next_up(), root_before),
+                    [
+                        ChartJoin {
+                            sheet: SkewCylinderSheet::Lower,
+                            join: First,
+                        },
+                        Root {
+                            root: FirstRoot,
+                            continuation: 0,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderHalfAngleChart::Tangent,
+                    ParamRange::new(root_after, seam_before),
+                    [
+                        Root {
+                            root: FirstRoot,
+                            continuation: 1,
+                        },
+                        Seam(SkewCylinderSheet::Lower),
+                    ],
+                ),
+            ]
+        };
+        (
+            touching_support_sheet_specs(lower),
+            chart_join_longitudes,
+            on_seam,
+        )
+    } else if let [first, second] = roots {
+        let first_angular = first.angular_bracket();
+        let second_angular = second.angular_bracket();
+        if first_angular.lo.to_bits() != core::f64::consts::FRAC_PI_2.to_bits()
+            || first_angular.hi.to_bits() != core::f64::consts::FRAC_PI_2.to_bits()
+            || second_angular.lo.to_bits() != (3.0 * core::f64::consts::FRAC_PI_2).to_bits()
+            || second_angular.hi.to_bits() != (3.0 * core::f64::consts::FRAC_PI_2).to_bits()
+        {
+            return Err(unsupported_reason(
+                "double touching support is not the exact orthogonal chart-root layout",
+            ));
+        }
+        let (first_before, first_after) = guarded_root(*first);
+        let (second_before, second_after) = guarded_root(*second);
         let ranges = [
             (
                 SkewCylinderHalfAngleChart::Tangent,
-                ParamRange::new(seam_after, root_before),
-                [Seam(SkewCylinderSheet::Lower), Root { continuation: 0 }],
+                ParamRange::new(seam_after, first_before),
+                [
+                    Seam(SkewCylinderSheet::Lower),
+                    Root {
+                        root: FirstRoot,
+                        continuation: 0,
+                    },
+                ],
             ),
             (
                 SkewCylinderHalfAngleChart::Cotangent,
-                ParamRange::new(root_after, chart_join_longitudes[0].next_down()),
+                ParamRange::new(first_after, second_before),
                 [
-                    Root { continuation: 1 },
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: First,
+                    Root {
+                        root: FirstRoot,
+                        continuation: 1,
+                    },
+                    Root {
+                        root: SecondRoot,
+                        continuation: 0,
                     },
                 ],
             ),
             (
                 SkewCylinderHalfAngleChart::Tangent,
-                ParamRange::new(chart_join_longitudes[0].next_up(), seam_before),
+                ParamRange::new(second_after, seam_before),
                 [
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: First,
+                    Root {
+                        root: SecondRoot,
+                        continuation: 1,
                     },
                     Seam(SkewCylinderSheet::Lower),
                 ],
             ),
         ];
-        touching_support_sheet_specs(ranges)
+        (touching_support_sheet_specs(ranges), Vec::new(), false)
     } else {
-        let ranges = [
-            (
-                SkewCylinderHalfAngleChart::Tangent,
-                ParamRange::new(seam_after, chart_join_longitudes[0].next_down()),
-                [
-                    Seam(SkewCylinderSheet::Lower),
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: First,
-                    },
-                ],
-            ),
-            (
-                SkewCylinderHalfAngleChart::Cotangent,
-                ParamRange::new(chart_join_longitudes[0].next_up(), root_before),
-                [
-                    ChartJoin {
-                        sheet: SkewCylinderSheet::Lower,
-                        join: First,
-                    },
-                    Root { continuation: 0 },
-                ],
-            ),
-            (
-                SkewCylinderHalfAngleChart::Tangent,
-                ParamRange::new(root_after, seam_before),
-                [Root { continuation: 1 }, Seam(SkewCylinderSheet::Lower)],
-            ),
-        ];
-        touching_support_sheet_specs(ranges)
+        return Err(unsupported());
     };
     if branch_specs.len() != 6
         || branch_specs
@@ -1011,30 +1143,54 @@ pub fn certify_persistent_skew_cylinder_touching_support(
         );
     }
 
-    let mut root_algebra = evidence.algebra;
-    let raw_root_longitude = root_algebra
-        .authored_pcurve_derivs(1, evidence.carrier_parameter, 0)
-        .d[0]
-        .x;
-    let lifted_root = fit_full_period_parameter(raw_root_longitude, formula_windows[1][0])
-        .expect("root evidence already retained an opposite longitude lift");
-    root_algebra.longitude_offset = lifted_root - raw_root_longitude;
-    let formula_root_parameters = [0, 1].map(|operand| {
-        let uv = root_algebra
-            .authored_pcurve_derivs(operand, evidence.carrier_parameter, 0)
-            .d[0];
-        [uv.x, uv.y]
-    });
-    let root_points = [
-        topology.formula_cylinders()[0].eval(formula_root_parameters[0]),
-        topology.formula_cylinders()[1].eval(formula_root_parameters[1]),
-    ];
-    if root_points[0].dist(root_points[1]) > tolerance {
-        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    let mut formula_root_parameters = Vec::with_capacity(root_evidence.len());
+    let mut formula_root_points = Vec::with_capacity(root_evidence.len());
+    for evidence in &root_evidence {
+        let mut root_algebra = evidence.algebra;
+        let raw_root_longitude = root_algebra
+            .authored_pcurve_derivs(1, evidence.carrier_parameter, 0)
+            .d[0]
+            .x;
+        let lifted_root = fit_full_period_parameter(raw_root_longitude, formula_windows[1][0])
+            .expect("root evidence already retained an opposite longitude lift");
+        root_algebra.longitude_offset = lifted_root - raw_root_longitude;
+        let parameters = [0, 1].map(|operand| {
+            let uv = root_algebra
+                .authored_pcurve_derivs(operand, evidence.carrier_parameter, 0)
+                .d[0];
+            [uv.x, uv.y]
+        });
+        let root_points = [
+            topology.formula_cylinders()[0].eval(parameters[0]),
+            topology.formula_cylinders()[1].eval(parameters[1]),
+        ];
+        if root_points[0].dist(root_points[1]) > tolerance {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        formula_root_parameters.push(parameters);
+        formula_root_points.push((root_points[0] + root_points[1]) * 0.5);
     }
-    let formula_root_point = (root_points[0] + root_points[1]) * 0.5;
-    let (formula_seam_parameters, formula_seam_points) = if root_on_seam {
-        ([formula_root_parameters; 2], [formula_root_point; 2])
+    // Root endpoint lookup is public and must remain total for the sealed enum
+    // even in a one-root topology. The second slot is therefore a harmless
+    // duplicate unless the topology actually admits `Second`.
+    let first_root_parameters = formula_root_parameters[0];
+    let first_root_point = formula_root_points[0];
+    let formula_root_parameters = [
+        first_root_parameters,
+        formula_root_parameters
+            .get(1)
+            .copied()
+            .unwrap_or(first_root_parameters),
+    ];
+    let formula_root_points = [
+        first_root_point,
+        formula_root_points
+            .get(1)
+            .copied()
+            .unwrap_or(first_root_point),
+    ];
+    let (formula_seam_parameters, formula_seam_points) = if seam_is_root {
+        ([formula_root_parameters[0]; 2], [formula_root_points[0]; 2])
     } else {
         folded_regular_join_evidence(
             topology.formula_cylinders(),
@@ -1056,7 +1212,11 @@ pub fn certify_persistent_skew_cylinder_touching_support(
             .map_err(|_| unsupported_reason("touching support lacks chart-join evidence"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let first_chart_join = chart_join_evidence[0];
+    let fallback_chart_join = (formula_seam_parameters, formula_seam_points);
+    let first_chart_join = chart_join_evidence
+        .first()
+        .copied()
+        .unwrap_or(fallback_chart_join);
     // Keep public endpoint lookup total even when the partition needs only
     // one chart join. The longitude lookup remains the proof-owned admission
     // gate and rejects `Second` for that layout.
@@ -1068,7 +1228,7 @@ pub fn certify_persistent_skew_cylinder_touching_support(
     let formula_chart_join_points = [first_chart_join.1, second_chart_join.1];
 
     let point_for_endpoint = |endpoint| match endpoint {
-        Root { .. } => formula_root_point,
+        Root { root, .. } => formula_root_points[root.index()],
         Seam(sheet) => formula_seam_points[sheet_ordinal(sheet)],
         ChartJoin { sheet, join } => {
             formula_chart_join_points[join.ordinal()][sheet_ordinal(sheet)]
@@ -1103,7 +1263,10 @@ pub fn certify_persistent_skew_cylinder_touching_support(
         topology,
         formula_windows,
         formula_to_source,
-        formula_root_longitude,
+        formula_root_longitudes: root_evidence
+            .iter()
+            .map(|evidence| evidence.formula_longitude_enclosures[0])
+            .collect(),
         chart_join_longitudes,
         guarded_ranges: branch_specs.iter().map(|(_, _, range, _)| *range).collect(),
         formula_residuals,
@@ -1112,7 +1275,7 @@ pub fn certify_persistent_skew_cylinder_touching_support(
             .map(|(_, _, _, endpoints)| endpoints)
             .collect(),
         formula_root_parameters,
-        formula_root_point,
+        formula_root_points,
         formula_seam_parameters,
         formula_seam_points,
         formula_chart_join_parameters,
@@ -1140,8 +1303,8 @@ fn touching_support_sheet_specs(
 ) -> Vec<TouchingSupportBranchSpec> {
     let upper = lower.map(|(chart, range, endpoints)| {
         let endpoints = endpoints.map(|endpoint| match endpoint {
-            PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation } => {
-                PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation }
+            PersistentSkewCylinderTouchingSupportEndpoint::Root { root, continuation } => {
+                PersistentSkewCylinderTouchingSupportEndpoint::Root { root, continuation }
             }
             PersistentSkewCylinderTouchingSupportEndpoint::Seam(_) => {
                 PersistentSkewCylinderTouchingSupportEndpoint::Seam(SkewCylinderSheet::Upper)
@@ -1709,6 +1872,17 @@ mod tests {
         ]
     }
 
+    fn double_touching_support_cylinders(frame: Frame) -> [Cylinder; 2] {
+        [
+            Cylinder::new(frame, 1.0).unwrap(),
+            Cylinder::new(
+                Frame::new(frame.origin(), frame.x(), frame.y()).unwrap(),
+                1.0,
+            )
+            .unwrap(),
+        ]
+    }
+
     fn touching_support_windows() -> [[ParamRange; 2]; 2] {
         [
             [ParamRange::new(0.0, TAU), ParamRange::new(-2.0, 2.0)],
@@ -2008,7 +2182,7 @@ mod tests {
             .iter()
             .flatten()
             .filter_map(|endpoint| match endpoint {
-                PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation } => {
+                PersistentSkewCylinderTouchingSupportEndpoint::Root { continuation, .. } => {
                     Some(*continuation)
                 }
                 _ => None,
@@ -2016,6 +2190,22 @@ mod tests {
             .collect::<Vec<_>>();
         root_ports.sort_unstable();
         assert_eq!(root_ports, vec![0, 0, 1, 1]);
+        let first_root = PersistentSkewCylinderTouchingSupportEndpoint::Root {
+            root: PersistentSkewCylinderTouchingSupportRoot::First,
+            continuation: 0,
+        };
+        let unused_second_root = PersistentSkewCylinderTouchingSupportEndpoint::Root {
+            root: PersistentSkewCylinderTouchingSupportRoot::Second,
+            continuation: 0,
+        };
+        assert_eq!(
+            touching.endpoint_point(unused_second_root),
+            touching.endpoint_point(first_root)
+        );
+        assert_eq!(
+            touching.source_parameters(unused_second_root),
+            touching.source_parameters(first_root)
+        );
         assert!(touching.required_edge_tolerance() <= touching.tolerance());
     }
 
@@ -2065,6 +2255,59 @@ mod tests {
                     endpoint,
                     PersistentSkewCylinderTouchingSupportEndpoint::Seam(_)
                 ))
+        );
+        assert!(touching.required_edge_tolerance() <= touching.tolerance());
+    }
+
+    #[test]
+    fn two_repeated_positive_roots_mint_two_closed_crossing_curves() {
+        let contact = match classify_skew_cylinder_exact_discriminant(
+            double_touching_support_cylinders(Frame::world()),
+            SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+        )
+        .unwrap()
+        {
+            SkewCylinderExactDiscriminantTopology::Contact(topology) => *topology,
+            other => panic!("expected double-touching contact topology, got {other:?}"),
+        };
+        let topology = certify_skew_cylinder_touching_support_topology(contact).unwrap();
+        assert_eq!(topology.roots().len(), 2);
+        assert!(topology.roots().iter().all(|root| root.repeated()));
+        let touching = certify_persistent_skew_cylinder_touching_support(
+            topology,
+            touching_support_windows(),
+            [0, 1],
+            1.0e-7,
+            SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+        )
+        .unwrap();
+        assert_eq!(touching.formula_residuals().len(), 6);
+        assert_eq!(touching.formula_root_longitudes().len(), 2);
+        assert!(touching.chart_join_longitudes().is_empty());
+        let mut root_ports = touching
+            .formula_branch_endpoints()
+            .iter()
+            .flatten()
+            .filter_map(|endpoint| match endpoint {
+                PersistentSkewCylinderTouchingSupportEndpoint::Root { root, continuation } => {
+                    Some((root.ordinal(), *continuation))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        root_ports.sort_unstable();
+        assert_eq!(
+            root_ports,
+            vec![
+                (0, 0),
+                (0, 0),
+                (0, 1),
+                (0, 1),
+                (1, 0),
+                (1, 0),
+                (1, 1),
+                (1, 1),
+            ]
         );
         assert!(touching.required_edge_tolerance() <= touching.tolerance());
     }

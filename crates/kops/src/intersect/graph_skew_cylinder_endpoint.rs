@@ -3,6 +3,7 @@
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kgraph::PersistentSkewCylinderTouchingSupportChartJoin;
+use kgraph::PersistentSkewCylinderTouchingSupportRoot;
 use kgraph::SkewCylinderSheet;
 
 /// Caller-authored axial side that clips a skew-cylinder branch endpoint.
@@ -105,6 +106,8 @@ pub struct SkewCylinderFoldedSupportSeamEndpointProof {
 /// one endpoint of a touching-support member.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkewCylinderTouchingSupportRootEndpointProof {
+    /// Identity in the exact canonical repeated-root cycle.
+    pub root: PersistentSkewCylinderTouchingSupportRoot,
     /// Smooth-continuation port; each port joins one member from each sheet.
     pub continuation: u8,
     /// Projective chart retaining the exact repeated-root identity.

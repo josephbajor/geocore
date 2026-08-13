@@ -775,6 +775,8 @@ pub enum SectionCurveEndpointTopology {
     TouchingSupportRootJoin {
         /// Source faces in operand order.
         faces: [FaceId; 2],
+        /// Ordinal in the exact canonical repeated-root cycle.
+        root_ordinal: u8,
         /// Exact smooth-continuation port identity.
         continuation: u8,
         /// Projective chart and isolating interval retaining source identity.
