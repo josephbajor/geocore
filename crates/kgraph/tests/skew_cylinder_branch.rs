@@ -402,7 +402,7 @@ fn swaps_only_source_order_and_rejects_tight_windows() {
             SkewCylinderSheet::Upper,
             1e-8
         ),
-        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+        Err(IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow { .. })
     ));
 }
 
@@ -441,7 +441,7 @@ fn strict_subrange_certifies_directly_when_the_whole_sheet_escapes_both_axial_wi
             SkewCylinderSheet::Upper,
             1e-8,
         ),
-        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+        Err(IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow { .. })
     ));
 
     let subrange = ParamRange::new(1.25, 1.89);
@@ -527,7 +527,7 @@ fn guarded_boundary_root_subrange_avoids_uniform_cell_dependency_leakage() {
             SkewCylinderSheet::Upper,
             1e-8,
         ),
-        Err(IntersectionCertificateError::UnsupportedCarrierParameterization { .. })
+        Err(IntersectionCertificateError::SkewCylinderTraceOutsideAxialWindow { .. })
     ));
 
     let mut guarded_lo = root_span.lo;
