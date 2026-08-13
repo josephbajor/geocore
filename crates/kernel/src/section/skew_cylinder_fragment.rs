@@ -996,15 +996,17 @@ fn prepare_touching_support_member(
                 IntersectionBranchVertexEvent::TouchingSupportChartJoin { sheet },
                 Some(IntersectionBranchEndpointProof::SkewCylinderTouchingSupportChartJoin(proof)),
             ) => {
+                let Some(expected_longitude) = touching
+                    .touching_certificate()
+                    .chart_join_longitude_for(proof.join)
+                else {
+                    return Ok(None);
+                };
                 if proof.sheet != sheet
                     || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
                     || proof.point != vertex.point
                     || proof.surface_parameters != vertex.surface_parameters
-                    || proof.longitude.to_bits()
-                        != touching
-                            .touching_certificate()
-                            .chart_join_longitude()
-                            .to_bits()
+                    || proof.longitude.to_bits() != expected_longitude.to_bits()
                 {
                     return Ok(None);
                 }

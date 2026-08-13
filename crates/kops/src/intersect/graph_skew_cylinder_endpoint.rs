@@ -2,6 +2,7 @@
 
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
+use kgraph::PersistentSkewCylinderTouchingSupportChartJoin;
 use kgraph::SkewCylinderSheet;
 
 /// Caller-authored axial side that clips a skew-cylinder branch endpoint.
@@ -137,6 +138,8 @@ pub struct SkewCylinderTouchingSupportSeamEndpointProof {
 pub struct SkewCylinderTouchingSupportChartJoinEndpointProof {
     /// Ordered touching-support sheet owning this chart join.
     pub sheet: SkewCylinderSheet,
+    /// Proof-owned identity in the ordered regular chart joins.
+    pub join: PersistentSkewCylinderTouchingSupportChartJoin,
     /// Exact authored first-cylinder longitude of the chart transition.
     pub longitude: f64,
     /// Hidden strict-positive carrier coordinate used by the evaluator.

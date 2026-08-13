@@ -858,11 +858,14 @@ fn intersect_touching_support_contact(
                             },
                         )
                     }
-                    PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(sheet) => {
+                    PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin { sheet, join } => {
                         IntersectionBranchEndpointProof::SkewCylinderTouchingSupportChartJoin(
                             SkewCylinderTouchingSupportChartJoinEndpointProof {
                                 sheet,
-                                longitude: certificate.chart_join_longitude(),
+                                join,
+                                longitude: certificate
+                                    .chart_join_longitude_for(join)
+                                    .expect("endpoint retains one certificate-owned chart join"),
                                 inside_parameter,
                                 point: certificate.endpoint_point(endpoint),
                                 surface_parameters: certificate.source_parameters(endpoint),

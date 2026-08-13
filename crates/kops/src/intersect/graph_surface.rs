@@ -2456,11 +2456,17 @@ fn build_verified_branch_graph(
                         ),
                     )?;
                     let endpoint =
-                        kgraph::PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin(sheet);
+                        kgraph::PersistentSkewCylinderTouchingSupportEndpoint::ChartJoin {
+                            sheet,
+                            join: proof.join,
+                        };
                     if proof.longitude.to_bits()
                         != touching
                             .touching_certificate()
-                            .chart_join_longitude()
+                            .chart_join_longitude_for(proof.join)
+                            .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ))?
                             .to_bits()
                         || proof.point != touching.touching_certificate().endpoint_point(endpoint)
                         || proof.surface_parameters
