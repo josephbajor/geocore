@@ -176,6 +176,9 @@ fn overlapping_windows_promote_in_both_orders_and_persist_identities() {
                     | kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportSeamJoin {
                         ..
                     }
+                    | kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportChartJoin {
+                        ..
+                    }
                     | kops::intersect::IntersectionBranchEndpointEvent::TouchingSupportRootJoin {
                         ..
                     }

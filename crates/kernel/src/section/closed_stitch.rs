@@ -208,6 +208,12 @@ pub(crate) enum CertifiedClosedEndpointKey {
     /// The exact authored periodic seam shared by two guarded pieces of one
     /// ordered folded-support sheet.
     FoldedSupportSeam { faces: [RawFaceId; 2], sheet: u8 },
+    /// Exact regular tangent/cotangent chart join on one folded-support sheet.
+    FoldedSupportChartJoin {
+        faces: [RawFaceId; 2],
+        sheet: u8,
+        longitude_bits: u64,
+    },
     /// One exact repeated support root, split into two smooth continuation
     /// ports that each join opposite sheets.
     TouchingSupportRoot {
@@ -272,6 +278,21 @@ impl CertifiedClosedEndpoint {
     pub(crate) const fn folded_support_seam(faces: [RawFaceId; 2], sheet: u8) -> Self {
         Self {
             key: CertifiedClosedEndpointKey::FoldedSupportSeam { faces, sheet },
+            edge_parameters: [None, None],
+        }
+    }
+
+    pub(crate) const fn folded_support_chart_join(
+        faces: [RawFaceId; 2],
+        sheet: u8,
+        longitude_bits: u64,
+    ) -> Self {
+        Self {
+            key: CertifiedClosedEndpointKey::FoldedSupportChartJoin {
+                faces,
+                sheet,
+                longitude_bits,
+            },
             edge_parameters: [None, None],
         }
     }
@@ -682,6 +703,7 @@ fn endpoint_is_valid(endpoint: CertifiedClosedEndpoint, source: ClosedFragmentSo
         }
         CertifiedClosedEndpointKey::FoldedSupportRoot { faces, .. }
         | CertifiedClosedEndpointKey::FoldedSupportSeam { faces, .. }
+        | CertifiedClosedEndpointKey::FoldedSupportChartJoin { faces, .. }
         | CertifiedClosedEndpointKey::TouchingSupportRoot { faces, .. }
         | CertifiedClosedEndpointKey::TouchingSupportSeam { faces, .. }
         | CertifiedClosedEndpointKey::TouchingSupportChartJoin { faces, .. } => {
@@ -736,6 +758,7 @@ fn intersect_parameter_evidence(
         CertifiedClosedEndpointKey::PeriodSeam { .. }
         | CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
         | CertifiedClosedEndpointKey::FoldedSupportSeam { .. }
+        | CertifiedClosedEndpointKey::FoldedSupportChartJoin { .. }
         | CertifiedClosedEndpointKey::TouchingSupportRoot { .. }
         | CertifiedClosedEndpointKey::TouchingSupportSeam { .. }
         | CertifiedClosedEndpointKey::TouchingSupportChartJoin { .. } => {
@@ -1134,6 +1157,89 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn chart_split_folded_members_form_one_four_fragment_cycle() {
+        let ids = ids();
+        let sources = [
+            branch(&ids, 0, [0, 1]),
+            branch(&ids, 1, [0, 1]),
+            branch(&ids, 2, [0, 1]),
+            branch(&ids, 3, [0, 1]),
+        ];
+        let root_zero = CertifiedClosedEndpoint::folded_support_root(
+            sources[0].faces,
+            0,
+            0,
+            [0.0_f64.to_bits(), f64::EPSILON.to_bits()],
+        );
+        let root_one = CertifiedClosedEndpoint::folded_support_root(
+            sources[0].faces,
+            1,
+            1,
+            [0.0_f64.to_bits(), f64::EPSILON.to_bits()],
+        );
+        let lower_chart = CertifiedClosedEndpoint::folded_support_chart_join(
+            sources[0].faces,
+            0,
+            core::f64::consts::FRAC_PI_2.to_bits(),
+        );
+        let upper_chart = CertifiedClosedEndpoint::folded_support_chart_join(
+            sources[0].faces,
+            1,
+            core::f64::consts::FRAC_PI_2.to_bits(),
+        );
+        let fragments = [
+            arc(
+                sources[0].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_zero,
+                lower_chart,
+            ),
+            arc(
+                sources[1].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                lower_chart,
+                root_one,
+            ),
+            arc(
+                sources[2].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                root_one,
+                upper_chart,
+            ),
+            arc(
+                sources[3].fragment(0),
+                ClosedFragmentOrientation::AlongCarrier,
+                upper_chart,
+                root_zero,
+            ),
+        ];
+
+        let result = stitch_closed_fragments(&fragments);
+        assert_eq!(result.completion, ClosedStitchCompletion::Complete);
+        assert!(result.defects.is_empty());
+        assert_eq!(result.vertices.len(), 4);
+        assert_eq!(result.chains.len(), 1);
+        assert!(result.chains[0].closed);
+        assert_eq!(result.chains[0].fragments.len(), 4);
+        assert!(
+            result
+                .vertices
+                .iter()
+                .all(|vertex| vertex.incoming == 1 && vertex.outgoing == 1)
+        );
+        let mut sheets = result
+            .vertices
+            .iter()
+            .filter_map(|vertex| match vertex.key {
+                CertifiedClosedEndpointKey::FoldedSupportChartJoin { sheet, .. } => Some(sheet),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        sheets.sort_unstable();
+        assert_eq!(sheets, vec![0, 1]);
     }
 
     #[test]

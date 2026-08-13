@@ -158,6 +158,7 @@ pub use skew_cylinder_branch::{
     certify_skew_cylinder_folded_support_topology, certify_skew_cylinder_touching_support_topology,
     classify_skew_cylinder_axial_bound, classify_skew_cylinder_exact_discriminant,
     classify_skew_cylinder_open_spans, exact_skew_cylinder_discriminant,
+    persistent_skew_cylinder_folded_support_exact_work,
     plan_persistent_skew_cylinder_support_contact_boundaries, plan_skew_cylinder_root_clusters,
     reissue_persistent_skew_cylinder_finite_window_family,
 };

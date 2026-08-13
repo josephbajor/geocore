@@ -419,6 +419,30 @@ fn adapt_closed_endpoint(
                 },
             }
         }
+        closed_stitch::CertifiedClosedEndpointKey::FoldedSupportChartJoin {
+            faces,
+            sheet,
+            longitude_bits,
+        } => {
+            if root_scalars != [None, None] || vertex.edge_parameters != [None, None] {
+                return Err(inconsistent_topology(
+                    "folded support chart join retained source-edge scalar evidence",
+                ));
+            }
+            SectionCurveEndpointTopology::FoldedSupportChartJoin {
+                faces: faces.map(|face| FaceId::new(part.clone(), face)),
+                sheet: if sheet == 0 {
+                    super::SectionFoldedSupportSheet::Lower
+                } else if sheet == 1 {
+                    super::SectionFoldedSupportSheet::Upper
+                } else {
+                    return Err(inconsistent_topology(
+                        "folded support chart join retained an invalid sheet",
+                    ));
+                },
+                longitude: f64::from_bits(longitude_bits),
+            }
+        }
         closed_stitch::CertifiedClosedEndpointKey::TouchingSupportRoot {
             faces,
             root_ordinal,

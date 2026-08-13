@@ -307,6 +307,38 @@ impl ExactPolynomial {
         Ok((lower.is_finite() && lower > 0.0).then_some(lower))
     }
 
+    /// Strict positive lower bound after factoring one exact root at zero.
+    ///
+    /// Direct affine Bernstein conversion can leave the safe product envelope
+    /// when `lo` is only a few ULPs above zero. If the constant coefficient is
+    /// exactly zero, `P(x) = x Q(x)` is an exact identity. A positive
+    /// Bernstein bound for `Q` and `x >= lo > 0` therefore give a quantitative
+    /// bound without multiplying polynomial coefficients by the tiny guard.
+    pub(crate) fn positive_lower_bound_after_exact_zero_root(
+        &self,
+        lo: f64,
+        hi: f64,
+    ) -> Result<Option<f64>, RootIsolationFailure> {
+        if !lo.is_finite()
+            || !hi.is_finite()
+            || lo <= 0.0
+            || lo >= hi
+            || !self.coefficients[0].is_zero()
+            || self.degree() == 0
+        {
+            return Ok(None);
+        }
+        let quotient = Self::from_coefficients_allow_zero(self.coefficients[1..].to_vec())?;
+        // Enlarge the quotient domain back to the exact-root boundary. This
+        // avoids injecting the tiny positive guard into its affine Bernstein
+        // coefficients; containment on `[0, hi]` is stronger than needed.
+        let Some(quotient_lower) = quotient.positive_lower_bound_on_interval(0.0, hi)? else {
+            return Ok(None);
+        };
+        let lower = (Interval::point(lo) * Interval::point(quotient_lower)).lo();
+        Ok((lower.is_finite() && lower > 0.0).then_some(lower))
+    }
+
     /// Strict positive Bernstein lower bound with a fixed subdivision budget.
     ///
     /// This extends the same convex-hull theorem used by
@@ -1094,6 +1126,27 @@ mod tests {
         assert!(lower > 0.0);
         assert!(lower <= 1.0);
         assert!(lower >= 0.5_f64.next_down());
+    }
+
+    #[test]
+    fn exact_zero_factor_certifies_a_tiny_positive_guard_without_subdivision() {
+        let rooted = polynomial(&[0.0, 32.0, -16.0, 32.0]);
+        let lo = f64::EPSILON / 16.0;
+        assert!(matches!(
+            rooted.positive_lower_bound_on_interval(lo, 1.0),
+            Err(RootIsolationFailure::UnsafeArithmeticEnvelope)
+        ));
+        let lower = rooted
+            .positive_lower_bound_after_exact_zero_root(lo, 1.0)
+            .unwrap()
+            .unwrap();
+        assert!(lower.is_finite() && lower > 0.0);
+        assert!(
+            polynomial(&[1.0, 32.0, -16.0, 32.0])
+                .positive_lower_bound_after_exact_zero_root(lo, 1.0)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

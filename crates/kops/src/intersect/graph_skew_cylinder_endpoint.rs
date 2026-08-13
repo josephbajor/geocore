@@ -102,6 +102,22 @@ pub struct SkewCylinderFoldedSupportSeamEndpointProof {
     pub surface_parameters: [[f64; 2]; 2],
 }
 
+/// Exact regular tangent/cotangent chart-transition identity for one folded
+/// support sheet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderFoldedSupportChartJoinEndpointProof {
+    /// Ordered folded-support sheet owning this chart join.
+    pub sheet: SkewCylinderSheet,
+    /// Exact authored first-cylinder longitude of the transition.
+    pub longitude: f64,
+    /// Hidden inside-cell carrier coordinate used by the guarded evaluator.
+    pub inside_parameter: f64,
+    /// Deterministic model-space representative at the exact chart join.
+    pub point: Point3,
+    /// Caller-order source parameters at the exact chart join.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
 /// Exact repeated-root continuation identity and metric representative for
 /// one endpoint of a touching-support member.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -163,6 +179,8 @@ pub enum IntersectionBranchEndpointProof {
     SkewCylinderFoldedSupportRoot(SkewCylinderFoldedSupportRootEndpointProof),
     /// Exact authored seam shared by the two guarded pieces of one sheet.
     SkewCylinderFoldedSupportSeam(SkewCylinderFoldedSupportSeamEndpointProof),
+    /// Exact tangent/cotangent chart join shared by two folded members.
+    SkewCylinderFoldedSupportChartJoin(SkewCylinderFoldedSupportChartJoinEndpointProof),
     /// Repeated support root with one exact smooth-continuation port.
     SkewCylinderTouchingSupportRoot(SkewCylinderTouchingSupportRootEndpointProof),
     /// Exact authored seam shared by two touching-support members of one sheet.
@@ -266,6 +284,27 @@ impl IntersectionBranchEndpointProof {
                 .any(|(parameters, ranges)| {
                     !ranges[0].contains(parameters[0]) || !ranges[1].contains(parameters[1])
                 })
+        {
+            None
+        } else {
+            Some(proof)
+        }
+    }
+
+    pub(super) fn validated_folded_support_chart_join(
+        self,
+        parameter: f64,
+        sheet: SkewCylinderSheet,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderFoldedSupportChartJoinEndpointProof> {
+        let Self::SkewCylinderFoldedSupportChartJoin(proof) = self else {
+            return None;
+        };
+        if proof.sheet != sheet
+            || proof.inside_parameter != parameter
+            || !proof.longitude.is_finite()
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || !valid_surface_parameters(proof.surface_parameters, surface_ranges)
         {
             None
         } else {

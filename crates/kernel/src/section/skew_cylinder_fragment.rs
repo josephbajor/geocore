@@ -840,6 +840,27 @@ fn prepare_folded_support_member(
                     },
                 )
             }
+            (
+                IntersectionBranchVertexEvent::FoldedSupportChartJoin { sheet },
+                Some(IntersectionBranchEndpointProof::SkewCylinderFoldedSupportChartJoin(proof)),
+            ) => {
+                if proof.sheet != sheet
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                    || Some(proof.longitude) != folded.folded_certificate().chart_join_longitude()
+                {
+                    return Ok(None);
+                }
+                closed_stitch::CertifiedClosedEndpoint::folded_support_chart_join(
+                    raw_faces,
+                    match sheet {
+                        kgraph::SkewCylinderSheet::Lower => 0,
+                        kgraph::SkewCylinderSheet::Upper => 1,
+                    },
+                    proof.longitude.to_bits(),
+                )
+            }
             _ => return Ok(None),
         };
         if section_carrier.eval(section_parameter).dist(vertex.point)

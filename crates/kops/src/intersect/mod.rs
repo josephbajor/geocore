@@ -126,9 +126,9 @@ pub use graph_cylinder_cylinder_skew::{
 pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
-    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderFoldedSupportSeamEndpointProof,
-    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
-    SkewCylinderTouchingSupportChartJoinEndpointProof,
+    SkewCylinderFoldedSupportChartJoinEndpointProof, SkewCylinderFoldedSupportRootEndpointProof,
+    SkewCylinderFoldedSupportSeamEndpointProof, SkewCylinderHalfAngleChartProof,
+    SkewCylinderRootInsideSideProof, SkewCylinderTouchingSupportChartJoinEndpointProof,
     SkewCylinderTouchingSupportRootEndpointProof, SkewCylinderTouchingSupportSeamEndpointProof,
 };
 pub use graph_surface::{

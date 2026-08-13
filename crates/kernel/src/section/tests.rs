@@ -1675,6 +1675,7 @@ fn root_scalar_signature(graph: &BodySectionGraph) -> Vec<(EdgeId, usize, [u64; 
             | SectionCurveEndpointTopology::ThroughContact { .. }
             | SectionCurveEndpointTopology::FoldedSupportJoin { .. }
             | SectionCurveEndpointTopology::FoldedSupportSeamJoin { .. }
+            | SectionCurveEndpointTopology::FoldedSupportChartJoin { .. }
             | SectionCurveEndpointTopology::TouchingSupportRootJoin { .. }
             | SectionCurveEndpointTopology::TouchingSupportSeamJoin { .. }
             | SectionCurveEndpointTopology::TouchingSupportChartJoin { .. } => None,

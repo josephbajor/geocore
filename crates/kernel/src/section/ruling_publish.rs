@@ -1148,6 +1148,22 @@ fn endpoint_materializations_match(
                 sheet: second_sheet,
             },
         ) => first_faces == second_faces && first_sheet == second_sheet,
+        (
+            SectionCurveEndpointTopology::FoldedSupportChartJoin {
+                faces: first_faces,
+                sheet: first_sheet,
+                longitude: first_longitude,
+            },
+            SectionCurveEndpointTopology::FoldedSupportChartJoin {
+                faces: second_faces,
+                sheet: second_sheet,
+                longitude: second_longitude,
+            },
+        ) => {
+            first_faces == second_faces
+                && first_sheet == second_sheet
+                && first_longitude.to_bits() == second_longitude.to_bits()
+        }
         _ => false,
     }
 }
@@ -1205,6 +1221,7 @@ fn adapt_endpoint(
         }
         CertifiedClosedEndpointKey::FoldedSupportRoot { .. }
         | CertifiedClosedEndpointKey::FoldedSupportSeam { .. }
+        | CertifiedClosedEndpointKey::FoldedSupportChartJoin { .. }
         | CertifiedClosedEndpointKey::TouchingSupportRoot { .. }
         | CertifiedClosedEndpointKey::TouchingSupportSeam { .. }
         | CertifiedClosedEndpointKey::TouchingSupportChartJoin { .. } => {

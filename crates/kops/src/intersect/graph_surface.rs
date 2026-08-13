@@ -293,6 +293,11 @@ pub enum IntersectionBranchVertexEvent {
         /// Ordered folded-support sheet owning the join.
         sheet: kgraph::SkewCylinderSheet,
     },
+    /// Exact regular tangent/cotangent chart transition on one folded sheet.
+    FoldedSupportChartJoin {
+        /// Ordered folded-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
     /// Repeated support root joined through one exact cross-sheet continuation port.
     TouchingSupportRootJoin {
         /// Ordinal in the exact canonical repeated-root cycle.
@@ -333,6 +338,11 @@ pub enum IntersectionBranchEndpointEvent {
     },
     /// Exact authored periodic seam joining two guarded pieces of one folded sheet.
     FoldedSupportSeamJoin {
+        /// Ordered folded-support sheet owning the join.
+        sheet: kgraph::SkewCylinderSheet,
+    },
+    /// Exact regular tangent/cotangent chart transition on one folded sheet.
+    FoldedSupportChartJoin {
         /// Ordered folded-support sheet owning the join.
         sheet: kgraph::SkewCylinderSheet,
     },
@@ -2339,6 +2349,50 @@ fn build_verified_branch_graph(
                     )
                 }
                 Some(
+                    proof @ IntersectionBranchEndpointProof::SkewCylinderFoldedSupportChartJoin(_),
+                ) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let sheet = match &carrier {
+                        CurveDescriptor::SkewCylinderBranch(carrier) => carrier.sheet(),
+                        _ => {
+                            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                                IntersectionCertificateError::InvalidTraceFamily,
+                            ));
+                        }
+                    };
+                    let proof = proof
+                        .validated_folded_support_chart_join(parameter, sheet, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let folded = certificate.as_skew_cylinder_folded_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    let endpoint =
+                        kgraph::PersistentSkewCylinderFoldedSupportEndpoint::ChartJoin(sheet);
+                    if Some(proof.longitude) != folded.folded_certificate().chart_join_longitude()
+                        || proof.point != folded.folded_certificate().endpoint_point(endpoint)
+                        || proof.surface_parameters
+                            != folded.folded_certificate().source_parameters(endpoint)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::FoldedSupportChartJoin { sheet },
+                        IntersectionBranchVertexEvent::FoldedSupportChartJoin { sheet },
+                    )
+                }
+                Some(
                     proof @ IntersectionBranchEndpointProof::SkewCylinderTouchingSupportRoot(_),
                 ) => {
                     if topology != IntersectionBranchTopology::Open {
@@ -2557,6 +2611,7 @@ fn build_verified_branch_graph(
                 vertex_event,
                 IntersectionBranchVertexEvent::FoldedSupportJoin { .. }
                     | IntersectionBranchVertexEvent::FoldedSupportSeamJoin { .. }
+                    | IntersectionBranchVertexEvent::FoldedSupportChartJoin { .. }
                     | IntersectionBranchVertexEvent::TouchingSupportRootJoin { .. }
                     | IntersectionBranchVertexEvent::TouchingSupportSeamJoin { .. }
                     | IntersectionBranchVertexEvent::TouchingSupportChartJoin { .. }

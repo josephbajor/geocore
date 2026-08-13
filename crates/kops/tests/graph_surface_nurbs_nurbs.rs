@@ -141,6 +141,9 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
                     | kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportSeamJoin {
                         ..
                     }
+                    | kops::intersect::IntersectionBranchEndpointEvent::FoldedSupportChartJoin {
+                        ..
+                    }
                     | kops::intersect::IntersectionBranchEndpointEvent::TouchingSupportRootJoin {
                         ..
                     }

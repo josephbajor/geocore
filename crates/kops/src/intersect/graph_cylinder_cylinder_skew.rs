@@ -33,8 +33,7 @@ use kgraph::{
     PersistentSkewCylinderTouchingSupportCertificate,
     PersistentSkewCylinderTouchingSupportEndpoint, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK,
-    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
     SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
     SkewCylinderFiniteWindowRootEventKind, SkewCylinderFiniteWindowTopologyCertificate,
     SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
@@ -48,6 +47,7 @@ use kgraph::{
     certify_persistent_skew_cylinder_touching_support,
     certify_skew_cylinder_folded_support_topology, certify_skew_cylinder_touching_support_topology,
     classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
+    persistent_skew_cylinder_folded_support_exact_work,
     plan_persistent_skew_cylinder_support_contact_boundaries, plan_skew_cylinder_root_clusters,
 };
 
@@ -60,9 +60,9 @@ use super::graph_branch_certificate::{
 use super::graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
-    SkewCylinderFoldedSupportRootEndpointProof, SkewCylinderFoldedSupportSeamEndpointProof,
-    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
-    SkewCylinderTouchingSupportChartJoinEndpointProof,
+    SkewCylinderFoldedSupportChartJoinEndpointProof, SkewCylinderFoldedSupportRootEndpointProof,
+    SkewCylinderFoldedSupportSeamEndpointProof, SkewCylinderHalfAngleChartProof,
+    SkewCylinderRootInsideSideProof, SkewCylinderTouchingSupportChartJoinEndpointProof,
     SkewCylinderTouchingSupportRootEndpointProof, SkewCylinderTouchingSupportSeamEndpointProof,
 };
 use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult};
@@ -75,7 +75,7 @@ use super::skew_cylinder_sheet_occupancy::{
 };
 use kgraph::{
     SkewCylinderAxialBoundary, SkewCylinderAxialRelation, SkewCylinderAxialRootFailure,
-    SkewCylinderFoldedSupportCellLocation, SkewCylinderHalfAngleChart,
+    SkewCylinderHalfAngleChart,
 };
 
 const TWO_SHEET_REASON: &str = "strict-positive skew Cylinder/Cylinder discriminant requires certified contained full-cycle branch carriers";
@@ -719,14 +719,7 @@ fn intersect_folded_support_contact(
             );
         }
     };
-    let folded_work = match topology.positive_cell() {
-        SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots => {
-            SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK
-        }
-        SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam => {
-            SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK
-        }
-    };
+    let folded_work = persistent_skew_cylinder_folded_support_exact_work(&topology);
     scope
         .ledger_mut()
         .charge(SKEW_CYLINDER_OPEN_SPAN_WORK, folded_work)?;
@@ -793,6 +786,19 @@ fn intersect_folded_support_contact(
                         IntersectionBranchEndpointProof::SkewCylinderFoldedSupportSeam(
                             SkewCylinderFoldedSupportSeamEndpointProof {
                                 sheet,
+                                inside_parameter,
+                                point: certificate.endpoint_point(endpoint),
+                                surface_parameters: certificate.source_parameters(endpoint),
+                            },
+                        )
+                    }
+                    PersistentSkewCylinderFoldedSupportEndpoint::ChartJoin(sheet) => {
+                        IntersectionBranchEndpointProof::SkewCylinderFoldedSupportChartJoin(
+                            SkewCylinderFoldedSupportChartJoinEndpointProof {
+                                sheet,
+                                longitude: certificate
+                                    .chart_join_longitude()
+                                    .expect("endpoint retains one certificate-owned chart join"),
                                 inside_parameter,
                                 point: certificate.endpoint_point(endpoint),
                                 surface_parameters: certificate.source_parameters(endpoint),

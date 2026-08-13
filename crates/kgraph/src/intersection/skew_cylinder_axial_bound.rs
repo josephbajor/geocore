@@ -518,7 +518,13 @@ fn positive_radicand_lower_bound(
     }
     let polynomial = topology.exact_discriminant_root_polynomial(chart)?;
     let numerator = if subdivision_budget == 0 {
-        polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi)
+        match polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi) {
+            Ok(Some(lower)) => Ok(Some(lower)),
+            Ok(None) | Err(RootIsolationFailure::UnsafeArithmeticEnvelope) => {
+                polynomial.positive_lower_bound_after_exact_zero_root(projective.lo, projective.hi)
+            }
+            Err(error) => Err(error),
+        }
     } else {
         polynomial.positive_lower_bound_on_interval_subdivided(
             projective.lo,

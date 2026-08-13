@@ -22,7 +22,9 @@ use kgeom::param::{ParamRange, wrap_periodic};
 use kgeom::surface::{Cylinder, Surface};
 use kgeom::vec::{Vec2, Vec3};
 
-use crate::exact::bounded_polynomial::{ExactPolynomial, ExactScalar, RootBracket};
+use crate::exact::bounded_polynomial::{
+    ExactPolynomial, ExactScalar, RootBracket, RootIsolationFailure,
+};
 use crate::{AffineParamMap1d, IntersectionCertificateError, PairedTrace};
 
 #[path = "skew_cylinder_jet.rs"]
@@ -115,6 +117,7 @@ pub use support_contact::{
     certify_persistent_skew_cylinder_folded_support,
     certify_persistent_skew_cylinder_support_contact,
     certify_persistent_skew_cylinder_touching_support,
+    persistent_skew_cylinder_folded_support_exact_work,
     plan_persistent_skew_cylinder_support_contact_boundaries,
 };
 
@@ -933,7 +936,13 @@ fn stored_radicand_lower_bound(
     ])
     .ok()?;
     let numerator_lower = if subdivision_budget == 0 {
-        polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi)
+        match polynomial.positive_lower_bound_on_interval(projective.lo, projective.hi) {
+            Ok(Some(lower)) => Ok(Some(lower)),
+            Ok(None) | Err(RootIsolationFailure::UnsafeArithmeticEnvelope) => {
+                polynomial.positive_lower_bound_after_exact_zero_root(projective.lo, projective.hi)
+            }
+            Err(error) => Err(error),
+        }
     } else {
         polynomial.positive_lower_bound_on_interval_subdivided(
             projective.lo,

@@ -770,6 +770,16 @@ pub enum SectionCurveEndpointTopology {
         /// Ordered sheet owning the seam join.
         sheet: SectionFoldedSupportSheet,
     },
+    /// Exact regular tangent/cotangent chart transition on one folded-support
+    /// sheet.
+    FoldedSupportChartJoin {
+        /// Source faces in operand order.
+        faces: [FaceId; 2],
+        /// Ordered sheet owning the chart join.
+        sheet: SectionFoldedSupportSheet,
+        /// Exact authored first-cylinder longitude of the transition.
+        longitude: f64,
+    },
     /// Exact repeated discriminant root joined through one smooth
     /// cross-sheet continuation port.
     TouchingSupportRootJoin {
