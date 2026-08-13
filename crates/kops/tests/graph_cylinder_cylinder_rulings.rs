@@ -16,6 +16,7 @@ use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveDescriptor, GeometryGraph, IntersectionCertificateError,
     SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
+    SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_OPPOSITE_POLE_TOUCHING_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_ROOT_CLUSTER_PAIR_CHART_EXACT_WORK, SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK, SkewCylinderAxialBoundary, SkewCylinderSheet,
@@ -161,6 +162,22 @@ fn short_seam_root_across_folded_support_pair(frame: Frame) -> [Cylinder; 2] {
     let first = Cylinder::new(reversed_first, first_radius).unwrap();
     let second = Cylinder::new(
         Frame::new(frame.origin() - offset, second_axis, frame.z()).unwrap(),
+        second_radius,
+    )
+    .unwrap();
+    [first, second]
+}
+
+fn long_seam_root_across_folded_support_pair(frame: Frame) -> [Cylinder; 2] {
+    let first_radius = 0.0625;
+    let second_radius = 0.125;
+    let second_axis = frame.x() * -0.6 + frame.y() * 0.8;
+    let second_radial = frame.x() * 0.8 + frame.y() * 0.6;
+    let offset = second_radial * second_radius - frame.x() * first_radius + second_axis * 0.125
+        - frame.z() * 0.125;
+    let first = Cylinder::new(frame, first_radius).unwrap();
+    let second = Cylinder::new(
+        Frame::new(frame.origin() - offset, second_axis, second_radial).unwrap(),
         second_radius,
     )
     .unwrap();
@@ -2139,6 +2156,157 @@ fn short_seam_root_across_folded_support_owns_atomic_two_member_work() {
         resource: ResourceKind::Work,
         consumed: SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
         allowed: SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0
+    );
+}
+
+#[test]
+fn long_seam_root_across_folded_support_publishes_four_chart_split_members() {
+    let rotated = Frame::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let windows = [
+        cylinder_window(range(-0.5, 0.75)),
+        cylinder_window(range(-0.5, 0.75)),
+    ];
+    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+        let [first, second] = long_seam_root_across_folded_support_pair(frame);
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(forward, replay, "{name} changed across replay");
+        for (result, sources) in [
+            (&forward, [first_handle, second_handle]),
+            (&reversed, [second_handle, first_handle]),
+        ] {
+            assert_eq!(result.branch_graph.source_surfaces, sources);
+            assert!(result.raw.is_complete(), "{name}: {:#?}", result.raw);
+            assert_eq!(result.raw.curves.len(), 4);
+            assert_eq!(result.branch_graph.edges.len(), 4);
+            assert_eq!(result.branch_graph.vertices.len(), 4);
+            let [folded] = result.skew_cylinder_folded_support_curves() else {
+                panic!("{name}: expected one long across-seam folded component")
+            };
+            let angular = folded
+                .certificate()
+                .topology()
+                .roots()
+                .map(|root| root.angular_bracket());
+            assert_eq!(angular[0].lo.to_bits(), 0.0_f64.to_bits());
+            assert_eq!(angular[0].hi.to_bits(), 0.0_f64.to_bits());
+            assert!(angular[1].lo > 0.0 && angular[1].hi < core::f64::consts::PI);
+            assert_eq!(folded.certificate().formula_residuals().len(), 4);
+            assert_eq!(
+                folded.certificate().chart_join_longitude(),
+                Some(3.0 * core::f64::consts::FRAC_PI_2)
+            );
+            assert_eq!(
+                folded.certificate().topology().positive_cell(),
+                kgraph::SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+            );
+            assert!(folded.certificate().seam_points().is_none());
+            let mut roots = result
+                .branch_graph
+                .vertices
+                .iter()
+                .filter_map(|vertex| match vertex.event {
+                    IntersectionBranchVertexEvent::FoldedSupportJoin { root_ordinal } => {
+                        Some(root_ordinal)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            roots.sort_unstable();
+            assert_eq!(roots, vec![0, 1]);
+        }
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    }
+}
+
+#[test]
+fn long_seam_root_across_folded_support_owns_atomic_subdivided_work() {
+    let [first, second] = long_seam_root_across_folded_support_pair(Frame::world());
+    let windows = [
+        cylinder_window(range(-0.5, 0.75)),
+        cylinder_window(range(-0.5, 0.75)),
+    ];
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+    let run = |allowed| {
+        let context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(
+                BudgetPlan::new([LimitSpec::new(
+                    SKEW_CYLINDER_OPEN_SPAN_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            );
+        intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            &context,
+        )
+    };
+
+    let exact = run(SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK);
+    assert_eq!(exact.result().unwrap().branch_graph.edges.len(), 4);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied = run(SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK - 1);
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK,
+        allowed: SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK - 1,
     };
     assert!(matches!(
         denied.result(),

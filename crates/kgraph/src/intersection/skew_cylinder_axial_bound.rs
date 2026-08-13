@@ -505,6 +505,15 @@ impl SkewCylinderFoldedSupportTopologyCertificate {
     ) -> Result<f64, SkewCylinderAxialRootFailure> {
         positive_radicand_lower_bound(&self.topology, chart, projective, 0)
     }
+
+    pub(crate) fn positive_radicand_lower_bound_subdivided(
+        &self,
+        chart: SkewCylinderHalfAngleChart,
+        projective: RootBracket,
+        subdivision_budget: usize,
+    ) -> Result<f64, SkewCylinderAxialRootFailure> {
+        positive_radicand_lower_bound(&self.topology, chart, projective, subdivision_budget)
+    }
 }
 
 fn positive_radicand_lower_bound(
