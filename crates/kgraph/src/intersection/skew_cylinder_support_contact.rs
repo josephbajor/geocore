@@ -2208,9 +2208,30 @@ fn support_root_evidence(
     formula_windows: [[ParamRange; 2]; 2],
 ) -> Result<SupportRootEvidence, IntersectionCertificateError> {
     let root = topology.isolated_support_root().ok_or_else(unsupported)?;
-    // An exact root at the authored zero seam has one canonical full-period
-    // representative; the opposite longitude must still lift ordinarily.
-    root_evidence(topology, root, formula_windows, true, false)
+    let angular = root.angular_bracket();
+    let opposite_seam = angular.lo.to_bits() == core::f64::consts::PI.to_bits()
+        && angular.hi.to_bits() == core::f64::consts::PI.to_bits();
+    // Exact cardinal roots at zero or pi may own one authored full-period
+    // boundary. All non-cardinal support roots must still lift ordinarily.
+    let evidence = root_evidence(topology, root, formula_windows, true, opposite_seam)?;
+    if opposite_seam {
+        let range = formula_windows[1][0];
+        let representative = evidence
+            .algebra
+            .authored_pcurve_derivs(1, evidence.carrier_parameter, 0)
+            .d[0]
+            .x;
+        if range.lo.to_bits() != 0.0_f64.to_bits()
+            || range.hi.to_bits() != TAU.to_bits()
+            || (representative.to_bits() != range.lo.to_bits()
+                && representative.to_bits() != range.hi.to_bits())
+        {
+            return Err(unsupported_reason(
+                "isolated support opposite seam lacks an exact authored boundary representative",
+            ));
+        }
+    }
+    Ok(evidence)
 }
 
 fn root_evidence(
@@ -2817,6 +2838,42 @@ mod tests {
         assert_eq!(longitudes[0].hi().to_bits(), 0.0_f64.to_bits());
         assert!(longitudes[1].lo() <= core::f64::consts::PI);
         assert!(longitudes[1].hi() >= core::f64::consts::PI);
+    }
+
+    #[test]
+    fn exact_isolated_support_root_on_opposite_authored_seam_mints_a_persistent_point() {
+        let exact = match classify_skew_cylinder_exact_discriminant(
+            seam_cylinders(-3.0),
+            SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+        )
+        .unwrap()
+        {
+            SkewCylinderExactDiscriminantTopology::Contact(topology) => *topology,
+            other => panic!("expected opposite-seam contact topology, got {other:?}"),
+        };
+        let [root] = exact.roots() else {
+            panic!("expected one isolated opposite-seam root")
+        };
+        let angular = root.angular_bracket();
+        assert!(root.repeated());
+        assert_eq!(angular.lo.to_bits(), core::f64::consts::PI.to_bits());
+        assert_eq!(angular.hi.to_bits(), core::f64::consts::PI.to_bits());
+        let certified =
+            certify_persistent_skew_cylinder_support_contact(exact, windows(), [0, 1], 1.0e-9, 0)
+                .unwrap();
+        assert!(certified.point().dist(Point3::new(-1.0, 0.0, 0.0)) <= 1.0e-12);
+        assert_eq!(
+            certified.carrier_parameter().to_bits(),
+            core::f64::consts::PI.to_bits()
+        );
+        let longitudes = certified.source_longitude_enclosures();
+        assert!(longitudes[0].lo() <= core::f64::consts::PI);
+        assert!(longitudes[0].hi() >= core::f64::consts::PI);
+        assert_eq!(longitudes[1].lo().to_bits(), 0.0_f64.to_bits());
+        assert_eq!(longitudes[1].hi().to_bits(), TAU.to_bits());
+        let parameters = certified.source_surface_parameters();
+        assert_eq!(parameters[0][0].to_bits(), core::f64::consts::PI.to_bits());
+        assert_eq!(parameters[1][0].to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]

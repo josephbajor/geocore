@@ -1571,67 +1571,151 @@ fn exact_perpendicular_support_contact_on_authored_seam_publishes() {
 }
 
 #[test]
-fn authored_seam_support_contact_owns_existing_atomic_discriminant_work() {
-    let [first, second] = seam_perpendicular_axis_pair(Frame::world(), 3.0, 2.0);
+fn exact_perpendicular_support_contact_on_opposite_authored_seam_publishes() {
+    let rotated = Frame::new(
+        Point3::new(2.0, -1.0, 3.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
     let windows = skew_windows();
-    let (graph, first_handle, second_handle) = graph_pair(first, second);
-    let session = SessionPolicy::v1();
-    let tolerances = Tolerances::default();
-    let run = |allowed| {
-        let context = OperationContext::new(&session, tolerances)
-            .unwrap()
-            .with_budget_overrides(
-                BudgetPlan::new([LimitSpec::new(
-                    SKEW_CYLINDER_DISCRIMINANT_WORK,
-                    ResourceKind::Work,
-                    AccountingMode::Cumulative,
-                    allowed,
-                )])
-                .unwrap(),
-            );
-        intersect_bounded_graph_surfaces_with_context(
+    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+        let [first, second] = seam_perpendicular_axis_pair(frame, -3.0, 2.0);
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
             &graph,
             first_handle,
             windows[0],
             second_handle,
             windows[1],
-            &context,
+            Tolerances::default(),
         )
-    };
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(forward, replay, "{name} changed across replay");
+        for (result, sources) in [
+            (&forward, [first_handle, second_handle]),
+            (&reversed, [second_handle, first_handle]),
+        ] {
+            assert_eq!(result.branch_graph.source_surfaces, sources);
+            assert!(result.raw.is_complete(), "{name}: {:#?}", result.raw);
+            assert_eq!(result.raw.points.len(), 1);
+            assert!(result.raw.curves.is_empty());
+            assert_eq!(result.branch_graph.vertices.len(), 1);
+            assert!(result.branch_graph.edges.is_empty());
+            assert_eq!(
+                result.branch_graph.vertices[0].event,
+                IntersectionBranchVertexEvent::IsolatedContact
+            );
+            let [contact] = result.skew_cylinder_support_contacts() else {
+                panic!("{name}: expected one opposite-seam support contact")
+            };
+            let angular = contact.certificate().root().angular_bracket();
+            assert_eq!(angular.lo.to_bits(), core::f64::consts::PI.to_bits());
+            assert_eq!(angular.hi.to_bits(), core::f64::consts::PI.to_bits());
+            assert_eq!(
+                contact.certificate().carrier_parameter().to_bits(),
+                core::f64::consts::PI.to_bits()
+            );
+            assert!(contact.point().dist(frame.origin() - frame.x()) <= 1.0e-12);
+            let source_longitudes = contact.certificate().source_longitude_enclosures();
+            let opposite_source =
+                usize::from(result.branch_graph.source_surfaces[0] == first_handle);
+            assert_eq!(
+                source_longitudes[opposite_source].lo().to_bits(),
+                0.0_f64.to_bits()
+            );
+            assert_eq!(
+                source_longitudes[opposite_source].hi().to_bits(),
+                core::f64::consts::TAU.to_bits()
+            );
+        }
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    }
+}
 
-    let exact = run(SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK);
-    assert_eq!(
-        exact
-            .result()
-            .unwrap()
-            .skew_cylinder_support_contacts()
-            .len(),
-        1
-    );
-    assert_eq!(
-        observed_work(exact.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
-        SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK
-    );
-    assert!(exact.report().limit_events().is_empty());
+#[test]
+fn authored_seam_support_contact_owns_existing_atomic_discriminant_work() {
+    for offset in [3.0, -3.0] {
+        let [first, second] = seam_perpendicular_axis_pair(Frame::world(), offset, 2.0);
+        let windows = skew_windows();
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let session = SessionPolicy::v1();
+        let tolerances = Tolerances::default();
+        let run = |allowed| {
+            let context = OperationContext::new(&session, tolerances)
+                .unwrap()
+                .with_budget_overrides(
+                    BudgetPlan::new([LimitSpec::new(
+                        SKEW_CYLINDER_DISCRIMINANT_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        allowed,
+                    )])
+                    .unwrap(),
+                );
+            intersect_bounded_graph_surfaces_with_context(
+                &graph,
+                first_handle,
+                windows[0],
+                second_handle,
+                windows[1],
+                &context,
+            )
+        };
 
-    let denied = run(SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK - 1);
-    let expected = LimitSnapshot {
-        stage: SKEW_CYLINDER_DISCRIMINANT_WORK,
-        resource: ResourceKind::Work,
-        consumed: SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK,
-        allowed: SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK - 1,
-    };
-    assert!(matches!(
-        denied.result(),
-        Err(GraphSurfaceIntersectionError::OperationPolicy(
-            kcore::operation::OperationPolicyError::LimitReached(snapshot)
-        )) if *snapshot == expected
-    ));
-    assert_eq!(denied.report().limit_events(), &[expected]);
-    assert_eq!(
-        observed_work(denied.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
-        0
-    );
+        let exact = run(SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK);
+        assert_eq!(
+            exact
+                .result()
+                .unwrap()
+                .skew_cylinder_support_contacts()
+                .len(),
+            1,
+            "offset={offset}"
+        );
+        assert_eq!(
+            observed_work(exact.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
+            SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK
+        );
+        assert!(exact.report().limit_events().is_empty());
+
+        let denied = run(SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK - 1);
+        let expected = LimitSnapshot {
+            stage: SKEW_CYLINDER_DISCRIMINANT_WORK,
+            resource: ResourceKind::Work,
+            consumed: SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK,
+            allowed: SKEW_CYLINDER_DISCRIMINANT_EXACT_WORK - 1,
+        };
+        assert!(matches!(
+            denied.result(),
+            Err(GraphSurfaceIntersectionError::OperationPolicy(
+                kcore::operation::OperationPolicyError::LimitReached(snapshot)
+            )) if *snapshot == expected
+        ));
+        assert_eq!(denied.report().limit_events(), &[expected]);
+        assert_eq!(
+            observed_work(denied.report(), SKEW_CYLINDER_DISCRIMINANT_WORK),
+            0
+        );
+    }
 }
 
 #[test]

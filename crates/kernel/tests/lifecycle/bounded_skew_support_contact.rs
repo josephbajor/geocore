@@ -121,6 +121,40 @@ fn seam_support_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn opposite_seam_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, -2.0)),
+                1.0,
+                4.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_frame =
+            Frame::new(frame.point_at(-3.0, -2.0, 0.0), frame.y(), frame.x()).unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 2.0, 4.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn boundary_fixture(frame: Frame) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -1422,6 +1456,65 @@ fn seam_support_contact_boolean_refuses_distinctly_without_mutation() {
                 &fixture,
                 &section(&fixture, swapped),
                 frame.point_at(1.0, 0.0, 0.0),
+            );
+        }
+    }
+}
+
+#[test]
+fn opposite_seam_support_contact_section_is_complete_replay_swap_and_frame_stable() {
+    for frame in exact_frames() {
+        let fixture = opposite_seam_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay);
+        assert_eq!(swapped, swapped_replay);
+        let expected_point = frame.point_at(-1.0, 0.0, 0.0);
+        assert_support_contact_at(&fixture, &forward, expected_point);
+        assert_support_contact_at(&fixture, &swapped, expected_point);
+        assert_eq!(
+            swapped.bodies(),
+            &[fixture.second.clone(), fixture.first.clone()]
+        );
+    }
+}
+
+#[test]
+fn opposite_seam_support_contact_boolean_refuses_distinctly_without_mutation() {
+    for frame in exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = opposite_seam_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Subtract,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_support_contact_at(
+                &fixture,
+                &section(&fixture, swapped),
+                frame.point_at(-1.0, 0.0, 0.0),
             );
         }
     }
