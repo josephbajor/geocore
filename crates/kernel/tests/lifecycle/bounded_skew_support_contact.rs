@@ -321,6 +321,41 @@ fn seam_touching_support_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn opposite_pole_touching_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.origin() - frame.z() * 0.5),
+                0.25,
+                1.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_center = frame.origin() + frame.x() * 0.125;
+        let second_frame =
+            Frame::new(second_center - frame.y() * 0.5, frame.y(), frame.x()).unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 0.375, 1.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn double_touching_support_fixture(frame: Frame) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -759,6 +794,29 @@ fn assert_touching_support_component(
     graph: &BodySectionGraph,
     expect_regular_seams: bool,
 ) {
+    assert_touching_support_component_impl(fixture, graph, expect_regular_seams, false);
+}
+
+fn assert_opposite_pole_touching_support_component(fixture: &Fixture, graph: &BodySectionGraph) {
+    assert_touching_support_component_impl(fixture, graph, true, true);
+}
+
+fn assert_touching_support_component_impl(
+    fixture: &Fixture,
+    graph: &BodySectionGraph,
+    expect_regular_seams: bool,
+    expect_two_chart_joins: bool,
+) {
+    let expected_longitudes = if !expect_regular_seams || expect_two_chart_joins {
+        vec![
+            core::f64::consts::FRAC_PI_2,
+            3.0 * core::f64::consts::FRAC_PI_2,
+        ]
+    } else {
+        vec![core::f64::consts::FRAC_PI_2]
+    };
+    let expected_endpoint_count =
+        2 + if expect_regular_seams { 2 } else { 0 } + 2 * expected_longitudes.len();
     assert_eq!(
         graph.completion(),
         SectionCompletion::Complete,
@@ -771,15 +829,15 @@ fn assert_touching_support_component(
     assert!(graph.rings().is_empty());
     assert!(graph.isolated_contacts().is_empty());
     assert!(graph.through_contacts().is_empty());
-    assert_eq!(graph.branches().len(), 6);
-    assert_eq!(graph.curve_fragments().len(), 6);
-    assert_eq!(graph.curve_endpoints().len(), 6);
+    assert_eq!(graph.branches().len(), expected_endpoint_count);
+    assert_eq!(graph.curve_fragments().len(), expected_endpoint_count);
+    assert_eq!(graph.curve_endpoints().len(), expected_endpoint_count);
     assert_eq!(graph.curve_components().len(), 1);
     let component = &graph.curve_components()[0];
     assert!(component.closed());
-    assert_eq!(component.fragments().len(), 6);
+    assert_eq!(component.fragments().len(), expected_endpoint_count);
 
-    let mut endpoint_incidence = vec![0_usize; 6];
+    let mut endpoint_incidence = vec![0_usize; expected_endpoint_count];
     for &fragment_index in component.fragments() {
         let fragment = &graph.curve_fragments()[fragment_index];
         let branch = &graph.branches()[fragment.branch()];
@@ -795,7 +853,7 @@ fn assert_touching_support_component(
             assert!((-0.375..=0.375).contains(&local.z));
         }
     }
-    assert_eq!(endpoint_incidence, vec![2, 2, 2, 2, 2, 2]);
+    assert_eq!(endpoint_incidence, vec![2; expected_endpoint_count]);
 
     let mut root_ports = Vec::new();
     let mut seams = Vec::new();
@@ -843,14 +901,6 @@ fn assert_touching_support_component(
             Vec::new()
         }
     );
-    let expected_longitudes = if expect_regular_seams {
-        vec![core::f64::consts::FRAC_PI_2]
-    } else {
-        vec![
-            core::f64::consts::FRAC_PI_2,
-            3.0 * core::f64::consts::FRAC_PI_2,
-        ]
-    };
     let mut expected_charts = expected_sheets
         .into_iter()
         .flat_map(|sheet| {
@@ -1386,6 +1436,59 @@ fn seam_touching_support_boolean_refuses_distinctly_without_mutation() {
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
             assert_touching_support_component(&fixture, &section(&fixture, swapped), false);
+        }
+    }
+}
+
+#[test]
+fn opposite_pole_touching_support_section_is_complete_replay_swap_and_frame_stable() {
+    for (frame_index, frame) in folded_exact_frames().into_iter().enumerate() {
+        let fixture = opposite_pole_touching_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay, "frame {frame_index} forward replay");
+        assert_eq!(swapped, swapped_replay, "frame {frame_index} swap replay");
+        assert_opposite_pole_touching_support_component(&fixture, &forward);
+        assert_opposite_pole_touching_support_component(&fixture, &swapped);
+    }
+}
+
+#[test]
+fn opposite_pole_touching_support_boolean_refuses_distinctly_without_mutation() {
+    for frame in folded_exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = opposite_pole_touching_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Intersect,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+                ),
+                "{outcome:?}"
+            );
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_opposite_pole_touching_support_component(&fixture, &section(&fixture, swapped));
         }
     }
 }

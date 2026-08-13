@@ -33,10 +33,10 @@ use kgraph::{
     PersistentSkewCylinderTouchingSupportCertificate,
     PersistentSkewCylinderTouchingSupportEndpoint, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
     SKEW_CYLINDER_BRANCH_CERTIFICATE_WORK, SKEW_CYLINDER_BRANCH_PCURVE_ROOT_CORRIDOR_WORK,
-    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
-    SkewCylinderExactDiscriminantTopology, SkewCylinderFiniteSheetTopology,
-    SkewCylinderFiniteWindowRootEventKind, SkewCylinderFiniteWindowTopologyCertificate,
-    SkewCylinderOpenSpan, SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
+    SKEW_CYLINDER_ROOT_CLUSTER_MAX_EXACT_WORK, SkewCylinderExactDiscriminantTopology,
+    SkewCylinderFiniteSheetTopology, SkewCylinderFiniteWindowRootEventKind,
+    SkewCylinderFiniteWindowTopologyCertificate, SkewCylinderOpenSpan,
+    SkewCylinderOpenSpanEndpointProof, SkewCylinderOpenSpanFailure,
     SkewCylinderOpenSpanTopologyInput, SkewCylinderRootInsideSide, SkewCylinderSheet,
     SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
     certify_paired_skew_cylinder_branch_residuals,
@@ -48,6 +48,7 @@ use kgraph::{
     certify_skew_cylinder_folded_support_topology, certify_skew_cylinder_touching_support_topology,
     classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
     persistent_skew_cylinder_folded_support_exact_work,
+    persistent_skew_cylinder_touching_support_exact_work,
     plan_persistent_skew_cylinder_support_contact_boundaries, plan_skew_cylinder_root_clusters,
 };
 
@@ -833,16 +834,16 @@ fn intersect_touching_support_contact(
         Ok(topology) => topology,
         Err(_) => return Ok(contact_topology_result_incomplete(scope)),
     };
-    scope.ledger_mut().charge(
-        SKEW_CYLINDER_OPEN_SPAN_WORK,
-        SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
-    )?;
+    let exact_work = persistent_skew_cylinder_touching_support_exact_work(&topology);
+    scope
+        .ledger_mut()
+        .charge(SKEW_CYLINDER_OPEN_SPAN_WORK, exact_work)?;
     let certificate = match certify_persistent_skew_cylinder_touching_support(
         topology,
         formula_ranges,
         formula_to_source,
         tolerance,
-        SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+        exact_work,
     ) {
         Ok(certificate) => certificate,
         Err(_) => return Ok(contact_topology_result_incomplete(scope)),
