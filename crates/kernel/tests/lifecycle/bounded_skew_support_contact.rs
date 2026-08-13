@@ -398,6 +398,48 @@ fn long_seam_root_across_folded_support_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn long_seam_root_between_folded_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first_radius = 0.0625;
+        let second_radius = 0.125;
+        let second_axis = frame.x() * -0.6 + frame.y() * 0.8;
+        let second_radial = frame.x() * 0.8 + frame.y() * 0.6;
+        let offset = second_radial * second_radius - frame.x() * first_radius + second_axis * 0.125
+            - frame.z() * 0.125;
+        let first_frame =
+            Frame::new(frame.origin() + frame.z() * 0.75, -frame.z(), frame.x()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(first_frame, first_radius, 1.25))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_frame = Frame::new(
+            frame.origin() - offset - second_axis * 0.5,
+            second_axis,
+            second_radial,
+        )
+        .unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, second_radius, 1.25))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn touching_support_fixture(frame: Frame) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -1694,6 +1736,71 @@ fn long_seam_root_across_folded_support_boolean_refuses_distinctly_without_mutat
                 &fixture,
                 &section(&fixture, swapped),
                 3.0 * core::f64::consts::FRAC_PI_2,
+                0.75,
+            );
+        }
+    }
+}
+
+#[test]
+fn long_seam_root_between_folded_support_section_is_complete_replay_swap_and_frame_stable() {
+    for (frame_index, frame) in folded_exact_frames().into_iter().enumerate() {
+        let fixture = long_seam_root_between_folded_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay, "frame {frame_index} forward replay");
+        assert_eq!(swapped, swapped_replay, "frame {frame_index} swap replay");
+        assert_seam_root_folded_support_component(
+            &fixture,
+            &forward,
+            core::f64::consts::FRAC_PI_2,
+            0.75,
+        );
+        assert_seam_root_folded_support_component(
+            &fixture,
+            &swapped,
+            core::f64::consts::FRAC_PI_2,
+            0.75,
+        );
+    }
+}
+
+#[test]
+fn long_seam_root_between_folded_support_boolean_refuses_distinctly_without_mutation() {
+    for frame in folded_exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = long_seam_root_between_folded_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Intersect,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_seam_root_folded_support_component(
+                &fixture,
+                &section(&fixture, swapped),
+                core::f64::consts::FRAC_PI_2,
                 0.75,
             );
         }
