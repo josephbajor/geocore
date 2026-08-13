@@ -822,6 +822,33 @@ fn prepare_folded_support_member(
                 )
             }
             (
+                IntersectionBranchVertexEvent::TouchingSupportRootJoin {
+                    root_ordinal,
+                    continuation,
+                },
+                Some(IntersectionBranchEndpointProof::SkewCylinderFoldedSupportTouchingRoot(proof)),
+            ) => {
+                if usize::from(root_ordinal) != proof.root_ordinal
+                    || proof.continuation != continuation
+                    || proof.inside_parameter.to_bits() != graph_parameter.to_bits()
+                    || proof.point != vertex.point
+                    || proof.surface_parameters != vertex.surface_parameters
+                {
+                    return Ok(None);
+                }
+                let chart = match proof.half_angle_chart {
+                    SkewCylinderHalfAngleChartProof::Tangent => 0,
+                    SkewCylinderHalfAngleChartProof::Cotangent => 1,
+                };
+                closed_stitch::CertifiedClosedEndpoint::touching_support_root(
+                    raw_faces,
+                    root_ordinal,
+                    continuation,
+                    chart,
+                    proof.half_angle_bracket.map(f64::to_bits),
+                )
+            }
+            (
                 IntersectionBranchVertexEvent::FoldedSupportSeamJoin { sheet },
                 Some(IntersectionBranchEndpointProof::SkewCylinderFoldedSupportSeam(proof)),
             ) => {

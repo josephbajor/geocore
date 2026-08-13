@@ -501,6 +501,16 @@ impl SkewCylinderFoldedSupportTopologyCertificate {
         &self.topology
     }
 
+    /// Repeated root strictly inside this simple-root-bounded positive
+    /// component, when the exact cycle has mixed multiplicity.
+    pub fn interior_touching_root_ordinal(&self) -> Option<usize> {
+        self.topology
+            .roots
+            .iter()
+            .enumerate()
+            .find_map(|(ordinal, root)| root.repeated().then_some(ordinal))
+    }
+
     pub(crate) fn positive_radicand_lower_bound(
         &self,
         chart: SkewCylinderHalfAngleChart,
@@ -575,7 +585,7 @@ pub fn certify_skew_cylinder_folded_support_topology(
 }
 
 /// Seal every simple-root-bounded strict-positive component in one complete
-/// two- or four-root discriminant cycle.
+/// two-, three-, or four-root discriminant cycle.
 pub fn certify_skew_cylinder_folded_support_topologies(
     topology: SkewCylinderDiscriminantContactTopologyCertificate,
 ) -> Result<Vec<SkewCylinderFoldedSupportTopologyCertificate>, SkewCylinderAxialRootFailure> {
@@ -602,6 +612,56 @@ pub fn certify_skew_cylinder_folded_support_topologies(
             root_ordinals: [0, 1],
             positive_cell,
         }]);
+    }
+
+    if !topology.identically_zero
+        && topology.roots.len() == 3
+        && topology.open_cell_signs.len() == 3
+    {
+        let simple_roots = topology
+            .roots
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, root)| (!root.repeated()).then_some(ordinal))
+            .collect::<Vec<_>>();
+        let repeated_roots = topology
+            .roots
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, root)| root.repeated().then_some(ordinal))
+            .collect::<Vec<_>>();
+        if let ([first, second], [repeated]) = (simple_roots.as_slice(), repeated_roots.as_slice())
+        {
+            let simple_roots_flip = [*first, *second].into_iter().all(|ordinal| {
+                topology.open_cell_signs[(ordinal + 2) % 3] != topology.open_cell_signs[ordinal]
+            });
+            let repeated_root_touches = topology.open_cell_signs[(*repeated + 2) % 3]
+                == topology.open_cell_signs[*repeated];
+            let positive_cells = topology
+                .open_cell_signs
+                .iter()
+                .filter(|sign| **sign == StrictSign::Positive)
+                .count();
+            if simple_roots_flip && repeated_root_touches && positive_cells == 2 {
+                let positive_cell = if (*first..*second)
+                    .all(|cell| topology.open_cell_signs[cell] == StrictSign::Positive)
+                {
+                    SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+                } else if (0..*first)
+                    .chain(*second..3)
+                    .all(|cell| topology.open_cell_signs[cell] == StrictSign::Positive)
+                {
+                    SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+                } else {
+                    return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+                };
+                return Ok(vec![SkewCylinderFoldedSupportTopologyCertificate {
+                    topology,
+                    root_ordinals: [*first, *second],
+                    positive_cell,
+                }]);
+            }
+        }
     }
 
     if topology.identically_zero

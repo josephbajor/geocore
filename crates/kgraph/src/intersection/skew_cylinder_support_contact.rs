@@ -52,11 +52,21 @@ pub const SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK: u64 =
     SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK
         + 2 * SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK;
 
+/// Exact logical work for four guarded members around one repeated root
+/// inside a simple-root-bounded positive component.
+pub const SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK: u64 = 4
+    * (PERSISTENT_SKEW_CYLINDER_OPEN_SPAN_WORK
+        + SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BOUND_WORK);
+
 /// Exact guarded-member work selected by one sealed folded-support layout.
 pub fn persistent_skew_cylinder_folded_support_exact_work(
     topology: &SkewCylinderFoldedSupportTopologyCertificate,
 ) -> u64 {
-    if is_long_between_seam_root_layout(topology) || is_long_across_seam_root_layout(topology) {
+    if topology.interior_touching_root_ordinal().is_some() {
+        SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK
+    } else if is_long_between_seam_root_layout(topology)
+        || is_long_across_seam_root_layout(topology)
+    {
         SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK
     } else if (topology.positive_cell()
         == SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
@@ -107,6 +117,14 @@ pub fn persistent_skew_cylinder_touching_support_exact_work(
 pub enum PersistentSkewCylinderFoldedSupportEndpoint {
     /// One of the two exact simple discriminant roots.
     Root(usize),
+    /// One repeated root inside the positive component plus its
+    /// proof-owned continuation port.
+    TouchingRoot {
+        /// Ordinal in the complete exact discriminant-root cycle.
+        root_ordinal: usize,
+        /// Exact continuation port on one side of the repeated root.
+        continuation: u8,
+    },
     /// The exact authored periodic seam on one ordered sheet.
     Seam(SkewCylinderSheet),
     /// One exact regular tangent/cotangent transition on an ordered sheet.
@@ -189,6 +207,8 @@ pub struct PersistentSkewCylinderFoldedSupportCertificate {
     formula_branch_endpoints: Vec<[PersistentSkewCylinderFoldedSupportEndpoint; 2]>,
     formula_endpoint_parameters: [[[f64; 2]; 2]; 2],
     formula_endpoint_points: [Vec3; 2],
+    formula_touching_root_parameters: Option<[[f64; 2]; 2]>,
+    formula_touching_root_point: Option<Vec3>,
     formula_seam_parameters: Option<[[[f64; 2]; 2]; 2]>,
     formula_seam_points: Option<[Vec3; 2]>,
     formula_chart_join_parameters: Option<FormulaFoldedEndpointParameters>,
@@ -399,6 +419,9 @@ impl PersistentSkewCylinderFoldedSupportCertificate {
             PersistentSkewCylinderFoldedSupportEndpoint::Root(ordinal) => {
                 self.formula_endpoint_points[ordinal]
             }
+            PersistentSkewCylinderFoldedSupportEndpoint::TouchingRoot { .. } => self
+                .formula_touching_root_point
+                .expect("sealed mixed folded endpoint retains its point"),
             PersistentSkewCylinderFoldedSupportEndpoint::Seam(sheet) => self
                 .formula_seam_points
                 .expect("sealed seam endpoint retains its point")[sheet_ordinal(sheet)],
@@ -416,6 +439,13 @@ impl PersistentSkewCylinderFoldedSupportCertificate {
         match endpoint {
             PersistentSkewCylinderFoldedSupportEndpoint::Root(ordinal) => {
                 self.source_endpoint_parameters()[ordinal]
+            }
+            PersistentSkewCylinderFoldedSupportEndpoint::TouchingRoot { .. } => {
+                permute_formula_to_source(
+                    self.formula_touching_root_parameters
+                        .expect("sealed mixed folded endpoint retains its source parameters"),
+                    self.formula_to_source,
+                )
             }
             PersistentSkewCylinderFoldedSupportEndpoint::Seam(sheet) => self
                 .source_seam_parameters()
@@ -634,6 +664,24 @@ fn is_seam_root_folded_chart_layout(
         && angular[1].hi.to_bits() == core::f64::consts::PI.to_bits()
 }
 
+fn is_mixed_folded_chart_layout(topology: &SkewCylinderFoldedSupportTopologyCertificate) -> bool {
+    let Some(repeated_ordinal) = topology.interior_touching_root_ordinal() else {
+        return false;
+    };
+    let boundary = topology
+        .roots()
+        .map(SkewCylinderDiscriminantRoot::angular_bracket);
+    let repeated = topology.topology().roots()[repeated_ordinal].angular_bracket();
+    topology.root_ordinals() == [0, 2]
+        && topology.positive_cell() == SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+        && boundary[0].lo.to_bits() == 0.0_f64.to_bits()
+        && boundary[0].hi.to_bits() == 0.0_f64.to_bits()
+        && repeated.lo.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
+        && repeated.hi.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
+        && boundary[1].lo.to_bits() == core::f64::consts::PI.to_bits()
+        && boundary[1].hi.to_bits() == core::f64::consts::PI.to_bits()
+}
+
 fn has_canonical_seam_root(topology: &SkewCylinderFoldedSupportTopologyCertificate) -> bool {
     let first = topology.roots()[0].angular_bracket();
     first.lo.to_bits() == 0.0_f64.to_bits() && first.hi.to_bits() == 0.0_f64.to_bits()
@@ -689,6 +737,7 @@ pub fn certify_persistent_skew_cylinder_folded_support(
 ) -> Result<PersistentSkewCylinderFoldedSupportCertificate, IntersectionCertificateError> {
     validate_inputs(formula_windows, formula_to_source, tolerance)?;
     let roots = topology.roots();
+    let mixed_chart_layout = is_mixed_folded_chart_layout(&topology);
     let canonical_seam_root = has_canonical_seam_root(&topology);
     let seam_root_chart_layout = is_seam_root_folded_chart_layout(&topology);
     let short_between_seam_root_layout = is_short_between_seam_root_layout(&topology);
@@ -708,6 +757,18 @@ pub fn certify_persistent_skew_cylinder_folded_support(
     });
     let [first, second] = evidence;
     let [first, second] = [first?, second?];
+    let touching_root = topology.interior_touching_root_ordinal().map(|ordinal| {
+        let root = topology.topology().roots()[ordinal];
+        (
+            ordinal,
+            root,
+            root_evidence(topology.topology(), root, formula_windows, false, true),
+        )
+    });
+    let touching_root = match touching_root {
+        Some((ordinal, root, evidence)) => Some((ordinal, root, evidence?)),
+        None => None,
+    };
     let formula_root_longitudes = [
         first.formula_longitude_enclosures[0],
         second.formula_longitude_enclosures[0],
@@ -725,8 +786,108 @@ pub fn certify_persistent_skew_cylinder_folded_support(
             return Err(unsupported());
         }
     }
-    use PersistentSkewCylinderFoldedSupportEndpoint::{ChartJoin, Root, Seam};
+    if touching_root.is_some_and(|(_, _, evidence)| {
+        evidence
+            .exact_heights
+            .into_iter()
+            .zip(formula_windows)
+            .any(|(height, window)| !strictly_inside(height, window[1]))
+    }) {
+        return Err(unsupported());
+    }
+    use PersistentSkewCylinderFoldedSupportEndpoint::{ChartJoin, Root, Seam, TouchingRoot};
     let branch_specs = match topology.positive_cell() {
+        SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots if mixed_chart_layout => {
+            let authored = formula_windows[0][0];
+            if authored.lo.to_bits() != 0.0_f64.to_bits() || authored.hi.to_bits() != TAU.to_bits()
+            {
+                return Err(unsupported());
+            }
+            let (touching_ordinal, touching, _) =
+                touching_root.expect("mixed chart layout retains its repeated root");
+            let radius_scale = topology
+                .formula_cylinders()
+                .into_iter()
+                .map(|cylinder| cylinder.radius())
+                .fold(0.0_f64, f64::max);
+            let touching_inset = tolerance / (64.0 * radius_scale);
+            if !touching_inset.is_finite() || touching_inset <= 0.0 {
+                return Err(unsupported());
+            }
+            let simple_inset = f64::EPSILON / 16.0;
+            let touching_angle = touching.angular_bracket().representative();
+            let before_touching = (touching_angle - touching_inset).next_down();
+            let after_touching = (touching_angle + touching_inset).next_up();
+            let simple_start = (2.0 * kcore::math::atan2(simple_inset, 1.0)).next_up();
+            let simple_end = (2.0 * kcore::math::atan2(1.0, simple_inset)).next_down();
+            let tangent_range = ParamRange::new(simple_start, before_touching);
+            let cotangent_range = ParamRange::new(after_touching, simple_end);
+            let tangent_guard =
+                projective_guard(SkewCylinderHalfAngleChart::Tangent, tangent_range)
+                    .ok_or_else(unsupported)?;
+            let cotangent_guard =
+                projective_guard(SkewCylinderHalfAngleChart::Cotangent, cotangent_range)
+                    .ok_or_else(unsupported)?;
+            if !strict_guarded_range(tangent_range, authored)
+                || !strict_guarded_range(cotangent_range, authored)
+            {
+                return Err(unsupported());
+            }
+            vec![
+                (
+                    SkewCylinderSheet::Lower,
+                    SkewCylinderHalfAngleChart::Tangent,
+                    tangent_guard,
+                    tangent_range,
+                    [
+                        Root(0),
+                        TouchingRoot {
+                            root_ordinal: touching_ordinal,
+                            continuation: 0,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderSheet::Lower,
+                    SkewCylinderHalfAngleChart::Cotangent,
+                    cotangent_guard,
+                    cotangent_range,
+                    [
+                        TouchingRoot {
+                            root_ordinal: touching_ordinal,
+                            continuation: 1,
+                        },
+                        Root(1),
+                    ],
+                ),
+                (
+                    SkewCylinderSheet::Upper,
+                    SkewCylinderHalfAngleChart::Tangent,
+                    tangent_guard,
+                    tangent_range,
+                    [
+                        Root(0),
+                        TouchingRoot {
+                            root_ordinal: touching_ordinal,
+                            continuation: 0,
+                        },
+                    ],
+                ),
+                (
+                    SkewCylinderSheet::Upper,
+                    SkewCylinderHalfAngleChart::Cotangent,
+                    cotangent_guard,
+                    cotangent_range,
+                    [
+                        TouchingRoot {
+                            root_ordinal: touching_ordinal,
+                            continuation: 1,
+                        },
+                        Root(1),
+                    ],
+                ),
+            ]
+        }
         SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots if seam_root_chart_layout => {
             let authored = formula_windows[0][0];
             if authored.lo.to_bits() != 0.0_f64.to_bits() || authored.hi.to_bits() != TAU.to_bits()
@@ -1214,9 +1375,9 @@ pub fn certify_persistent_skew_cylinder_folded_support(
     };
     let mut formula_residuals = Vec::with_capacity(branch_specs.len());
     for (sheet, chart, projective_guard, guarded_range, _) in &branch_specs {
-        let radicand_subdivision_budget = if (long_between_seam_root_layout
-            || long_across_seam_root_layout)
-            && *chart == SkewCylinderHalfAngleChart::Cotangent
+        let radicand_subdivision_budget = if mixed_chart_layout
+            || (long_between_seam_root_layout || long_across_seam_root_layout)
+                && *chart == SkewCylinderHalfAngleChart::Cotangent
         {
             super::SKEW_CYLINDER_TOUCHING_SUPPORT_RADICAND_BERNSTEIN_CELLS
         } else {
@@ -1243,12 +1404,12 @@ pub fn certify_persistent_skew_cylinder_folded_support(
                 projective: *projective_guard,
                 source_lower: exact_radicand_lower,
                 stored_subdivision_budget: radicand_subdivision_budget,
-                permit_sheet_tube_overlap: false,
+                permit_sheet_tube_overlap: mixed_chart_layout,
             },
         );
         formula_residuals.push(residual?);
     }
-    let formula_endpoint_parameters = [first, second].map(|endpoint| {
+    let formula_parameters_for = |endpoint: SupportRootEvidence| {
         let mut algebra = endpoint.algebra;
         let raw_longitude = algebra
             .authored_pcurve_derivs(1, endpoint.carrier_parameter, 0)
@@ -1288,9 +1449,11 @@ pub fn certify_persistent_skew_cylinder_folded_support(
                 .d[0];
             [uv.x, uv.y]
         }))
-    });
-    let [first_parameters, second_parameters] = formula_endpoint_parameters;
-    let formula_endpoint_parameters = [first_parameters?, second_parameters?];
+    };
+    let formula_endpoint_parameters = [
+        formula_parameters_for(first)?,
+        formula_parameters_for(second)?,
+    ];
     let formula_endpoint_points = formula_endpoint_parameters.map(|parameters| {
         let points = [
             topology.formula_cylinders()[0].eval(parameters[0]),
@@ -1302,6 +1465,36 @@ pub fn certify_persistent_skew_cylinder_folded_support(
         .into_iter()
         .zip(formula_endpoint_points)
     {
+        if parameters
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+            || !point.to_array().into_iter().all(f64::is_finite)
+        {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+        let points = [
+            topology.formula_cylinders()[0].eval(parameters[0]),
+            topology.formula_cylinders()[1].eval(parameters[1]),
+        ];
+        if points[0].dist(points[1]) > tolerance {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        }
+    }
+    let formula_touching_root_parameters = touching_root
+        .map(|(_, _, evidence)| formula_parameters_for(evidence))
+        .transpose()?;
+    let formula_touching_root_point = formula_touching_root_parameters.map(|parameters| {
+        let points = [
+            topology.formula_cylinders()[0].eval(parameters[0]),
+            topology.formula_cylinders()[1].eval(parameters[1]),
+        ];
+        (points[0] + points[1]) * 0.5
+    });
+    if let (Some(parameters), Some(point)) = (
+        formula_touching_root_parameters,
+        formula_touching_root_point,
+    ) {
         if parameters
             .into_iter()
             .flatten()
@@ -1361,6 +1554,7 @@ pub fn certify_persistent_skew_cylinder_folded_support(
                 formula_folded_endpoint_point(
                     endpoint,
                     formula_endpoint_points,
+                    formula_touching_root_point,
                     formula_seam_points,
                     formula_chart_join_points,
                 )
@@ -1395,6 +1589,8 @@ pub fn certify_persistent_skew_cylinder_folded_support(
             .collect(),
         formula_endpoint_parameters,
         formula_endpoint_points,
+        formula_touching_root_parameters,
+        formula_touching_root_point,
         formula_seam_parameters,
         formula_seam_points,
         formula_chart_join_parameters,
@@ -2084,11 +2280,15 @@ fn folded_regular_join_evidence(
 fn formula_folded_endpoint_point(
     endpoint: PersistentSkewCylinderFoldedSupportEndpoint,
     roots: [Vec3; 2],
+    touching_root: Option<Vec3>,
     seams: Option<[Vec3; 2]>,
     chart_joins: Option<[Vec3; 2]>,
 ) -> Vec3 {
     match endpoint {
         PersistentSkewCylinderFoldedSupportEndpoint::Root(ordinal) => roots[ordinal],
+        PersistentSkewCylinderFoldedSupportEndpoint::TouchingRoot { .. } => {
+            touching_root.expect("mixed folded branch retains its touching root point")
+        }
         PersistentSkewCylinderFoldedSupportEndpoint::Seam(sheet) => {
             seams.expect("seam branch retains seam points")[sheet_ordinal(sheet)]
         }
@@ -2602,6 +2802,17 @@ mod tests {
         ]
     }
 
+    fn mixed_folded_support_cylinders(frame: Frame) -> [Cylinder; 2] {
+        [
+            Cylinder::new(frame, 0.25).unwrap(),
+            Cylinder::new(
+                Frame::new(frame.origin() + frame.y() * 0.125, frame.x(), frame.y()).unwrap(),
+                0.125,
+            )
+            .unwrap(),
+        ]
+    }
+
     fn seam_root_folded_support_cylinders(frame: Frame) -> [Cylinder; 2] {
         [
             Cylinder::new(frame, 1.0).unwrap(),
@@ -2717,6 +2928,13 @@ mod tests {
         ]
     }
 
+    fn mixed_folded_support_windows() -> [[ParamRange; 2]; 2] {
+        [
+            [ParamRange::new(0.0, TAU), ParamRange::new(-0.2, 0.2)],
+            [ParamRange::new(0.0, TAU), ParamRange::new(-0.3, 0.3)],
+        ]
+    }
+
     fn bounded_touching_support_windows() -> [[ParamRange; 2]; 2] {
         [
             [ParamRange::new(0.0, TAU), ParamRange::new(0.0, 1.0)],
@@ -2743,6 +2961,60 @@ mod tests {
             [ParamRange::new(0.0, TAU), ParamRange::new(-1.0, 1.0)],
             [ParamRange::new(0.0, TAU), ParamRange::new(-1.0, 1.0)],
         ]
+    }
+
+    #[test]
+    fn mixed_simple_repeated_folded_support_mints_four_guarded_members() {
+        let contact = match classify_skew_cylinder_exact_discriminant(
+            mixed_folded_support_cylinders(Frame::world()),
+            SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+        )
+        .unwrap()
+        {
+            SkewCylinderExactDiscriminantTopology::Contact(topology) => *topology,
+            other => panic!("expected mixed contact topology, got {other:?}"),
+        };
+        let topology = crate::certify_skew_cylinder_folded_support_topologies(contact)
+            .unwrap()
+            .remove(0);
+        assert_eq!(topology.root_ordinals(), [0, 2]);
+        assert_eq!(topology.interior_touching_root_ordinal(), Some(1));
+        assert!(
+            certify_persistent_skew_cylinder_folded_support(
+                topology.clone(),
+                mixed_folded_support_windows(),
+                [0, 1],
+                1.0e-8,
+                SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK - 1,
+            )
+            .is_err()
+        );
+        let folded = certify_persistent_skew_cylinder_folded_support(
+            topology,
+            mixed_folded_support_windows(),
+            [0, 1],
+            1.0e-8,
+            SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK,
+        )
+        .unwrap();
+        assert_eq!(folded.work(), SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK);
+        assert_eq!(folded.formula_residuals().len(), 4);
+        assert_eq!(folded.formula_branch_endpoints().len(), 4);
+        let mut root_ports = folded
+            .formula_branch_endpoints()
+            .iter()
+            .flatten()
+            .filter_map(|endpoint| match endpoint {
+                PersistentSkewCylinderFoldedSupportEndpoint::TouchingRoot {
+                    root_ordinal,
+                    continuation,
+                } => Some((*root_ordinal, *continuation)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        root_ports.sort_unstable();
+        assert_eq!(root_ports, vec![(1, 0), (1, 0), (1, 1), (1, 1)]);
+        assert!(folded.required_edge_tolerance() <= folded.tolerance());
     }
 
     #[test]

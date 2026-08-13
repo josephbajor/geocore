@@ -2274,7 +2274,14 @@ fn build_verified_branch_graph(
                             IntersectionCertificateError::InvalidTraceFamily,
                         ),
                     )?;
-                    let expected_root = folded.folded_certificate().topology().roots()
+                    let root_ordinals = folded.folded_certificate().topology().root_ordinals();
+                    let local_root_ordinal = root_ordinals
+                        .iter()
+                        .position(|ordinal| *ordinal == proof.root_ordinal)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let expected_root = folded.folded_certificate().topology().topology().roots()
                         [proof.root_ordinal]
                         .bracket();
                     let expected_chart = match expected_root.chart {
@@ -2288,10 +2295,10 @@ fn build_verified_branch_graph(
                     if proof.half_angle_chart != expected_chart
                         || proof.half_angle_bracket != [expected_root.lo, expected_root.hi]
                         || proof.point
-                            != folded.folded_certificate().endpoint_points()[proof.root_ordinal]
+                            != folded.folded_certificate().endpoint_points()[local_root_ordinal]
                         || proof.surface_parameters
                             != folded.folded_certificate().source_endpoint_parameters()
-                                [proof.root_ordinal]
+                                [local_root_ordinal]
                     {
                         return Err(GraphSurfaceIntersectionError::BranchCertificate(
                             IntersectionCertificateError::InvalidTraceFamily,
@@ -2305,6 +2312,87 @@ fn build_verified_branch_graph(
                         },
                         IntersectionBranchVertexEvent::FoldedSupportJoin {
                             root_ordinal: proof.root_ordinal,
+                        },
+                    )
+                }
+                Some(
+                    proof @ IntersectionBranchEndpointProof::SkewCylinderFoldedSupportTouchingRoot(
+                        _,
+                    ),
+                ) => {
+                    if topology != IntersectionBranchTopology::Open {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let proof = proof
+                        .validated_folded_support_touching_root(parameter, surface_ranges)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?;
+                    let folded = certificate.as_skew_cylinder_folded_support().ok_or(
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ),
+                    )?;
+                    if folded
+                        .folded_certificate()
+                        .topology()
+                        .interior_touching_root_ordinal()
+                        != Some(proof.root_ordinal)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    let expected_root = folded
+                        .folded_certificate()
+                        .topology()
+                        .topology()
+                        .roots()
+                        .get(proof.root_ordinal)
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?
+                        .bracket();
+                    let expected_chart = match expected_root.chart {
+                        kgraph::SkewCylinderHalfAngleChart::Tangent => {
+                            super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Tangent
+                        }
+                        kgraph::SkewCylinderHalfAngleChart::Cotangent => {
+                            super::graph_skew_cylinder_endpoint::SkewCylinderHalfAngleChartProof::Cotangent
+                        }
+                    };
+                    let endpoint =
+                        kgraph::PersistentSkewCylinderFoldedSupportEndpoint::TouchingRoot {
+                            root_ordinal: proof.root_ordinal,
+                            continuation: proof.continuation,
+                        };
+                    let root_ordinal = u8::try_from(proof.root_ordinal).map_err(|_| {
+                        GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        )
+                    })?;
+                    if proof.half_angle_chart != expected_chart
+                        || proof.half_angle_bracket != [expected_root.lo, expected_root.hi]
+                        || proof.point != folded.folded_certificate().endpoint_point(endpoint)
+                        || proof.surface_parameters
+                            != folded.folded_certificate().source_parameters(endpoint)
+                    {
+                        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ));
+                    }
+                    (
+                        proof.point,
+                        proof.surface_parameters,
+                        IntersectionBranchEndpointEvent::TouchingSupportRootJoin {
+                            root_ordinal,
+                            continuation: proof.continuation,
+                        },
+                        IntersectionBranchVertexEvent::TouchingSupportRootJoin {
+                            root_ordinal,
+                            continuation: proof.continuation,
                         },
                     )
                 }

@@ -283,6 +283,44 @@ fn double_folded_support_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn mixed_folded_support_fixture(frame: Frame) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame.with_origin(frame.origin() - frame.z() * 0.2),
+                0.25,
+                0.4,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let second_frame = Frame::new(
+            frame.origin() + frame.y() * 0.125 - frame.x() * 0.3,
+            frame.x(),
+            frame.y(),
+        )
+        .unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(second_frame, 0.125, 0.6))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn seam_folded_support_fixture(frame: Frame) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -1004,6 +1042,83 @@ fn assert_double_folded_support_components(fixture: &Fixture, graph: &BodySectio
         })
         .count();
     assert_eq!((root_count, seam_count), (4, 2));
+    assert_eq!(graph.periodic_face_embeddings().len(), 2);
+    assert!(graph.periodic_face_embeddings().iter().all(|embedding| {
+        matches!(
+            embedding.gap(),
+            Some(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve { .. })
+        )
+    }));
+}
+
+fn assert_mixed_folded_support_components(fixture: &Fixture, graph: &BodySectionGraph) {
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty(), "{:#?}", graph.gaps());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
+    assert!(graph.rings().is_empty());
+    assert!(graph.isolated_contacts().is_empty());
+    assert!(graph.through_contacts().is_empty());
+    assert_eq!(graph.branches().len(), 4);
+    assert_eq!(graph.curve_fragments().len(), 4);
+    assert_eq!(graph.curve_endpoints().len(), 4);
+    assert_eq!(graph.curve_components().len(), 2);
+    assert!(graph.curve_components().iter().all(|component| {
+        component.closed()
+            && component.fragments().len() == 2
+            && component.isolated_contacts().is_empty()
+    }));
+
+    let mut endpoint_incidence = vec![0_usize; 4];
+    for fragment in graph.curve_fragments() {
+        let branch = &graph.branches()[fragment.branch()];
+        assert_eq!(branch.topology(), SectionBranchTopology::Open);
+        assert!(branch.embedding_certificate().is_none());
+        let SectionCurveFragmentSpan::FoldedSupport { endpoints } = fragment.span() else {
+            panic!("mixed folded support retained a non-folded fragment")
+        };
+        for endpoint in endpoints.iter() {
+            endpoint_incidence[endpoint.endpoint()] += 1;
+            let local = fixture.frame.to_local(endpoint.point());
+            assert!((local.x * local.x + local.y * local.y - 0.0625).abs() <= 1.0e-12);
+            assert!(((local.y - 0.125).powi(2) + local.z * local.z - 0.015625).abs() <= 1.0e-12);
+        }
+    }
+    assert_eq!(endpoint_incidence, vec![2, 2, 2, 2]);
+
+    let mut simple_roots = Vec::new();
+    let mut touching_ports = Vec::new();
+    for endpoint in graph.curve_endpoints() {
+        match endpoint.topology() {
+            SectionCurveEndpointTopology::FoldedSupportJoin { root_ordinal, .. } => {
+                simple_roots.push(*root_ordinal);
+            }
+            SectionCurveEndpointTopology::TouchingSupportRootJoin {
+                root_ordinal,
+                continuation,
+                root_interval,
+                ..
+            } => {
+                assert_eq!(*root_ordinal, 1);
+                assert!(root_interval.lo().is_finite());
+                assert!(root_interval.hi().is_finite());
+                assert!(root_interval.lo() <= root_interval.hi());
+                touching_ports.push(*continuation);
+            }
+            topology => {
+                panic!("mixed folded support acquired an unexpected endpoint: {topology:?}")
+            }
+        }
+    }
+    simple_roots.sort_unstable();
+    touching_ports.sort_unstable();
+    assert_eq!(simple_roots, vec![0, 2]);
+    assert_eq!(touching_ports, vec![0, 1]);
     assert_eq!(graph.periodic_face_embeddings().len(), 2);
     assert!(graph.periodic_face_embeddings().iter().all(|embedding| {
         matches!(
@@ -1786,6 +1901,56 @@ fn folded_support_boolean_refuses_distinctly_without_mutation() {
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
             assert_folded_support_component(&fixture, &section(&fixture, swapped));
+        }
+    }
+}
+
+#[test]
+fn mixed_folded_support_section_is_complete_replay_swap_and_frame_stable() {
+    for frame in exact_frames() {
+        let fixture = mixed_folded_support_fixture(frame);
+        let forward = section(&fixture, false);
+        let replay = section(&fixture, false);
+        let swapped = section(&fixture, true);
+        let swapped_replay = section(&fixture, true);
+        assert_eq!(forward, replay);
+        assert_eq!(swapped, swapped_replay);
+        assert_mixed_folded_support_components(&fixture, &forward);
+        assert_mixed_folded_support_components(&fixture, &swapped);
+    }
+}
+
+#[test]
+fn mixed_folded_support_subtract_refuses_without_mutation() {
+    for frame in exact_frames() {
+        for swapped in [false, true] {
+            let mut fixture = mixed_folded_support_fixture(frame);
+            let bodies = if swapped {
+                [fixture.second.clone(), fixture.first.clone()]
+            } else {
+                [fixture.first.clone(), fixture.second.clone()]
+            };
+            let outcome = fixture
+                .session
+                .edit_part(fixture.part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Subtract,
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+            ));
+            let part = fixture.session.part(fixture.part.clone()).unwrap();
+            assert_eq!(part.bodies().len(), 2);
+            assert!(part.body(fixture.first.clone()).is_ok());
+            assert!(part.body(fixture.second.clone()).is_ok());
+            assert_mixed_folded_support_components(&fixture, &section(&fixture, swapped));
         }
     }
 }

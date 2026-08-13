@@ -62,8 +62,9 @@ use super::graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
     SkewCylinderFoldedSupportChartJoinEndpointProof, SkewCylinderFoldedSupportRootEndpointProof,
-    SkewCylinderFoldedSupportSeamEndpointProof, SkewCylinderHalfAngleChartProof,
-    SkewCylinderRootInsideSideProof, SkewCylinderTouchingSupportChartJoinEndpointProof,
+    SkewCylinderFoldedSupportSeamEndpointProof, SkewCylinderFoldedSupportTouchingRootEndpointProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
+    SkewCylinderTouchingSupportChartJoinEndpointProof,
     SkewCylinderTouchingSupportRootEndpointProof, SkewCylinderTouchingSupportSeamEndpointProof,
 };
 use super::graph_surface::{GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult};
@@ -580,6 +581,18 @@ pub(super) fn intersect_certified_skew_cylinders(
                 }
                 admission @ DiscriminantAdmission::StrictPositive(_) => (admission, true, None),
                 DiscriminantAdmission::Contact(reversed_contact)
+                    if is_mixed_folded_support_topology(&contact)
+                        && !is_mixed_folded_support_topology(&reversed_contact) =>
+                {
+                    (DiscriminantAdmission::Contact(contact), false, None)
+                }
+                DiscriminantAdmission::Contact(reversed_contact)
+                    if is_mixed_folded_support_topology(&reversed_contact)
+                        && !is_mixed_folded_support_topology(&contact) =>
+                {
+                    (DiscriminantAdmission::Contact(reversed_contact), true, None)
+                }
+                DiscriminantAdmission::Contact(reversed_contact)
                     if prefers_double_touching_chart_roots(&reversed_contact, &contact) =>
                 {
                     (DiscriminantAdmission::Contact(reversed_contact), true, None)
@@ -688,6 +701,33 @@ fn is_double_folded_support_topology(
 ) -> bool {
     certify_skew_cylinder_folded_support_topologies(topology.clone())
         .is_ok_and(|components| components.len() == 2)
+}
+
+fn is_mixed_folded_support_topology(
+    topology: &kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+) -> bool {
+    certify_skew_cylinder_folded_support_topologies(topology.clone()).is_ok_and(|components| {
+        let [component] = components.as_slice() else {
+            return false;
+        };
+        if component.root_ordinals() != [0, 2]
+            || component.interior_touching_root_ordinal() != Some(1)
+        {
+            return false;
+        }
+        let roots = component.topology().roots();
+        let [first, repeated, second] = roots else {
+            return false;
+        };
+        let angular = [first, repeated, second]
+            .map(|root| kgraph::SkewCylinderDiscriminantRoot::angular_bracket(*root));
+        angular[0].lo.to_bits() == 0.0_f64.to_bits()
+            && angular[0].hi.to_bits() == 0.0_f64.to_bits()
+            && angular[1].lo.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
+            && angular[1].hi.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
+            && angular[2].lo.to_bits() == core::f64::consts::PI.to_bits()
+            && angular[2].hi.to_bits() == core::f64::consts::PI.to_bits()
+    })
 }
 
 fn intersect_isolated_support_contact(
@@ -871,7 +911,6 @@ fn folded_support_branches(
     folded: &SkewCylinderFoldedSupportCurve,
 ) -> Vec<CertifiedSkewCylinderBranch> {
     let certificate = &folded.certificate;
-    let roots = certificate.topology().roots();
     let residuals = folded.residuals();
     residuals
         .into_iter()
@@ -885,11 +924,39 @@ fn folded_support_branches(
                     range.hi
                 };
                 Some(match endpoint {
-                    PersistentSkewCylinderFoldedSupportEndpoint::Root(root_ordinal) => {
-                        let root = roots[root_ordinal].bracket();
+                    PersistentSkewCylinderFoldedSupportEndpoint::Root(local_root_ordinal) => {
+                        let root_ordinal =
+                            certificate.topology().root_ordinals()[local_root_ordinal];
+                        let root =
+                            certificate.topology().topology().roots()[root_ordinal].bracket();
                         IntersectionBranchEndpointProof::SkewCylinderFoldedSupportRoot(
                             SkewCylinderFoldedSupportRootEndpointProof {
                                 root_ordinal,
+                                half_angle_chart: match root.chart {
+                                    SkewCylinderHalfAngleChart::Tangent => {
+                                        SkewCylinderHalfAngleChartProof::Tangent
+                                    }
+                                    SkewCylinderHalfAngleChart::Cotangent => {
+                                        SkewCylinderHalfAngleChartProof::Cotangent
+                                    }
+                                },
+                                half_angle_bracket: [root.lo, root.hi],
+                                inside_parameter,
+                                point: certificate.endpoint_point(endpoint),
+                                surface_parameters: certificate.source_parameters(endpoint),
+                            },
+                        )
+                    }
+                    PersistentSkewCylinderFoldedSupportEndpoint::TouchingRoot {
+                        root_ordinal,
+                        continuation,
+                    } => {
+                        let root =
+                            certificate.topology().topology().roots()[root_ordinal].bracket();
+                        IntersectionBranchEndpointProof::SkewCylinderFoldedSupportTouchingRoot(
+                            SkewCylinderFoldedSupportTouchingRootEndpointProof {
+                                root_ordinal,
+                                continuation,
                                 half_angle_chart: match root.chart {
                                     SkewCylinderHalfAngleChart::Tangent => {
                                         SkewCylinderHalfAngleChartProof::Tangent

@@ -115,6 +115,7 @@ pub use support_contact::{
     PersistentSkewCylinderTouchingSupportChartJoin, PersistentSkewCylinderTouchingSupportEndpoint,
     PersistentSkewCylinderTouchingSupportRoot, SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK,
+    SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_OPPOSITE_POLE_TOUCHING_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
     certify_persistent_skew_cylinder_folded_support,

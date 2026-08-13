@@ -74,7 +74,7 @@ pub struct SkewCylinderAxialRootEndpointProof {
 /// join of a two-sheet folded support component.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkewCylinderFoldedSupportRootEndpointProof {
-    /// Ordinal in the exact canonical two-root cycle.
+    /// Ordinal in the complete exact discriminant-root cycle.
     pub root_ordinal: usize,
     /// Projective chart retaining the exact source-root identity.
     pub half_angle_chart: SkewCylinderHalfAngleChartProof,
@@ -85,6 +85,26 @@ pub struct SkewCylinderFoldedSupportRootEndpointProof {
     /// Exact-root-owned deterministic model-space representative.
     pub point: Point3,
     /// Caller-order source parameters at the exact support join.
+    pub surface_parameters: [[f64; 2]; 2],
+}
+
+/// Exact repeated-root continuation inside one simple-root-bounded folded
+/// support component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCylinderFoldedSupportTouchingRootEndpointProof {
+    /// Ordinal in the complete exact discriminant-root cycle.
+    pub root_ordinal: usize,
+    /// Proof-owned continuation port on one side of the repeated root.
+    pub continuation: u8,
+    /// Projective chart retaining the exact repeated-root identity.
+    pub half_angle_chart: SkewCylinderHalfAngleChartProof,
+    /// Isolating interval in the owning half-angle chart.
+    pub half_angle_bracket: [f64; 2],
+    /// Hidden strict-positive carrier coordinate used by the evaluator.
+    pub inside_parameter: f64,
+    /// Exact-root-owned deterministic model-space representative.
+    pub point: Point3,
+    /// Caller-order source parameters at the repeated support join.
     pub surface_parameters: [[f64; 2]; 2],
 }
 
@@ -177,6 +197,8 @@ pub enum IntersectionBranchEndpointProof {
     SkewCylinderAxialRoot(SkewCylinderAxialRootEndpointProof),
     /// Simple discriminant root shared by both members of a folded component.
     SkewCylinderFoldedSupportRoot(SkewCylinderFoldedSupportRootEndpointProof),
+    /// Repeated discriminant root inside one folded support component.
+    SkewCylinderFoldedSupportTouchingRoot(SkewCylinderFoldedSupportTouchingRootEndpointProof),
     /// Exact authored seam shared by the two guarded pieces of one sheet.
     SkewCylinderFoldedSupportSeam(SkewCylinderFoldedSupportSeamEndpointProof),
     /// Exact tangent/cotangent chart join shared by two folded members.
@@ -235,8 +257,7 @@ impl IntersectionBranchEndpointProof {
         let Self::SkewCylinderFoldedSupportRoot(proof) = self else {
             return None;
         };
-        if proof.root_ordinal > 1
-            || proof.inside_parameter != parameter
+        if proof.inside_parameter != parameter
             || !proof.half_angle_bracket[0].is_finite()
             || !proof.half_angle_bracket[1].is_finite()
             || proof.half_angle_bracket[0] > proof.half_angle_bracket[1]
@@ -253,6 +274,28 @@ impl IntersectionBranchEndpointProof {
                 .any(|(parameters, ranges)| {
                     !ranges[0].contains(parameters[0]) || !ranges[1].contains(parameters[1])
                 })
+        {
+            None
+        } else {
+            Some(proof)
+        }
+    }
+
+    pub(super) fn validated_folded_support_touching_root(
+        self,
+        parameter: f64,
+        surface_ranges: [[ParamRange; 2]; 2],
+    ) -> Option<SkewCylinderFoldedSupportTouchingRootEndpointProof> {
+        let Self::SkewCylinderFoldedSupportTouchingRoot(proof) = self else {
+            return None;
+        };
+        if proof.continuation > 1
+            || proof.inside_parameter != parameter
+            || !proof.half_angle_bracket[0].is_finite()
+            || !proof.half_angle_bracket[1].is_finite()
+            || proof.half_angle_bracket[0] > proof.half_angle_bracket[1]
+            || !proof.point.to_array().into_iter().all(f64::is_finite)
+            || !valid_surface_parameters(proof.surface_parameters, surface_ranges)
         {
             None
         } else {

@@ -127,8 +127,9 @@ pub use graph_skew_cylinder_endpoint::{
     IntersectionBranchEndpointProof, SkewCylinderAxialBoundaryProof,
     SkewCylinderAxialRelationProof, SkewCylinderAxialRootEndpointProof,
     SkewCylinderFoldedSupportChartJoinEndpointProof, SkewCylinderFoldedSupportRootEndpointProof,
-    SkewCylinderFoldedSupportSeamEndpointProof, SkewCylinderHalfAngleChartProof,
-    SkewCylinderRootInsideSideProof, SkewCylinderTouchingSupportChartJoinEndpointProof,
+    SkewCylinderFoldedSupportSeamEndpointProof, SkewCylinderFoldedSupportTouchingRootEndpointProof,
+    SkewCylinderHalfAngleChartProof, SkewCylinderRootInsideSideProof,
+    SkewCylinderTouchingSupportChartJoinEndpointProof,
     SkewCylinderTouchingSupportRootEndpointProof, SkewCylinderTouchingSupportSeamEndpointProof,
 };
 pub use graph_surface::{

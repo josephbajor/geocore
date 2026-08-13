@@ -88,6 +88,50 @@ fn four_simple_contact_roots_have_a_strict_positive_reverse_parameterization() {
     ));
 }
 
+#[test]
+fn mixed_simple_repeated_contact_has_three_exact_roots() {
+    let cylinders = perpendicular_radii_pair(1.0, 2.0, 1.0);
+    let topology =
+        classify_skew_cylinder_exact_discriminant(cylinders, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK)
+            .unwrap();
+    let SkewCylinderExactDiscriminantTopology::Contact(contact) = topology else {
+        panic!("expected mixed contact topology, got {topology:#?}")
+    };
+    assert_eq!(contact.roots.len(), 3, "{contact:#?}");
+    assert_eq!(
+        contact.roots.iter().filter(|root| root.repeated).count(),
+        1,
+        "{contact:#?}"
+    );
+    assert_eq!(
+        contact.open_cell_signs,
+        vec![
+            StrictSign::Positive,
+            StrictSign::Positive,
+            StrictSign::Negative
+        ],
+        "{contact:#?}"
+    );
+    let folded = certify_skew_cylinder_folded_support_topologies(*contact).unwrap();
+    assert_eq!(folded.len(), 1);
+    assert_eq!(folded[0].root_ordinals(), [0, 2]);
+    assert_eq!(
+        folded[0].positive_cell(),
+        SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+    );
+    let reversed = classify_skew_cylinder_exact_discriminant(
+        [cylinders[1], cylinders[0]],
+        SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+    )
+    .unwrap();
+    let SkewCylinderExactDiscriminantTopology::Contact(reversed) = reversed else {
+        panic!("expected reversed mixed contact topology, got {reversed:#?}")
+    };
+    assert_eq!(reversed.roots.len(), 1, "{reversed:#?}");
+    assert!(reversed.roots[0].repeated(), "{reversed:#?}");
+    assert_eq!(reversed.open_cell_signs, vec![StrictSign::Positive]);
+}
+
 fn provenance(
     source_operand: usize,
     boundary: SkewCylinderAxialBoundary,
