@@ -2208,7 +2208,9 @@ fn support_root_evidence(
     formula_windows: [[ParamRange; 2]; 2],
 ) -> Result<SupportRootEvidence, IntersectionCertificateError> {
     let root = topology.isolated_support_root().ok_or_else(unsupported)?;
-    root_evidence(topology, root, formula_windows, false, false)
+    // An exact root at the authored zero seam has one canonical full-period
+    // representative; the opposite longitude must still lift ordinarily.
+    root_evidence(topology, root, formula_windows, true, false)
 }
 
 fn root_evidence(
@@ -2785,6 +2787,36 @@ mod tests {
             certify_persistent_skew_cylinder_support_contact(rooted, windows(), [0, 1], 1.0e-9, 0,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn exact_isolated_support_root_on_authored_seam_mints_a_persistent_point() {
+        let exact = match classify_skew_cylinder_exact_discriminant(
+            seam_cylinders(3.0),
+            SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+        )
+        .unwrap()
+        {
+            SkewCylinderExactDiscriminantTopology::Contact(topology) => *topology,
+            other => panic!("expected seam contact topology, got {other:?}"),
+        };
+        let [root] = exact.roots() else {
+            panic!("expected one isolated seam root")
+        };
+        let angular = root.angular_bracket();
+        assert!(root.repeated());
+        assert_eq!(angular.lo.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(angular.hi.to_bits(), 0.0_f64.to_bits());
+        let certified =
+            certify_persistent_skew_cylinder_support_contact(exact, windows(), [0, 1], 1.0e-9, 0)
+                .unwrap();
+        assert!(certified.point().dist(Point3::new(1.0, 0.0, 0.0)) <= 1.0e-12);
+        assert_eq!(certified.carrier_parameter().to_bits(), 0.0_f64.to_bits());
+        let longitudes = certified.source_longitude_enclosures();
+        assert_eq!(longitudes[0].lo().to_bits(), 0.0_f64.to_bits());
+        assert_eq!(longitudes[0].hi().to_bits(), 0.0_f64.to_bits());
+        assert!(longitudes[1].lo() <= core::f64::consts::PI);
+        assert!(longitudes[1].hi() >= core::f64::consts::PI);
     }
 
     #[test]
