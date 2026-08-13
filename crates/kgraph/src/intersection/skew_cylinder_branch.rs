@@ -97,7 +97,8 @@ pub use axial_bound::{
     SkewCylinderExactDiscriminantTopology, SkewCylinderFoldedSupportCellLocation,
     SkewCylinderFoldedSupportTopologyCertificate, SkewCylinderHalfAngleChart,
     SkewCylinderHalfAngleRootBracket, SkewCylinderStrictPositiveTwoSheetAdmissionCertificate,
-    SkewCylinderTouchingSupportTopologyCertificate, certify_skew_cylinder_folded_support_topology,
+    SkewCylinderTouchingSupportTopologyCertificate,
+    certify_skew_cylinder_folded_support_topologies, certify_skew_cylinder_folded_support_topology,
     certify_skew_cylinder_touching_support_topology, classify_skew_cylinder_axial_bound,
     classify_skew_cylinder_exact_discriminant, exact_skew_cylinder_discriminant,
 };

@@ -927,8 +927,18 @@ pub fn certify_persistent_skew_cylinder_folded_support(
                     else {
                         return Err(unsupported());
                     };
-                    let guard = inward_projective_guard(second.hi(), first.lo(), 4096.0)
-                        .ok_or_else(unsupported)?;
+                    let guard = if topology.topology().roots().len() == 4 {
+                        crate::exact::bounded_polynomial::RootBracket {
+                            lo: second.hi().next_up(),
+                            hi: first.lo().next_down(),
+                        }
+                    } else {
+                        inward_projective_guard(second.hi(), first.lo(), 4096.0)
+                            .ok_or_else(unsupported)?
+                    };
+                    if guard.lo >= guard.hi {
+                        return Err(unsupported());
+                    }
                     let cot_angle = |parameter| 2.0 * kcore::math::atan2(1.0, parameter);
                     (
                         SkewCylinderHalfAngleChart::Cotangent,
@@ -1146,14 +1156,23 @@ pub fn certify_persistent_skew_cylinder_folded_support(
             {
                 return Err(unsupported());
             }
-            // The seam-centered perpendicular frame amplifies the opposite
-            // trace's rounded position residual. Retain a fixed 1/4096 of
-            // the exact positive projective cell at each root: this remains
-            // inside the exact topology, separates both evaluator tubes, and
-            // stays within the public edge tolerance of the physical joins.
-            let guard =
+            // A four-root cycle can have a broad seam-crossing lobe even
+            // though its physical sheets meet at both bounding roots. Keep
+            // that component one ULP inside the proof-owned root brackets so
+            // its representatives remain within endpoint tolerance. The
+            // existing two-root layout retains its wider residual-tube guard.
+            let guard = if topology.topology().roots().len() == 4 {
+                crate::exact::bounded_polynomial::RootBracket {
+                    lo: second_projective.hi().next_up(),
+                    hi: first_projective.lo().next_down(),
+                }
+            } else {
                 inward_projective_guard(second_projective.hi(), first_projective.lo(), 4096.0)
-                    .ok_or_else(unsupported)?;
+                    .ok_or_else(unsupported)?
+            };
+            if guard.lo >= guard.hi {
+                return Err(unsupported());
+            }
             let negative_angle = 2.0 * kcore::math::atan2(guard.lo, 1.0);
             let positive_angle = 2.0 * kcore::math::atan2(guard.hi, 1.0);
             let low = ParamRange::new(authored.lo.next_up(), positive_angle.next_down());
@@ -1238,20 +1257,24 @@ pub fn certify_persistent_skew_cylinder_folded_support(
         if !raw_longitude.is_finite() {
             let opposite = endpoint.formula_longitude_enclosures[1];
             let authored = formula_windows[1][0];
-            if opposite.lo().to_bits() != authored.lo.to_bits()
-                || opposite.hi().to_bits() != authored.hi.to_bits()
+            let midpoint = |interval: Interval| interval.lo() / 2.0 + interval.hi() / 2.0;
+            let opposite_longitude = if opposite.lo().to_bits() == authored.lo.to_bits()
+                && opposite.hi().to_bits() == authored.hi.to_bits()
             {
+                authored.lo
+            } else if opposite.lo() > authored.lo && opposite.hi() < authored.hi {
+                midpoint(opposite)
+            } else {
                 return Err(unsupported_reason(
                     "folded support endpoint lacks a finite opposite longitude representative",
                 ));
-            }
-            let midpoint = |interval: Interval| interval.lo() / 2.0 + interval.hi() / 2.0;
+            };
             return Ok([
                 [
                     endpoint.carrier_parameter,
                     midpoint(endpoint.exact_heights[0]),
                 ],
-                [authored.lo, midpoint(endpoint.exact_heights[1])],
+                [opposite_longitude, midpoint(endpoint.exact_heights[1])],
             ]);
         }
         let lifted =
@@ -2321,8 +2344,14 @@ fn root_evidence(
     .ok_or_else(|| {
         unsupported_reason("folded support canonical root enclosure crosses its authored seam")
     })?;
-    let second_representative = algebra.authored_pcurve_derivs(1, carrier_parameter, 0).d[0].x;
-    let raw_second_longitude = longitude_interval(normalized_x, normalized_y);
+    let raw_second_longitude = support_root_longitude_interval(normalized_x, normalized_y);
+    let analytic_representative = algebra.authored_pcurve_derivs(1, carrier_parameter, 0).d[0].x;
+    let second_representative = if analytic_representative.is_finite() {
+        fit_full_period_parameter(analytic_representative, formula_windows[1][0])
+            .unwrap_or(analytic_representative)
+    } else {
+        raw_second_longitude.lo() / 2.0 + raw_second_longitude.hi() / 2.0
+    };
     let second_longitude = lift_interval_near(
         raw_second_longitude,
         second_representative,
@@ -2346,6 +2375,23 @@ fn root_evidence(
         exact_heights: [exact_v, exact_second_height],
         formula_longitude_enclosures: [first_longitude, second_longitude],
     })
+}
+
+fn support_root_longitude_interval(x: Interval, y: Interval) -> Interval {
+    if x.hi() >= 0.0 || !y.contains_zero() {
+        return longitude_interval(x, y);
+    }
+    let mut minimum = f64::INFINITY;
+    let mut maximum = f64::NEG_INFINITY;
+    for x_value in [x.lo(), x.hi()] {
+        for y_value in [y.lo(), y.hi()] {
+            let raw = kcore::math::atan2(y_value, x_value);
+            let value = if raw < 0.0 { raw + TAU } else { raw };
+            minimum = minimum.min(value);
+            maximum = maximum.max(value);
+        }
+    }
+    Interval::new(minimum.next_down(), maximum.next_up())
 }
 
 fn projective_root_trig_intervals(

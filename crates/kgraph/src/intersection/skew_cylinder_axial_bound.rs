@@ -412,6 +412,7 @@ pub enum SkewCylinderFoldedSupportCellLocation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkewCylinderFoldedSupportTopologyCertificate {
     topology: SkewCylinderDiscriminantContactTopologyCertificate,
+    root_ordinals: [usize; 2],
     positive_cell: SkewCylinderFoldedSupportCellLocation,
 }
 
@@ -481,11 +482,13 @@ impl SkewCylinderFoldedSupportTopologyCertificate {
 
     /// The two exact simple roots in canonical cyclic order.
     pub fn roots(&self) -> [SkewCylinderDiscriminantRoot; 2] {
-        self.topology
-            .roots
-            .as_slice()
-            .try_into()
-            .expect("sealed folded support topology retains two roots")
+        self.root_ordinals
+            .map(|ordinal| self.topology.roots[ordinal])
+    }
+
+    /// Root identities in the complete discriminant topology.
+    pub const fn root_ordinals(&self) -> [usize; 2] {
+        self.root_ordinals
     }
 
     /// Location of the sole strict-positive cell.
@@ -564,7 +567,19 @@ fn positive_radicand_lower_bound(
 pub fn certify_skew_cylinder_folded_support_topology(
     topology: SkewCylinderDiscriminantContactTopologyCertificate,
 ) -> Result<SkewCylinderFoldedSupportTopologyCertificate, SkewCylinderAxialRootFailure> {
-    let positive_cell = match (
+    let mut components = certify_skew_cylinder_folded_support_topologies(topology)?;
+    if components.len() != 1 {
+        return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+    }
+    Ok(components.remove(0))
+}
+
+/// Seal every simple-root-bounded strict-positive component in one complete
+/// two- or four-root discriminant cycle.
+pub fn certify_skew_cylinder_folded_support_topologies(
+    topology: SkewCylinderDiscriminantContactTopologyCertificate,
+) -> Result<Vec<SkewCylinderFoldedSupportTopologyCertificate>, SkewCylinderAxialRootFailure> {
+    let single = match (
         topology.identically_zero,
         topology.roots.as_slice(),
         topology.open_cell_signs.as_slice(),
@@ -572,19 +587,62 @@ pub fn certify_skew_cylinder_folded_support_topology(
         (false, [first, second], [StrictSign::Positive, StrictSign::Negative])
             if !first.repeated() && !second.repeated() =>
         {
-            SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+            Some(SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots)
         }
         (false, [first, second], [StrictSign::Negative, StrictSign::Positive])
             if !first.repeated() && !second.repeated() =>
         {
-            SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+            Some(SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam)
         }
-        _ => return Err(SkewCylinderAxialRootFailure::InconsistentTopology),
+        _ => None,
     };
-    Ok(SkewCylinderFoldedSupportTopologyCertificate {
-        topology,
-        positive_cell,
-    })
+    if let Some(positive_cell) = single {
+        return Ok(vec![SkewCylinderFoldedSupportTopologyCertificate {
+            topology,
+            root_ordinals: [0, 1],
+            positive_cell,
+        }]);
+    }
+
+    if topology.identically_zero
+        || topology.roots.len() != 4
+        || topology.open_cell_signs.len() != 4
+        || topology.roots.iter().any(|root| root.repeated())
+        || (0..4).any(|ordinal| {
+            topology.open_cell_signs[ordinal] == topology.open_cell_signs[(ordinal + 1) % 4]
+        })
+    {
+        return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+    }
+    let mut components = topology
+        .open_cell_signs
+        .iter()
+        .enumerate()
+        .filter(|(_, sign)| **sign == StrictSign::Positive)
+        .map(|(cell, _)| {
+            let (root_ordinals, positive_cell) = if cell == 3 {
+                (
+                    [0, 3],
+                    SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam,
+                )
+            } else {
+                (
+                    [cell, cell + 1],
+                    SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots,
+                )
+            };
+            SkewCylinderFoldedSupportTopologyCertificate {
+                topology: topology.clone(),
+                root_ordinals,
+                positive_cell,
+            }
+        })
+        .collect::<Vec<_>>();
+    if components.len() != 2 {
+        return Err(SkewCylinderAxialRootFailure::InconsistentTopology);
+    }
+    components.sort_by_key(|component| component.root_ordinals[0]);
+    Ok(components)
 }
 
 /// Seal one or two repeated discriminant roots whose every complementary cell

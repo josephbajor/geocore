@@ -1652,6 +1652,182 @@ fn exact_perpendicular_support_contact_on_opposite_authored_seam_publishes() {
 }
 
 #[test]
+fn four_simple_contact_cycle_publishes_two_folded_support_components() {
+    let rotated = Frame::new(
+        Point3::new(2.0, -1.0, 3.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let windows = skew_windows();
+    for (name, frame) in [("world", Frame::world()), ("rotated", rotated)] {
+        let [first, second] = perpendicular_axis_pair(frame, 0.0, 0.03125);
+        let (graph, first_handle, second_handle) = graph_pair(first, second);
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let replay = intersect_bounded_graph_surfaces(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            Tolerances::default(),
+        )
+        .unwrap();
+        let reversed = intersect_bounded_graph_surfaces(
+            &graph,
+            second_handle,
+            windows[1],
+            first_handle,
+            windows[0],
+            Tolerances::default(),
+        )
+        .unwrap();
+        assert_eq!(forward, replay, "{name} changed across replay");
+        for (direction, result, sources) in [
+            ("forward", &forward, [first_handle, second_handle]),
+            ("reversed", &reversed, [second_handle, first_handle]),
+        ] {
+            assert_eq!(result.branch_graph.source_surfaces, sources);
+            assert!(
+                result.raw.is_complete(),
+                "{name}/{direction}: {:#?}",
+                result.raw
+            );
+            assert!(result.raw.points.is_empty());
+            assert_eq!(result.raw.curves.len(), 6);
+            assert_eq!(result.branch_graph.edges.len(), 6);
+            assert_eq!(result.branch_graph.vertices.len(), 6);
+            assert!(result.skew_cylinder_support_contacts().is_empty());
+            assert!(result.skew_cylinder_touching_support_curves().is_empty());
+            let folded = result.skew_cylinder_folded_support_curves();
+            assert_eq!(folded.len(), 2);
+            assert_eq!(
+                folded
+                    .iter()
+                    .map(|component| component.certificate().topology().root_ordinals())
+                    .collect::<Vec<_>>(),
+                vec![[0, 3], [1, 2]]
+            );
+            assert_eq!(
+                folded
+                    .iter()
+                    .map(|component| component.certificate().topology().positive_cell())
+                    .collect::<Vec<_>>(),
+                vec![
+                    kgraph::SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam,
+                    kgraph::SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots,
+                ]
+            );
+            assert_eq!(
+                folded
+                    .iter()
+                    .map(|component| component.certificate().formula_residuals().len())
+                    .collect::<Vec<_>>(),
+                vec![4, 2]
+            );
+            assert_eq!(
+                result
+                    .branch_graph
+                    .vertices
+                    .iter()
+                    .filter(|vertex| matches!(
+                        vertex.event,
+                        IntersectionBranchVertexEvent::FoldedSupportJoin { .. }
+                    ))
+                    .count(),
+                4
+            );
+            assert_eq!(
+                result
+                    .branch_graph
+                    .vertices
+                    .iter()
+                    .filter(|vertex| matches!(
+                        vertex.event,
+                        IntersectionBranchVertexEvent::FoldedSupportSeamJoin { .. }
+                    ))
+                    .count(),
+                2
+            );
+            for edge in &result.branch_graph.edges {
+                assert_eq!(edge.topology, IntersectionBranchTopology::Open);
+                assert!(edge.certificate.as_skew_cylinder_folded_support().is_some());
+            }
+        }
+        assert_eq!(reversed.raw, forward.raw.clone().swapped());
+    }
+}
+
+#[test]
+fn four_simple_folded_support_components_own_atomic_combined_work() {
+    let [first, second] = perpendicular_axis_pair(Frame::world(), 0.0, 0.03125);
+    let windows = skew_windows();
+    let (graph, first_handle, second_handle) = graph_pair(first, second);
+    let session = SessionPolicy::v1();
+    let tolerances = Tolerances::default();
+    let exact_work =
+        SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK + SKEW_CYLINDER_FOLDED_SUPPORT_EXACT_WORK;
+    let run = |allowed| {
+        let context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(
+                BudgetPlan::new([LimitSpec::new(
+                    SKEW_CYLINDER_OPEN_SPAN_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            );
+        intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            first_handle,
+            windows[0],
+            second_handle,
+            windows[1],
+            &context,
+        )
+    };
+
+    let exact = run(exact_work);
+    let result = exact.result().unwrap();
+    assert_eq!(result.branch_graph.edges.len(), 6);
+    assert_eq!(result.skew_cylinder_folded_support_curves().len(), 2);
+    assert_eq!(
+        observed_work(exact.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        exact_work
+    );
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied = run(exact_work - 1);
+    let expected = LimitSnapshot {
+        stage: SKEW_CYLINDER_OPEN_SPAN_WORK,
+        resource: ResourceKind::Work,
+        consumed: exact_work,
+        allowed: exact_work - 1,
+    };
+    assert!(matches!(
+        denied.result(),
+        Err(GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(snapshot)
+        )) if *snapshot == expected
+    ));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(
+        observed_work(denied.report(), SKEW_CYLINDER_OPEN_SPAN_WORK),
+        0
+    );
+}
+
+#[test]
 fn authored_seam_support_contact_owns_existing_atomic_discriminant_work() {
     for offset in [3.0, -3.0] {
         let [first, second] = seam_perpendicular_axis_pair(Frame::world(), offset, 2.0);

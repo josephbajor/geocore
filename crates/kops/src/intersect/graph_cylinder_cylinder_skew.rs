@@ -45,9 +45,9 @@ use kgraph::{
     certify_persistent_skew_cylinder_folded_support,
     certify_persistent_skew_cylinder_support_contact,
     certify_persistent_skew_cylinder_touching_support,
-    certify_skew_cylinder_folded_support_topology, certify_skew_cylinder_touching_support_topology,
-    classify_skew_cylinder_exact_discriminant, classify_skew_cylinder_open_spans,
-    persistent_skew_cylinder_folded_support_exact_work,
+    certify_skew_cylinder_folded_support_topologies,
+    certify_skew_cylinder_touching_support_topology, classify_skew_cylinder_exact_discriminant,
+    classify_skew_cylinder_open_spans, persistent_skew_cylinder_folded_support_exact_work,
     persistent_skew_cylinder_touching_support_exact_work,
     plan_persistent_skew_cylinder_support_contact_boundaries, plan_skew_cylinder_root_clusters,
 };
@@ -527,24 +527,62 @@ pub(super) fn intersect_certified_skew_cylinders(
     )?;
 
     let first_admission = classify_one_parameterization(cylinders);
-    let (admission, parameterization_reversed) = match first_admission {
-        admission @ (DiscriminantAdmission::StrictPositive(_)
-        | DiscriminantAdmission::StrictNegative) => (admission, false),
+    let (admission, parameterization_reversed, folded_fallback) = match first_admission {
+        DiscriminantAdmission::StrictPositive(strict_positive) => {
+            let reverse_admission = classify_one_parameterization([cylinders[1], cylinders[0]]);
+            match reverse_admission {
+                DiscriminantAdmission::Contact(contact)
+                    if is_double_folded_support_topology(&contact) =>
+                {
+                    (
+                        DiscriminantAdmission::StrictPositive(strict_positive),
+                        false,
+                        Some(DoubleFoldedFallback {
+                            contact,
+                            formula_ranges: [ranges[1], ranges[0]],
+                            source_reversed: reversed ^ true,
+                        }),
+                    )
+                }
+                _ => (
+                    DiscriminantAdmission::StrictPositive(strict_positive),
+                    false,
+                    None,
+                ),
+            }
+        }
+        DiscriminantAdmission::StrictNegative => {
+            (DiscriminantAdmission::StrictNegative, false, None)
+        }
         DiscriminantAdmission::NumericResolution => (
             classify_one_parameterization([cylinders[1], cylinders[0]]),
             true,
+            None,
         ),
         DiscriminantAdmission::Contact(contact) => {
-            let reversed = classify_one_parameterization([cylinders[1], cylinders[0]]);
+            let reverse_admission = classify_one_parameterization([cylinders[1], cylinders[0]]);
             // A projection fold may look like Contact in one ruling chart
             // while the reverse chart proves two regular sheets. Conversely,
             // a contradictory reverse miss cannot supersede retained contact.
-            match reversed {
-                DiscriminantAdmission::StrictPositive(_) => (reversed, true),
+            match reverse_admission {
+                DiscriminantAdmission::StrictPositive(strict_positive)
+                    if is_double_folded_support_topology(&contact) =>
+                {
+                    (
+                        DiscriminantAdmission::StrictPositive(strict_positive),
+                        true,
+                        Some(DoubleFoldedFallback {
+                            contact,
+                            formula_ranges: ranges,
+                            source_reversed: reversed,
+                        }),
+                    )
+                }
+                admission @ DiscriminantAdmission::StrictPositive(_) => (admission, true, None),
                 DiscriminantAdmission::Contact(reversed_contact)
                     if prefers_double_touching_chart_roots(&reversed_contact, &contact) =>
                 {
-                    (DiscriminantAdmission::Contact(reversed_contact), true)
+                    (DiscriminantAdmission::Contact(reversed_contact), true, None)
                 }
                 DiscriminantAdmission::Contact(reversed_contact)
                     if cylinders[0].radius() > cylinders[1].radius() =>
@@ -555,12 +593,12 @@ pub(super) fn intersect_certified_skew_cylinders(
                     // invariant under operand swap and rigid motion, unlike
                     // the storage-order tie-break used by the general
                     // canonical dispatcher.
-                    (DiscriminantAdmission::Contact(reversed_contact), true)
+                    (DiscriminantAdmission::Contact(reversed_contact), true, None)
                 }
                 DiscriminantAdmission::StrictNegative
                 | DiscriminantAdmission::Contact(_)
                 | DiscriminantAdmission::NumericResolution => {
-                    (DiscriminantAdmission::Contact(contact), false)
+                    (DiscriminantAdmission::Contact(contact), false, None)
                 }
             }
         }
@@ -589,6 +627,7 @@ pub(super) fn intersect_certified_skew_cylinders(
                 proof_ranges,
                 reversed ^ parameterization_reversed,
                 tolerance,
+                folded_fallback,
                 scope,
             )
         }
@@ -642,6 +681,13 @@ fn is_double_touching_chart_root_layout(
         && first.hi.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
         && second.lo.to_bits() == (3.0 * core::f64::consts::FRAC_PI_2).to_bits()
         && second.hi.to_bits() == (3.0 * core::f64::consts::FRAC_PI_2).to_bits()
+}
+
+fn is_double_folded_support_topology(
+    topology: &kgraph::SkewCylinderDiscriminantContactTopologyCertificate,
+) -> bool {
+    certify_skew_cylinder_folded_support_topologies(topology.clone())
+        .is_ok_and(|components| components.len() == 2)
 }
 
 fn intersect_isolated_support_contact(
@@ -707,8 +753,8 @@ fn intersect_folded_support_contact(
     tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
-    let topology = match certify_skew_cylinder_folded_support_topology(contact.clone()) {
-        Ok(topology) => topology,
+    let topologies = match certify_skew_cylinder_folded_support_topologies(contact.clone()) {
+        Ok(topologies) => topologies,
         Err(_) => {
             return intersect_touching_support_contact(
                 contact,
@@ -720,38 +766,114 @@ fn intersect_folded_support_contact(
             );
         }
     };
-    let folded_work = persistent_skew_cylinder_folded_support_exact_work(&topology);
+    let Some((folded_works, folded_work)) = folded_support_work(&topologies) else {
+        return Ok(contact_topology_result_incomplete(scope));
+    };
     scope
         .ledger_mut()
         .charge(SKEW_CYLINDER_OPEN_SPAN_WORK, folded_work)?;
-    let certificate = match certify_persistent_skew_cylinder_folded_support(
-        topology,
-        formula_ranges,
-        formula_to_source,
-        tolerance,
-        folded_work,
-    ) {
-        Ok(certificate) => certificate,
-        Err(_) => {
-            return Ok(CertifiedSkewCylinderIntersections {
-                raw: contact_topology_incomplete(scope),
-                strict_miss: None,
-                branches: None,
-                isolated_contacts: Vec::new(),
-                through_contacts: Vec::new(),
-                support_contacts: Vec::new(),
-                folded_support_curves: Vec::new(),
-                touching_support_curves: Vec::new(),
-            });
-        }
+    let certificates = topologies
+        .into_iter()
+        .zip(folded_works)
+        .map(|(topology, work)| {
+            certify_persistent_skew_cylinder_folded_support(
+                topology,
+                formula_ranges,
+                formula_to_source,
+                tolerance,
+                work,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(certificates) = certificates else {
+        return Ok(contact_topology_result_incomplete(scope));
     };
-    let folded = SkewCylinderFoldedSupportCurve {
-        certificate: certificate.clone(),
-        source_reversed,
+    publish_folded_support_certificates(certificates, source_reversed)
+}
+
+fn folded_support_work(
+    topologies: &[kgraph::SkewCylinderFoldedSupportTopologyCertificate],
+) -> Option<(Vec<u64>, u64)> {
+    let works = topologies
+        .iter()
+        .map(persistent_skew_cylinder_folded_support_exact_work)
+        .collect::<Vec<_>>();
+    let total = works
+        .iter()
+        .try_fold(0_u64, |total, work| total.checked_add(*work))?;
+    Some((works, total))
+}
+
+fn publish_folded_support_certificates(
+    certificates: Vec<kgraph::PersistentSkewCylinderFoldedSupportCertificate>,
+    source_reversed: bool,
+) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
+    let foldeds = certificates
+        .into_iter()
+        .map(|certificate| SkewCylinderFoldedSupportCurve {
+            certificate,
+            source_reversed,
+        })
+        .collect::<Vec<_>>();
+    let branches = foldeds.iter().flat_map(folded_support_branches).collect();
+    publish_skew_topology_with_folded(branches, Vec::new(), Vec::new(), Vec::new(), foldeds)
+}
+
+fn try_double_folded_support_fallback(
+    fallback: DoubleFoldedFallback,
+    tolerance: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<Option<CertifiedSkewCylinderIntersections>> {
+    let Ok(topologies) = certify_skew_cylinder_folded_support_topologies(*fallback.contact) else {
+        return Ok(None);
     };
+    let Some((folded_works, folded_work)) = folded_support_work(&topologies) else {
+        return Ok(None);
+    };
+    if scope
+        .ledger()
+        .check_charge(SKEW_CYLINDER_OPEN_SPAN_WORK, folded_work)
+        .is_err()
+    {
+        scope
+            .ledger_mut()
+            .charge(SKEW_CYLINDER_OPEN_SPAN_WORK, folded_work)?;
+        unreachable!("failed read-only preflight must fail the identical charge");
+    }
+    let formula_to_source = if fallback.source_reversed {
+        [1, 0]
+    } else {
+        [0, 1]
+    };
+    let certificates = topologies
+        .into_iter()
+        .zip(folded_works)
+        .map(|(topology, work)| {
+            certify_persistent_skew_cylinder_folded_support(
+                topology,
+                fallback.formula_ranges,
+                formula_to_source,
+                tolerance,
+                work,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(certificates) = certificates else {
+        return Ok(None);
+    };
+    scope
+        .ledger_mut()
+        .charge(SKEW_CYLINDER_OPEN_SPAN_WORK, folded_work)?;
+    publish_folded_support_certificates(certificates, fallback.source_reversed).map(Some)
+}
+
+fn folded_support_branches(
+    folded: &SkewCylinderFoldedSupportCurve,
+) -> Vec<CertifiedSkewCylinderBranch> {
+    let certificate = &folded.certificate;
     let roots = certificate.topology().roots();
     let residuals = folded.residuals();
-    let branches = residuals
+    residuals
         .into_iter()
         .zip(certificate.formula_branch_endpoints())
         .map(|(residual, branch_endpoints)| {
@@ -818,8 +940,7 @@ fn intersect_folded_support_contact(
                 endpoint_proofs,
             }
         })
-        .collect();
-    publish_skew_topology_with_folded(branches, Vec::new(), Vec::new(), Vec::new(), vec![folded])
+        .collect()
 }
 
 fn intersect_touching_support_contact(
@@ -959,6 +1080,7 @@ fn intersect_strict_positive_two_sheet(
     ranges: [[ParamRange; 2]; 2],
     reversed: bool,
     tolerance: f64,
+    folded_fallback: Option<DoubleFoldedFallback>,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<CertifiedSkewCylinderIntersections> {
     if strict_positive.formula_cylinders() != cylinders {
@@ -975,6 +1097,15 @@ fn intersect_strict_positive_two_sheet(
     });
     if let [Ok(lower), Ok(upper)] = &certified {
         return publish_whole_sheets(vec![*lower, *upper], reversed);
+    }
+
+    if ranges
+        .iter()
+        .all(|window| window[0].width() == core::f64::consts::TAU)
+        && let Some(fallback) = folded_fallback
+        && let Some(folded) = try_double_folded_support_fallback(fallback, tolerance, scope)?
+    {
+        return Ok(folded);
     }
 
     if ranges
@@ -1788,6 +1919,12 @@ enum DiscriminantAdmission {
     StrictNegative,
     Contact(Box<kgraph::SkewCylinderDiscriminantContactTopologyCertificate>),
     NumericResolution,
+}
+
+struct DoubleFoldedFallback {
+    contact: Box<kgraph::SkewCylinderDiscriminantContactTopologyCertificate>,
+    formula_ranges: [[ParamRange; 2]; 2],
+    source_reversed: bool,
 }
 
 fn classify_one_parameterization(cylinders: [Cylinder; 2]) -> DiscriminantAdmission {

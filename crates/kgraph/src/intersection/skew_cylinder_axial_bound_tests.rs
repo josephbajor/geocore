@@ -1,10 +1,15 @@
 use super::*;
 use kgeom::frame::Frame;
+use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec3};
 
 fn perpendicular_pair(offset: f64) -> [Cylinder; 2] {
+    perpendicular_radii_pair(offset, 1.0, 2.0)
+}
+
+fn perpendicular_radii_pair(offset: f64, first_radius: f64, second_radius: f64) -> [Cylinder; 2] {
     [
-        Cylinder::new(Frame::world(), 1.0).unwrap(),
+        Cylinder::new(Frame::world(), first_radius).unwrap(),
         Cylinder::new(
             Frame::new(
                 Point3::new(0.0, offset, 0.0),
@@ -12,10 +17,75 @@ fn perpendicular_pair(offset: f64) -> [Cylinder; 2] {
                 Vec3::new(0.0, 1.0, 0.0),
             )
             .unwrap(),
-            2.0,
+            second_radius,
         )
         .unwrap(),
     ]
+}
+
+#[test]
+fn four_simple_contact_roots_have_a_strict_positive_reverse_parameterization() {
+    let direct = perpendicular_radii_pair(0.0, 1.0, 0.03125);
+    let forward =
+        classify_skew_cylinder_exact_discriminant(direct, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK)
+            .unwrap();
+    let SkewCylinderExactDiscriminantTopology::Contact(forward) = forward else {
+        panic!("expected four-simple contact topology")
+    };
+    assert_eq!(forward.roots.len(), 4);
+    assert!(forward.roots.iter().all(|root| !root.repeated));
+    assert_eq!(
+        forward.open_cell_signs,
+        vec![
+            StrictSign::Negative,
+            StrictSign::Positive,
+            StrictSign::Negative,
+            StrictSign::Positive,
+        ]
+    );
+    let folded = certify_skew_cylinder_folded_support_topologies(*forward.clone()).unwrap();
+    assert_eq!(folded.len(), 2);
+    assert_eq!(folded[0].root_ordinals(), [0, 3]);
+    assert_eq!(
+        folded[0].positive_cell(),
+        SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+    );
+    assert_eq!(folded[1].root_ordinals(), [1, 2]);
+    assert_eq!(
+        folded[1].positive_cell(),
+        SkewCylinderFoldedSupportCellLocation::BetweenCanonicalRoots
+    );
+    let windows = [
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-2.25, 2.25),
+        ],
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-1.25, 1.25),
+        ],
+    ];
+    for (ordinal, component) in folded.into_iter().enumerate() {
+        let work = crate::persistent_skew_cylinder_folded_support_exact_work(&component);
+        let persistent = crate::certify_persistent_skew_cylinder_folded_support(
+            component,
+            windows,
+            [0, 1],
+            1.0e-8,
+            work,
+        );
+        assert!(persistent.is_ok(), "component {ordinal}: {persistent:#?}");
+    }
+
+    let reversed = classify_skew_cylinder_exact_discriminant(
+        [direct[1], direct[0]],
+        SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+    )
+    .unwrap();
+    assert!(matches!(
+        reversed,
+        SkewCylinderExactDiscriminantTopology::StrictPositive(_)
+    ));
 }
 
 fn provenance(
