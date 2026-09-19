@@ -40,7 +40,7 @@ enum RadialRelation {
     ExteriorBroadPhase,
     ExteriorOneUlp,
     Tangent,
-    Internal,
+    InternalTangent,
     Coincident,
     Skew,
     SkewMiss,
@@ -252,7 +252,7 @@ fn relation_fixture(
         RadialRelation::ExteriorBroadPhase => (1.0, 1.0, [3.0, 0.0]),
         RadialRelation::ExteriorOneUlp => (1.0, 1.0, [2.0_f64.next_up(), 0.0]),
         RadialRelation::Tangent => (1.0, 1.0, [2.0, 0.0]),
-        RadialRelation::Internal => (2.0, 0.5, [0.25, 0.0]),
+        RadialRelation::InternalTangent => (2.0, 0.5, [1.5, 0.0]),
         RadialRelation::Coincident => (1.0, 1.0, [0.0, 0.0]),
         RadialRelation::Skew => (1.0, 1.0, [0.75, 0.0]),
         // The axes have cosine 4/5 and exact closest separation 4 along the
@@ -1726,7 +1726,7 @@ fn exact_skew_discriminant_miss_is_complete_read_only_and_swap_stable() {
 fn unsupported_cylinder_relations_remain_one_typed_gap_without_fallback_duplicates() {
     for relation in [
         RadialRelation::Tangent,
-        RadialRelation::Internal,
+        RadialRelation::InternalTangent,
         RadialRelation::Coincident,
         RadialRelation::Skew,
     ] {

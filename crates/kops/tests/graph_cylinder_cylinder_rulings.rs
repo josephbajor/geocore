@@ -36,6 +36,9 @@ use kops::intersect::{
     persist_verified_graph_surface_intersections,
 };
 
+#[path = "graph_cylinder_cylinder_rulings/radial_nesting.rs"]
+mod radial_nesting;
+
 fn range(lo: f64, hi: f64) -> ParamRange {
     ParamRange::new(lo, hi)
 }
@@ -2864,7 +2867,7 @@ fn default_graph_budget_admits_multiple_skew_pairs_in_one_owner_scope() {
 }
 
 #[test]
-fn tangent_internal_coincident_and_axially_clipped_secant_remain_typed_gaps() {
+fn tangent_coincident_and_axially_clipped_secant_remain_typed_gaps() {
     let first = Cylinder::new(Frame::world(), 1.0).unwrap();
     let window = cylinder_window(range(-1.0, 1.0));
     let cases = [
@@ -2880,7 +2883,7 @@ fn tangent_internal_coincident_and_axially_clipped_secant_remain_typed_gaps() {
         .unwrap(),
         Cylinder::new(
             Frame::new(
-                Point3::new(0.5, 0.0, 0.0),
+                Point3::new(0.75, 0.0, 0.0),
                 Vec3::new(0.0, 0.0, 1.0),
                 Vec3::new(1.0, 0.0, 0.0),
             )

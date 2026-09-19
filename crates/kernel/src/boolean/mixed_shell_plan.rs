@@ -131,7 +131,6 @@ impl MixedShellCellKey {
     }
 }
 
-#[derive(Clone)]
 pub(crate) enum MixedArrangementBinding<'a> {
     Planar {
         face: FaceId,
@@ -661,16 +660,13 @@ pub(crate) fn arrange_mixed_shell<'a>(
         .curve_fragments()
         .iter()
         .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole));
-    let bindings = bindings.into_iter().collect::<Vec<_>>();
-    let mut arrangement = arrange_selected_mixed_shell(
+    arrange_selected_mixed_shell(
         store,
         graph,
-        bindings.iter().cloned(),
+        bindings,
         selected.into_iter().map(selected_cell),
         face_only_lineage,
-    )?;
-    source_rings::attach(store, graph, &bindings, &mut arrangement)?;
-    Ok(arrangement)
+    )
 }
 
 pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
@@ -2140,7 +2136,7 @@ fn arrange_selected_mixed_shell<'a>(
                     key.source,
                 )?;
                 let lineage = planar_cut_lineage(graph, face, *operand, arrangement, key.source)?;
-                let loops = cell
+                let mut loops = cell
                     .boundaries()
                     .iter()
                     .map(|boundary| {
@@ -2155,6 +2151,15 @@ fn arrange_selected_mixed_shell<'a>(
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                source_rings::append_for_cell(
+                    store,
+                    graph,
+                    &arrangements,
+                    binding,
+                    cell_key,
+                    &mut loops,
+                    &mut cap_rings,
+                )?;
                 MixedShellFacePlan {
                     source: key.source,
                     source_face: face.clone(),

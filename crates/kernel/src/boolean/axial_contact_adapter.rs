@@ -1362,7 +1362,11 @@ fn validate_contact_gaps(
             [sources[0].source.side_face(), sources[1].source.side_face()],
         ),
     ];
-    if graph.gaps().len() != expected.len() {
+    // The exact contact relation independently certifies the side supports.
+    // Their SSI gap may disappear as the lower solver proves more empty
+    // surface intersections (including strict radial nesting). The three
+    // contact-boundary gaps remain mandatory; a side-pair gap is optional.
+    if !(expected.len() - 1..=expected.len()).contains(&graph.gaps().len()) {
         return Err(MixedBoundaryError::SourceTopology);
     }
     let mut consumed = [false; 4];
@@ -1381,6 +1385,7 @@ fn validate_contact_gaps(
     }
     consumed
         .into_iter()
+        .take(expected.len() - 1)
         .all(|value| value)
         .then_some(())
         .ok_or(MixedBoundaryError::SourceTopology)

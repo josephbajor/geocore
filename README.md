@@ -44,7 +44,7 @@ trusted adapter and conformance seams; they are not examples of the ordinary
 application boundary.
 
 A composed example extrudes a plate and subtracts three separated cylindrical
-through holes, reusing each Boolean result as the next operand:
+through holes, then enlarges the first hole using the previous Boolean result:
 
 ```sh
 cargo run --release -p kernel-lifecycle --example drilled_plate -- target/drilled-plate.x_t

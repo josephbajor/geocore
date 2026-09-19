@@ -28,7 +28,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))?
         .into_result()?
         .body();
-    for (x, y, radius) in [(-2.5, -1.0, 0.75), (2.0, -1.0, 0.5), (0.0, 2.0, 0.625)] {
+    for (x, y, radius) in [
+        (-2.5, -1.0, 0.75),
+        (2.0, -1.0, 0.5),
+        (0.0, 2.0, 0.625),
+        (-2.5, -1.0, 1.25),
+    ] {
         let mut edit = session.edit_part(part.clone())?;
         let tool = edit
             .create_cylinder(CylinderRequest::new(
@@ -58,6 +63,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .export_xt(ExportXtRequest::new(body))?
         .into_result()?;
     std::fs::write(output, exported.bytes())?;
-    println!("Wrote a Full-checked plate with three sequential through cuts.");
+    println!("Wrote a Full-checked plate with three holes, then enlarged the first hole.");
     Ok(())
 }

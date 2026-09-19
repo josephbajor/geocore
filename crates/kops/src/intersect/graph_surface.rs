@@ -12,8 +12,9 @@ pub use super::graph_branch_certificate::{
     SkewCylinderWholeContactBranchCertificate,
 };
 use super::graph_cylinder_cylinder::{
-    ParallelCylinderExteriorRadialSeparation, build_verified_cylinder_cylinder_ruling_branch,
-    intersect_certified_parallel_cylinders, require_exact_parallel_cylinder_axes,
+    ParallelCylinderExteriorRadialSeparation, ParallelCylinderStrictRadialNesting,
+    build_verified_cylinder_cylinder_ruling_branch, intersect_certified_parallel_cylinders,
+    require_exact_parallel_cylinder_axes,
 };
 use super::graph_cylinder_cylinder_skew::{
     CertifiedSkewCylinderBranch, CertifiedSkewCylinderIntersections,
@@ -435,6 +436,7 @@ pub struct GraphSurfaceSurfaceIntersections {
     /// Verified operation-local branch graph derived from `raw`.
     pub branch_graph: IntersectionBranchGraph,
     parallel_cylinder_exterior_radial_separation: Option<ParallelCylinderExteriorRadialSeparation>,
+    parallel_cylinder_strict_radial_nesting: Option<ParallelCylinderStrictRadialNesting>,
     skew_cylinder_strict_discriminant_miss: Option<SkewCylinderStrictDiscriminantMiss>,
     skew_cylinder_isolated_contacts: Vec<SkewCylinderIsolatedContact>,
     skew_cylinder_through_contacts: Vec<SkewCylinderThroughContact>,
@@ -455,6 +457,14 @@ impl GraphSurfaceSurfaceIntersections {
         &self,
     ) -> Option<ParallelCylinderExteriorRadialSeparation> {
         self.parallel_cylinder_exterior_radial_separation
+    }
+
+    /// Exact proof that strictly nested parallel cylindrical surfaces cannot
+    /// intersect. This must never be used to infer disjoint solid material.
+    pub const fn parallel_cylinder_strict_radial_nesting(
+        &self,
+    ) -> Option<ParallelCylinderStrictRadialNesting> {
+        self.parallel_cylinder_strict_radial_nesting
     }
 
     /// Exact proof that a nonparallel Cylinder/Cylinder pair has a strictly
@@ -1072,6 +1082,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         _ => return Err(unsupported()),
     };
     let mut parallel_cylinder_exterior_radial_separation = None;
+    let mut parallel_cylinder_strict_radial_nesting = None;
     let mut skew_cylinder_strict_discriminant_miss = None;
     let mut skew_cylinder_branches = None;
     let mut skew_cylinder_isolated_contacts = None;
@@ -1142,9 +1153,10 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             let cylinders = [cylinder_a, cylinder_b];
             let ranges = [range_a, range_b];
             let raw = if require_exact_parallel_cylinder_axes(cylinders).is_ok() {
-                let (raw, separation) =
+                let (raw, separation, nesting) =
                     intersect_certified_parallel_cylinders(cylinders, ranges, tolerances)?;
                 parallel_cylinder_exterior_radial_separation = separation;
+                parallel_cylinder_strict_radial_nesting = nesting;
                 raw
             } else {
                 let CertifiedSkewCylinderIntersections {
@@ -1350,6 +1362,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         raw,
         branch_graph,
         parallel_cylinder_exterior_radial_separation,
+        parallel_cylinder_strict_radial_nesting,
         skew_cylinder_strict_discriminant_miss,
         skew_cylinder_isolated_contacts: skew_cylinder_isolated_contacts.unwrap_or_default(),
         skew_cylinder_through_contacts: skew_cylinder_through_contacts.unwrap_or_default(),

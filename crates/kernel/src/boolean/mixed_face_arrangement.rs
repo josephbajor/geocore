@@ -819,7 +819,7 @@ fn arrange_planar_face_evidence_with_lineage(
     face: RawFaceId,
     cuts: Vec<FaceCutEvidence>,
 ) -> Result<MixedPlanarFaceOutput, MixedFaceArrangementError> {
-    let retained_loops = source_rings::untouched_rings(store, face, &cuts)?;
+    let uncut_rings = source_rings::admit_rings(store, face, &cuts)?;
     let roots = collect_unique_roots(&cuts)?;
     let split = split_source_boundary(store, face, &roots)?;
     certify_cut_embedding(&cuts)?;
@@ -851,26 +851,11 @@ fn arrange_planar_face_evidence_with_lineage(
         }
         Err(error) => return Err(MixedFaceArrangementError::Arrangement(error)),
     };
-    let retained_cell = arrangement
-        .cells
-        .iter()
-        .find(|cell| {
-            cell.boundaries.iter().any(|cycle| {
-                cycle
-                    .uses()
-                    .iter()
-                    .any(|use_| matches!(use_.edge(), ArrangementEdgeKey::Source(_)))
-            })
-        })
-        .map(|cell| cell.key)
-        .ok_or(MixedFaceArrangementError::EmptySourceLoop)?;
+    let retained_rings = source_rings::assign_to_cells(uncut_rings, &arrangement)?;
     Ok(MixedPlanarFaceOutput {
         arrangement,
         lineage: MixedPlanarSourceLineage {
-            retained_rings: retained_loops
-                .into_iter()
-                .map(|ring| (ring, retained_cell))
-                .collect(),
+            retained_rings,
             spans: split.lineage,
             source_vertices: split.source_vertices,
         },

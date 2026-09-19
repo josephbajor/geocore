@@ -240,7 +240,7 @@ pub(super) fn collect_certified_curved_branches(
                     // `Ok` is the proof boundary: the graph-aware solver owns the
                     // complete-domain exclusion theorem for its admitted surface
                     // pair. Its closed Cylinder/Cylinder admissions own both
-                    // parallel exterior separation and strict-negative skew
+                    // parallel exterior separation, strict nesting, and strict-negative skew
                     // discriminant misses; Section neither reconstructs nor
                     // tolerance-tests those relations.
                     // Require the verified graph payload to agree before
@@ -248,12 +248,23 @@ pub(super) fn collect_certified_curved_branches(
                     let parallel_miss = intersections
                         .parallel_cylinder_exterior_radial_separation()
                         .is_some();
+                    let nesting = intersections
+                        .parallel_cylinder_strict_radial_nesting()
+                        .is_some();
                     let skew_miss = intersections
                         .skew_cylinder_strict_discriminant_miss()
                         .is_some();
                     let certified_empty = match pair_kind {
-                        CertifiedCurvedPair::PlaneCylinder => !parallel_miss && !skew_miss,
-                        CertifiedCurvedPair::CylinderCylinder => parallel_miss ^ skew_miss,
+                        CertifiedCurvedPair::PlaneCylinder => {
+                            !parallel_miss && !skew_miss && !nesting
+                        }
+                        CertifiedCurvedPair::CylinderCylinder => {
+                            [parallel_miss, skew_miss, nesting]
+                                .into_iter()
+                                .filter(|proof| *proof)
+                                .count()
+                                == 1
+                        }
                     };
                     if intersections.branch_graph.vertices.is_empty()
                         && intersections.branch_graph.edges.is_empty()

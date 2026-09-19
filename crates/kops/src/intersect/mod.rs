@@ -107,7 +107,8 @@ pub use error::{
 };
 pub use graph_cylinder_cylinder::{
     ParallelCylinderExteriorRadialSeparation, ParallelCylinderInternalTangency,
-    ParallelCylinderRadialRelation, classify_parallel_cylinder_radial_relation,
+    ParallelCylinderRadialRelation, ParallelCylinderStrictRadialNesting,
+    classify_parallel_cylinder_radial_relation,
 };
 pub use graph_cylinder_cylinder_skew::{
     SKEW_CYLINDER_AXIAL_CLIP_EXACT_WORK, SKEW_CYLINDER_AXIAL_CLIP_WORK,

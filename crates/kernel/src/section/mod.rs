@@ -6,7 +6,7 @@
 //! This module computes that graph for the planar slice — every face on a
 //! plane, every edge a bounded straight line. It also exposes verified
 //! Plane/Cylinder circle and ruling-line carriers plus strict parallel
-//! Cylinder/Cylinder ruling carriers, proof-certified exterior radial misses,
+//! Cylinder/Cylinder ruling carriers, proof-certified exterior radial misses and strict radial nesting,
 //! exact nonparallel strict-discriminant misses, and strictly contained
 //! nonparallel sheets on topology-certified whole cylinder bands. Procedural
 //! sheets retain paired nonlinear pcurves and publish as endpoint-free rings.
@@ -1290,7 +1290,7 @@ impl BodySectionGraph {
     }
 }
 
-pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, strict parallel Cylinder/Cylinder rulings or exterior radial misses, and exact nonparallel strict-discriminant misses or strictly contained sheets on topology-certified whole bands in this slice";
+pub(crate) const GAP_PLANAR_ONLY: &str = "body sectioning supports planar face pairs, certified Plane/Cylinder pairs, strict parallel Cylinder/Cylinder rulings, exterior radial misses or strict nesting, and exact nonparallel strict-discriminant misses or strictly contained sheets on topology-certified whole bands in this slice";
 pub(crate) const GAP_LINE_EDGES_ONLY: &str =
     "body sectioning is certified only for faces bounded by straight line edges";
 pub(crate) const GAP_BOUNDED_EDGES_ONLY: &str =
@@ -1338,7 +1338,7 @@ impl Part<'_> {
     /// certified planar, Plane/Cylinder, strict parallel Cylinder/Cylinder,
     /// exact nonparallel strict-discriminant-miss, and strictly contained
     /// nonparallel whole-sheet slices (including proof-certified exterior
-    /// radial misses), coincident or tangent face pairs, and any
+    /// radial misses and strict radial nesting), coincident or tangent face pairs, and any
     /// ordering that conservative intervals cannot certify yield
     /// [`SectionCompletion::Indeterminate`] with structured [`SectionGap`]
     /// reasons instead of a guessed graph.

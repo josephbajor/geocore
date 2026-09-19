@@ -1,15 +1,11 @@
 //! Promotion of exact parallel Cylinder/Cylinder radial relations.
 //!
 //! The lower analytic solver owns finite-window discovery. This adapter admits
-//! either its complete strict-secant result (exactly two transverse ruling-line
-//! branches) or an exact proof that the two infinite radial supports are
-//! exterior-disjoint. The latter is the only successful empty result in this
-//! closed admission, so generic empty or axially clipped lower results cannot
-//! masquerade as radial separation. The proof-only classifier additionally
-//! exposes exact external tangency, internal tangency, and common-cylinder
-//! support without admitting them as graph intersections. Other internal
-//! relations, skew axes, and every incomplete family remain explicit typed
-//! gaps.
+//! complete strict-secant ruling branches or exact exclusion of intersection
+//! between strictly exterior-separated or strictly nested radial supports.
+//! The two empty proofs stay distinct: nesting says nothing about separation
+//! of the solid material. Axial-window misses, contact, and incomplete lower
+//! results cannot masquerade as radial support separation.
 
 use kcore::predicates::{Orientation, orient3d};
 use kgeom::curve::Line;
@@ -36,7 +32,7 @@ use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
 
-const SUPPORTED_PARALLEL_RESULT_REASON: &str = "Cylinder/Cylinder graph promotion requires either exactly two transverse rulings or proven strict exterior radial separation on exact parallel axes";
+const SUPPORTED_PARALLEL_RESULT_REASON: &str = "Cylinder/Cylinder graph promotion requires either exactly two transverse rulings or proven strict radial support separation on exact parallel axes";
 
 /// Non-forgeable completion evidence for exact exterior radial separation of
 /// one parallel or antiparallel Cylinder/Cylinder graph query.
@@ -46,6 +42,13 @@ const SUPPORTED_PARALLEL_RESULT_REASON: &str = "Cylinder/Cylinder graph promotio
 /// surface identities and complete-empty raw result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParallelCylinderExteriorRadialSeparation {
+    _private: (),
+}
+
+/// Non-forgeable evidence that parallel cylindrical surfaces are strictly
+/// nested and have no intersection. This is not a solid-disjointness witness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelCylinderStrictRadialNesting {
     _private: (),
 }
 
@@ -119,8 +122,8 @@ pub(super) fn require_exact_parallel_cylinder_axes(
 
 /// Discover one admitted result from a deterministic source order.
 ///
-/// Successful emptiness is reserved for the exact exterior radial predicate
-/// `d > radius_a + radius_b`. In particular, a complete-empty lower result
+/// Successful emptiness requires `d > radius_a + radius_b` or
+/// `d < |radius_a - radius_b|`. In particular, a complete-empty lower result
 /// caused only by disjoint axial windows is not admitted. The lower range
 /// validator runs before the global radial shortcut so malformed windows never
 /// become certified misses.
@@ -136,6 +139,7 @@ pub(super) fn intersect_certified_parallel_cylinders(
 ) -> GraphSurfaceIntersectionResult<(
     SurfaceSurfaceIntersections,
     Option<ParallelCylinderExteriorRadialSeparation>,
+    Option<ParallelCylinderStrictRadialNesting>,
 )> {
     require_exact_parallel_cylinder_axes(cylinders)?;
     validate_ranges(ranges[0], ranges[1])
@@ -145,6 +149,14 @@ pub(super) fn intersect_certified_parallel_cylinders(
         return Ok((
             SurfaceSurfaceIntersections::complete_empty(),
             Some(ParallelCylinderExteriorRadialSeparation::certified()),
+            None,
+        ));
+    }
+    if exact_strict_interior_radial_miss(cylinders) {
+        return Ok((
+            SurfaceSurfaceIntersections::complete_empty(),
+            None,
+            Some(ParallelCylinderStrictRadialNesting { _private: () }),
         ));
     }
     let reversed =
@@ -170,7 +182,7 @@ pub(super) fn intersect_certified_parallel_cylinders(
     .map_err(IntersectionError::from)
     .map_err(GraphSurfaceIntersectionError::Intersection)?;
     require_strict_two_ruling_result(&result)?;
-    Ok((result, None))
+    Ok((result, None, None))
 }
 
 /// Classify the supported exact relation of two infinite radial supports.
@@ -276,6 +288,27 @@ pub fn classify_parallel_cylinder_radial_relation(
 fn exact_strict_exterior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
     classify_parallel_cylinder_radial_relation(cylinders)
         == ParallelCylinderRadialRelation::StrictExterior
+}
+
+/// Compare the exact transverse metric with the exact squared difference of
+/// radii under both stored axes. Rounded subtraction cannot certify contact
+/// as a strict miss; overflow or unequal signs refuse the proof.
+fn exact_strict_interior_radial_miss(cylinders: [Cylinder; 2]) -> bool {
+    let proof = || {
+        let offset = exact_vector_difference(
+            cylinders[1].frame().origin().to_array(),
+            cylinders[0].frame().origin().to_array(),
+        )?;
+        let metrics = [
+            exact_parallel_radial_metric(&offset, cylinders[0].frame().z().to_array())?,
+            exact_parallel_radial_metric(&offset, cylinders[1].frame().z().to_array())?,
+        ];
+        let difference = exact(cylinders[0].radius())?
+            .sub(&exact(cylinders[1].radius())?)
+            .ok()?;
+        exact_parallel_radial_clearance_signs(&metrics, &difference.mul(&difference).ok()?)
+    };
+    proof().is_some_and(|signs| signs.into_iter().all(|sign| sign < 0))
 }
 
 struct ExactParallelRadialMetric {

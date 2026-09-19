@@ -22,6 +22,10 @@ fn cutter(session: &mut Session, part: &PartId, frame: Frame, cut: (f64, f64, f6
 }
 
 fn fixture(frame: Frame) -> BooleanFixture {
+    fixture_with_first_cut(frame, CUTS[0])
+}
+
+fn fixture_with_first_cut(frame: Frame, first: (f64, f64, f64)) -> BooleanFixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
     let outer = vec![
@@ -38,7 +42,7 @@ fn fixture(frame: Frame) -> BooleanFixture {
         .into_result()
         .unwrap()
         .body();
-    let right = cutter(&mut session, &part, frame, CUTS[0]);
+    let right = cutter(&mut session, &part, frame, first);
     BooleanFixture {
         session,
         part,
@@ -66,7 +70,7 @@ fn cut(fixture: &mut BooleanFixture) -> kernel::BooleanCreatedResult {
         BooleanOperation::Subtract,
         OperationSettings::new(),
     )) else {
-        panic!("a separated through cut must create one solid")
+        panic!("a supported through cut must create one solid")
     };
     assert_eq!(created.bodies().len(), 1);
     assert_boolean_created_full_valid(&created);
@@ -80,7 +84,11 @@ fn second_cut_fixture(next: (f64, f64, f64)) -> BooleanFixture {
     fixture
 }
 
-fn assert_lineage(fixture: &BooleanFixture, created: &kernel::BooleanCreatedResult, holes: usize) {
+fn assert_lineage(
+    fixture: &BooleanFixture,
+    created: &kernel::BooleanCreatedResult,
+    expected_sources: [usize; 2],
+) {
     let part = fixture.session.part(fixture.part.clone()).unwrap();
     let original = part
         .body(fixture.left.clone())
@@ -119,7 +127,7 @@ fn assert_lineage(fixture: &BooleanFixture, created: &kernel::BooleanCreatedResu
             counts[1] += 1;
         }
     }
-    assert_eq!(counts, [5 + holes, 1]);
+    assert_eq!(counts, expected_sources);
     assert_eq!(derived.len(), result.len());
     assert!(
         created
@@ -129,9 +137,8 @@ fn assert_lineage(fixture: &BooleanFixture, created: &kernel::BooleanCreatedResu
     );
 }
 
-#[test]
-fn composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames() {
-    let frames = [
+fn frames() -> [Frame; 4] {
+    [
         Frame::world(),
         Frame::world().with_origin(Point3::new(4.0, -3.0, 2.0)),
         Frame::new(
@@ -146,8 +153,12 @@ fn composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames() {
             Vec3::new(0.8, -0.6, 0.0),
         )
         .unwrap(),
-    ];
-    for frame in frames {
+    ]
+}
+
+#[test]
+fn composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames() {
+    for frame in frames() {
         let mut previous_exports = None;
         for _ in 0..2 {
             let mut fixture = fixture(frame);
@@ -184,7 +195,7 @@ fn composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames() {
                     boolean_body_topology_signature(&fixture, body.clone()),
                     [7 + index, 14 + 2 * index, 8]
                 );
-                assert_lineage(&fixture, &created, index + 1);
+                assert_lineage(&fixture, &created, [6 + index, 1]);
                 assert_eq!(export(&fixture, fixture.left.clone()), sources[0]);
                 assert_eq!(export(&fixture, fixture.right.clone()), sources[1]);
                 let part = fixture.session.part(fixture.part.clone()).unwrap();
@@ -253,8 +264,12 @@ fn composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames() {
 
 #[test]
 fn composed_cuts_budget_boundaries_are_exact_and_failure_atomic() {
+    assert_work_boundaries(|| second_cut_fixture(CUTS[1]));
+}
+
+fn assert_work_boundaries(mut make_fixture: impl FnMut() -> BooleanFixture) {
     let baseline = run_boolean(
-        &mut second_cut_fixture(CUTS[1]),
+        &mut make_fixture(),
         BooleanOperation::Subtract,
         OperationSettings::new(),
     );
@@ -288,7 +303,7 @@ fn composed_cuts_budget_boundaries_are_exact_and_failure_atomic() {
             )
         };
         let admitted = run_boolean(
-            &mut second_cut_fixture(CUTS[1]),
+            &mut make_fixture(),
             BooleanOperation::Subtract,
             settings(usage.consumed),
         );
@@ -296,7 +311,7 @@ fn composed_cuts_budget_boundaries_are_exact_and_failure_atomic() {
             admitted.result().unwrap(),
             BooleanOutcome::Success(BooleanResult::Created(_))
         ));
-        let mut fixture = second_cut_fixture(CUTS[1]);
+        let mut fixture = make_fixture();
         let before = boolean_topology_counts(&fixture);
         let source = export(&fixture, fixture.left.clone());
         let denied = run_boolean(
@@ -318,9 +333,14 @@ fn composed_cuts_budget_boundaries_are_exact_and_failure_atomic() {
 
 #[test]
 fn composed_cuts_refuse_interacting_existing_holes_without_mutation() {
-    // Overlap, tangency, and a cutter surrounding the first hole are outside
-    // the untouched-ring contract, even though their set differences exist.
-    for next in [(-2.0, -1.0, 0.75), (-1.0, -1.0, 0.75), (-2.5, -1.0, 1.0)] {
+    // Secant overlap, external/internal tangency, and unresolved near contact
+    // require split source rings and still fail closed.
+    for next in [
+        (-2.0, -1.0, 0.75),
+        (-1.0, -1.0, 0.75),
+        (-2.0, -1.0, 1.25),
+        (-2.0_f64.next_down(), -1.0, 1.25),
+    ] {
         let mut fixture = second_cut_fixture(next);
         let before = boolean_topology_counts(&fixture);
         let source = export(&fixture, fixture.left.clone());
@@ -336,4 +356,231 @@ fn composed_cuts_refuse_interacting_existing_holes_without_mutation() {
         assert_eq!(boolean_topology_counts(&fixture), before);
         assert_eq!(export(&fixture, fixture.left.clone()), source);
     }
+}
+
+fn nested_cut_fixture(
+    frame: Frame,
+    holes: &[(f64, f64, f64)],
+    next: (f64, f64, f64),
+) -> BooleanFixture {
+    let mut fixture = fixture_with_first_cut(frame, holes[0]);
+    for (index, &hole) in holes.iter().enumerate() {
+        if index != 0 {
+            fixture.right = cutter(&mut fixture.session, &fixture.part, frame, hole);
+        }
+        fixture.left = cut(&mut fixture).bodies()[0].clone();
+    }
+    fixture.right = cutter(&mut fixture.session, &fixture.part, frame, next);
+    fixture
+}
+
+#[test]
+fn composed_cuts_replace_nested_holes_and_preserve_unaffected_material() {
+    struct Case {
+        holes: &'static [(f64, f64, f64)],
+        cut: (f64, f64, f64),
+        result_holes: &'static [(f64, f64, f64)],
+        unchanged: bool,
+    }
+    let cases = [
+        Case {
+            holes: &[(0.0, 0.0, 0.5)],
+            cut: (0.0, 0.0, 1.0),
+            result_holes: &[(0.0, 0.0, 1.0)],
+            unchanged: false,
+        },
+        Case {
+            holes: &[(0.0, 0.0, 0.5)],
+            cut: (0.25, 0.125, 1.25),
+            result_holes: &[(0.25, 0.125, 1.25)],
+            unchanged: false,
+        },
+        Case {
+            holes: &[(-1.0, 0.0, 0.25), (1.0, 0.0, 0.375), (3.0, 2.0, 0.25)],
+            cut: (0.0, 0.0, 1.75),
+            result_holes: &[(0.0, 0.0, 1.75), (3.0, 2.0, 0.25)],
+            unchanged: false,
+        },
+        Case {
+            holes: &[(-1.0, 0.0, 0.25), (0.0, 1.0, 0.25), (1.0, 0.0, 0.25)],
+            cut: (0.0, 0.0, 1.75),
+            result_holes: &[(0.0, 0.0, 1.75)],
+            unchanged: false,
+        },
+        Case {
+            holes: &[(0.0, 0.0, 1.5)],
+            cut: (0.125, 0.125, 0.5),
+            result_holes: &[(0.0, 0.0, 1.5)],
+            unchanged: true,
+        },
+    ];
+    for frame in frames() {
+        for case in &cases {
+            let mut prior = None;
+            for _ in 0..2 {
+                let mut fixture = nested_cut_fixture(frame, case.holes, case.cut);
+                let before = [
+                    export(&fixture, fixture.left.clone()),
+                    export(&fixture, fixture.right.clone()),
+                ];
+                let source_counts = boolean_topology_counts(&fixture);
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                let request =
+                    SectionBodiesRequest::new(fixture.left.clone(), fixture.right.clone());
+                let graph = part
+                    .section_bodies(request.clone())
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(
+                    graph,
+                    part.section_bodies(request).unwrap().into_result().unwrap()
+                );
+                assert_eq!(graph.completion(), SectionCompletion::Complete, "{graph:?}");
+                assert!(graph.gaps().is_empty());
+                assert_eq!(
+                    graph.curve_fragments().len(),
+                    if case.unchanged { 0 } else { 2 }
+                );
+                let swapped = part
+                    .section_bodies(SectionBodiesRequest::new(
+                        fixture.right.clone(),
+                        fixture.left.clone(),
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(swapped.completion(), SectionCompletion::Complete);
+                assert!(swapped.gaps().is_empty());
+                assert_eq!(
+                    swapped.curve_fragments().len(),
+                    graph.curve_fragments().len()
+                );
+                // A contained void never acquires a material-disjointness witness.
+                let exterior_pairs = if case.unchanged {
+                    0
+                } else {
+                    case.result_holes.len() - 1
+                };
+                assert_eq!(
+                    graph.cylinder_cylinder_exterior_radial_separations().len(),
+                    exterior_pairs
+                );
+                assert_eq!(
+                    swapped
+                        .cylinder_cylinder_exterior_radial_separations()
+                        .len(),
+                    exterior_pairs
+                );
+                assert_eq!(boolean_topology_counts(&fixture), source_counts);
+                let created = cut(&mut fixture);
+                let body = created.bodies()[0].clone();
+                let holes = case.result_holes.len();
+                assert_eq!(
+                    boolean_body_topology_signature(&fixture, body.clone()),
+                    [6 + holes, 12 + 2 * holes, 8]
+                );
+                assert_lineage(
+                    &fixture,
+                    &created,
+                    if case.unchanged {
+                        [6 + holes, 0]
+                    } else {
+                        [5 + holes, 1]
+                    },
+                );
+                assert_eq!(export(&fixture, fixture.left.clone()), before[0]);
+                assert_eq!(export(&fixture, fixture.right.clone()), before[1]);
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                let report = part
+                    .check_body(CheckBodyRequest::new(body.clone(), CheckLevel::Full))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(report.outcome(), CheckOutcome::Valid);
+                let mesh = part
+                    .tessellate_body(TessellateBodyRequest::new(
+                        body.clone(),
+                        TessOptions {
+                            chord_tol: 2.0e-3,
+                            max_edge_len: None,
+                        },
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                let volume = mesh
+                    .triangles()
+                    .iter()
+                    .map(|triangle| {
+                        let [a, b, c] =
+                            triangle.map(|i| mesh.positions()[i as usize] - frame.origin());
+                        a.dot(b.cross(c)) / 6.0
+                    })
+                    .sum::<f64>()
+                    .abs();
+                let expected = 160.0
+                    - 2.0
+                        * core::f64::consts::PI
+                        * case
+                            .result_holes
+                            .iter()
+                            .map(|cut| cut.2 * cut.2)
+                            .sum::<f64>();
+                assert!(
+                    (volume - expected).abs() < 0.05,
+                    "volume {volume}, expected {expected}"
+                );
+                for (x, y, expected) in case
+                    .holes
+                    .iter()
+                    .chain(case.result_holes)
+                    .map(|hole| (hole.0, hole.1, kernel::PointBodyVerdict::Exterior))
+                    .chain([(4.0, -3.0, kernel::PointBodyVerdict::Interior)])
+                {
+                    let value = part
+                        .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                            body.clone(),
+                            frame.point_at(x, y, 1.0),
+                        ))
+                        .unwrap()
+                        .into_result()
+                        .unwrap();
+                    assert_eq!(value.verdict(), &expected, "{value:?}");
+                }
+                let exports = assert_deterministic_xt_and_fast_self_import(
+                    &mut fixture,
+                    std::slice::from_ref(&body),
+                );
+                if let Some(prior) = &prior {
+                    assert_eq!(&exports, prior);
+                }
+                prior = Some(exports);
+                // The enlarged result remains a usable operand for a later cut.
+                fixture.left = body;
+                fixture.right = cutter(
+                    &mut fixture.session,
+                    &fixture.part,
+                    frame,
+                    (-3.0, -2.0, 0.5),
+                );
+                let next = cut(&mut fixture);
+                assert_eq!(
+                    boolean_body_topology_signature(&fixture, next.bodies()[0].clone()),
+                    [7 + holes, 14 + 2 * holes, 8]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn composed_cuts_nested_replacement_budget_denial_is_failure_atomic() {
+    assert_work_boundaries(|| {
+        nested_cut_fixture(
+            Frame::world(),
+            &[(-1.0, 0.0, 0.25), (1.0, 0.0, 0.375), (3.0, 2.0, 0.25)],
+            (0.0, 0.0, 1.75),
+        )
+    });
 }

@@ -98,7 +98,7 @@ linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").
 "The foundation could be stronger" is not a justification; the boolean rungs
 decide which foundation gaps are real.
 
-Composed subtraction supports separated through cuts on prior Plane/Cylinder results; evidence: `composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames`. Next application slice: interacting retained trims and broader result reuse; keep unsupported layouts failure-atomic and queue final X_T bytes under R5.
+Composed subtraction supports separated through cuts and strict nested replacement of existing holes; evidence: `composed_cuts_replace_nested_holes_and_preserve_unaffected_material`. Next application slice: crossing/touching source trims and broader result reuse; keep unsupported layouts failure-atomic and queue final X_T bytes under R5.
 
 ## Hard rules
 

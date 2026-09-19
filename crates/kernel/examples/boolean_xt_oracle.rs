@@ -37,7 +37,8 @@ const CAP_CROSSING_PLANE_CYLINDER_INTERSECT: &str = "cap_crossing_plane_cylinder
 const CORNER_CONTACT_FIRST_MINUS_SECOND: &str = "corner_contact_first_minus_second.x_t";
 const CORNER_CONTACT_SECOND_MINUS_FIRST: &str = "corner_contact_second_minus_first.x_t";
 const COMPOSED_DRILLED_PLATE: &str = "composed_drilled_plate.x_t";
-const EXPECTED_FILES: [&str; 19] = [
+const COMPOSED_ENLARGED_PLATE: &str = "composed_enlarged_plate.x_t";
+const EXPECTED_FILES: [&str; 20] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -57,6 +58,7 @@ const EXPECTED_FILES: [&str; 19] = [
     CORNER_CONTACT_FIRST_MINUS_SECOND,
     CORNER_CONTACT_SECOND_MINUS_FIRST,
     COMPOSED_DRILLED_PLATE,
+    COMPOSED_ENLARGED_PLATE,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -499,11 +501,12 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
     artifacts.push(build_cap_crossing_plane_cylinder_intersection()?);
     artifacts.push(build_corner_contact_subtract(false)?);
     artifacts.push(build_corner_contact_subtract(true)?);
-    artifacts.push(build_composed_drilled_plate()?);
+    artifacts.push(build_composed_drilled_plate(false)?);
+    artifacts.push(build_composed_drilled_plate(true)?);
     Ok(artifacts)
 }
 
-fn build_composed_drilled_plate() -> OracleResult<Artifact> {
+fn build_composed_drilled_plate(enlarge: bool) -> OracleResult<Artifact> {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
     let mut body = session
@@ -521,7 +524,11 @@ fn build_composed_drilled_plate() -> OracleResult<Artifact> {
         ))?
         .into_result()?
         .body();
-    for (x, y, radius) in [(-2.5, -1.0, 0.75), (2.0, -1.0, 0.5), (0.0, 2.0, 0.625)] {
+    let mut cuts = vec![(-2.5, -1.0, 0.75), (2.0, -1.0, 0.5), (0.0, 2.0, 0.625)];
+    if enlarge {
+        cuts.push((-2.5, -1.0, 1.25));
+    }
+    for (x, y, radius) in cuts {
         let tool = session
             .edit_part(part.clone())?
             .create_cylinder(CylinderRequest::new(
@@ -539,12 +546,18 @@ fn build_composed_drilled_plate() -> OracleResult<Artifact> {
         body = results[0].clone();
     }
     // Independent prism volume minus the three literal cylinder volumes.
-    let volume = 160.0 - 2.0 * core::f64::consts::PI * (0.75 * 0.75 + 0.5 * 0.5 + 0.625 * 0.625);
+    let first_radius = if enlarge { 1.25 } else { 0.75 };
+    let volume = 160.0
+        - 2.0 * core::f64::consts::PI * (first_radius * first_radius + 0.5 * 0.5 + 0.625 * 0.625);
     make_artifact_with_volume_tolerance(
         &mut session,
         &part,
         body,
-        COMPOSED_DRILLED_PLATE,
+        if enlarge {
+            COMPOSED_ENLARGED_PLATE
+        } else {
+            COMPOSED_DRILLED_PLATE
+        },
         volume,
         TopologyCounts {
             regions: 2,
