@@ -14,8 +14,8 @@ use ktopo::check::{CheckLevel, CheckOutcome, check_body_report_in_scope};
 use ktopo::geom::SurfaceGeom;
 
 /// Admit a composite minuend and a primitive cylindrical cutter. Every
-/// existing cylindrical face must remain uncut; untouched source rings are
-/// retained by the ordinary mixed-shell planner, never reconstructed by case.
+/// existing cylindrical annulus is arranged from its complete Section subset;
+/// split and untouched boundaries retain topology-owned source lineage.
 pub(super) fn try_execute(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
@@ -107,7 +107,7 @@ pub(super) fn try_execute(
     )
     .map_err(mixed_boundary_failure)?;
     prepared
-        .append_uncut_annuli(&edit.as_part(), &graph, bodies, 0, &annuli, linear, scope)
+        .append_source_annuli(&edit.as_part(), &graph, bodies, 0, &annuli, linear, scope)
         .map_err(mixed_boundary_failure)?;
     let selected = select_boundary_fragments(adapt_operation(operation), prepared.classified())
         .map_err(|error| {
@@ -118,4 +118,130 @@ pub(super) fn try_execute(
     let plan =
         plan_mixed_shell(&edit.state.store, &graph, arrangement).map_err(mixed_plan_failure)?;
     realize_mixed_shell(edit, &plan, linear, scope).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+    use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+
+    #[test]
+    fn overlapping_cut_full_checker_rejects_changed_arc_and_annulus_geometry() {
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+        let mut body = session
+            .edit_part(part.clone())
+            .unwrap()
+            .extrude_profile(ExtrudeProfileRequest::new(
+                Frame::world(),
+                vec![
+                    Point2::new(-5.0, -4.0),
+                    Point2::new(5.0, -4.0),
+                    Point2::new(5.0, 4.0),
+                    Point2::new(-5.0, 4.0),
+                ],
+                vec![],
+                2.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        for (x, y, r) in [(0.0, 0.0, 0.75), (3.0, 2.0, 0.25), (0.75, 0.0, 0.75)] {
+            let tool = session
+                .edit_part(part.clone())
+                .unwrap()
+                .create_cylinder(CylinderRequest::new(
+                    Frame::world().with_origin(Point3::new(x, y, -1.0)),
+                    r,
+                    4.0,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let result = session
+                .edit_part(part.clone())
+                .unwrap()
+                .boolean_bodies(BooleanBodiesRequest::new(
+                    BooleanOperation::Subtract,
+                    body,
+                    tool,
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+                panic!("supported overlap must commit");
+            };
+            body = created.bodies()[0].clone();
+        }
+        let baseline = session.part(part).unwrap().state.store.clone();
+        let faces = baseline.faces_of_body(body.raw()).unwrap();
+        let mut checked = 0;
+        // Mutate each planar circular pcurve, covering both new bounded arcs
+        // and the untouched complete circles, without changing topology.
+        for &face in &faces {
+            let data = baseline.get(face).unwrap();
+            if !matches!(
+                baseline.surface(data.surface()).unwrap(),
+                SurfaceGeom::Plane(_)
+            ) {
+                continue;
+            }
+            for &ring in data.loops() {
+                for &fin in baseline.get(ring).unwrap().fins() {
+                    let use_ = baseline.get(fin).unwrap().pcurve().unwrap();
+                    let Curve2dGeom::Circle(circle) = *baseline.pcurve(use_.curve()).unwrap()
+                    else {
+                        continue;
+                    };
+                    let mut store = baseline.clone();
+                    let mut txn = store.transaction().unwrap();
+                    txn.assembly()
+                        .replace_pcurve(
+                            use_.curve(),
+                            Curve2dGeom::Circle(
+                                kgeom::curve2d::Circle2d::new(
+                                    circle.center(),
+                                    circle.radius() + 0.125,
+                                    circle.x_dir(),
+                                )
+                                .unwrap(),
+                            ),
+                        )
+                        .unwrap();
+                    let report =
+                        ktopo::check::check_body_report(txn.store(), body.raw(), CheckLevel::Full)
+                            .unwrap();
+                    assert_ne!(report.outcome(), CheckOutcome::Valid);
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 6);
+        for edge in baseline.edges_of_body(body.raw()).unwrap() {
+            let data = baseline.get(edge).unwrap();
+            let Some(curve) = data.curve() else {
+                continue;
+            };
+            let CurveGeom::Circle(circle) = *baseline.curve(curve).unwrap() else {
+                continue;
+            };
+            let mut store = baseline.clone();
+            let mut txn = store.transaction().unwrap();
+            txn.assembly()
+                .replace_curve(
+                    curve,
+                    CurveGeom::Circle(
+                        kgeom::curve::Circle::new(*circle.frame(), circle.radius() + 0.125)
+                            .unwrap(),
+                    ),
+                )
+                .unwrap();
+            let report =
+                ktopo::check::check_body_report(txn.store(), body.raw(), CheckLevel::Full).unwrap();
+            assert_ne!(report.outcome(), CheckOutcome::Valid);
+        }
+    }
 }

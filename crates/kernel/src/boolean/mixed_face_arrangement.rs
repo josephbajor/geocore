@@ -6,6 +6,7 @@
 //! section publisher's exact root ordinals remain compatible with intrinsic
 //! edge order.
 
+mod circular_boundaries;
 mod source_rings;
 use super::face_arrangement::ArrangementEdgeKey;
 
@@ -205,6 +206,7 @@ pub(crate) enum MixedSourceParameterEvidence {
         endpoint: usize,
         root_ordinal: usize,
         enclosure_bits: [u64; 2],
+        period_shift: i32,
     },
 }
 
@@ -223,7 +225,17 @@ impl MixedSourceParameterEvidence {
                 let parameter = f64::from_bits(*edge_parameter_bits);
                 [parameter, parameter]
             }
-            Self::SectionRoot { enclosure_bits, .. } => enclosure_bits.map(f64::from_bits),
+            Self::SectionRoot {
+                enclosure_bits,
+                period_shift,
+                ..
+            } => {
+                let bounds = enclosure_bits.map(f64::from_bits);
+                let shift = kcore::interval::Interval::point(f64::from(*period_shift))
+                    * kcore::interval::Interval::point(core::f64::consts::TAU);
+                let lifted = kcore::interval::Interval::new(bounds[0], bounds[1]) + shift;
+                [lifted.lo(), lifted.hi()]
+            }
         }
     }
 }
@@ -407,6 +419,10 @@ enum CutEmbedding {
     },
     Circle {
         branch: usize,
+        center: [f64; 2],
+        radius: f64,
+        x_direction: [f64; 2],
+        orientation: Orientation,
     },
     WholeCircle {
         branch: usize,
@@ -421,7 +437,7 @@ impl CutEmbedding {
     const fn branch(&self) -> usize {
         match self {
             Self::Line { branch, .. }
-            | Self::Circle { branch }
+            | Self::Circle { branch, .. }
             | Self::WholeCircle { branch, .. } => *branch,
         }
     }
@@ -685,9 +701,19 @@ fn adapt_fragment(
                 }),
             }
         }
-        (SectionCurveFragmentSpan::Arc { .. }, SectionUvCurve::Circle(_)) => CutEmbedding::Circle {
-            branch: fragment.branch(),
-        },
+        (SectionCurveFragmentSpan::Arc { .. }, SectionUvCurve::Circle(circle)) => {
+            CutEmbedding::Circle {
+                branch: fragment.branch(),
+                center: [circle.center().x, circle.center().y],
+                radius: circle.radius(),
+                x_direction: [circle.x_direction().x, circle.x_direction().y],
+                orientation: if circle.parameter_scale() > 0.0 {
+                    Orientation::Positive
+                } else {
+                    Orientation::Negative
+                },
+            }
+        }
         _ => {
             return Err(MixedFaceArrangementError::EndpointSiteMismatch(
                 start_endpoint(&start),
@@ -819,9 +845,16 @@ fn arrange_planar_face_evidence_with_lineage(
     face: RawFaceId,
     cuts: Vec<FaceCutEvidence>,
 ) -> Result<MixedPlanarFaceOutput, MixedFaceArrangementError> {
-    let uncut_rings = source_rings::admit_rings(store, face, &cuts)?;
     let roots = collect_unique_roots(&cuts)?;
-    let split = split_source_boundary(store, face, &roots)?;
+    let uncut_rings = source_rings::admit_rings(store, face, &cuts, &roots)?;
+    let polygon = source_rings::polygon_loop(store, face)?;
+    let polygon_roots = roots
+        .iter()
+        .filter(|root| root.loop_id == polygon)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut split = split_source_boundary(store, face, &polygon_roots)?;
+    let split_rings = circular_boundaries::append_split_rings(store, face, &roots, &mut split)?;
     certify_cut_embedding(&cuts)?;
     let cut_fragments = cuts
         .iter()
@@ -844,12 +877,16 @@ fn arrange_planar_face_evidence_with_lineage(
         .map(|span| span.key().clone())
         .ok_or(MixedFaceArrangementError::EmptySourceLoop)?;
     let input = FaceArrangementInput::new(split.spans, cut_fragments, rotations);
-    let arrangement = match arrange_bounded_face(input.clone()) {
-        Ok(arrangement) => normalize_connected_arrangement(arrangement),
-        Err(FaceArrangementError::DisconnectedPrimal) => {
-            arrange_interior_planar_surface(store, face, &cuts, source_anchor, input)?
+    let arrangement = if split_rings != 0 {
+        circular_boundaries::arrange(store, face, &cuts, source_anchor, input, split_rings)?
+    } else {
+        match arrange_bounded_face(input.clone()) {
+            Ok(arrangement) => normalize_connected_arrangement(arrangement),
+            Err(FaceArrangementError::DisconnectedPrimal) => {
+                arrange_interior_planar_surface(store, face, &cuts, source_anchor, input)?
+            }
+            Err(error) => return Err(MixedFaceArrangementError::Arrangement(error)),
         }
-        Err(error) => return Err(MixedFaceArrangementError::Arrangement(error)),
     };
     let retained_rings = source_rings::assign_to_cells(uncut_rings, &arrangement)?;
     Ok(MixedPlanarFaceOutput {
@@ -1291,7 +1328,7 @@ fn certify_cut_embedding(cuts: &[FaceCutEvidence]) -> Result<(), MixedFaceArrang
 
 fn cut_pair_proven_disjoint(left: &FaceCutEvidence, right: &FaceCutEvidence) -> bool {
     match (&left.embedding, &right.embedding) {
-        (CutEmbedding::Circle { branch: left }, CutEmbedding::Circle { branch: right })
+        (CutEmbedding::Circle { branch: left, .. }, CutEmbedding::Circle { branch: right, .. })
             if left == right =>
         {
             // Distinct source ordinals on one certified clipped carrier are
@@ -1533,6 +1570,7 @@ fn split_source_boundary(
                     endpoint: root.endpoint,
                     root_ordinal: root.key.ordinal,
                     enclosure_bits: [root.interval.lo.to_bits(), root.interval.hi.to_bits()],
+                    period_shift: 0,
                 }),
         )
         .chain(std::iter::once(
@@ -1861,7 +1899,13 @@ mod tests {
         let arc_arrangement = arrange_planar_face_evidence(
             &fixture.store,
             fixture.face,
-            two_non_crossing_cuts(&fixture, |_| CutEmbedding::Circle { branch: 40 }),
+            two_non_crossing_cuts(&fixture, |_| CutEmbedding::Circle {
+                branch: 40,
+                center: [0.0; 2],
+                radius: 1.0,
+                x_direction: [1.0, 0.0],
+                orientation: Orientation::Positive,
+            }),
         )
         .unwrap();
         assert_eq!(arc_arrangement.cells().len(), 3);

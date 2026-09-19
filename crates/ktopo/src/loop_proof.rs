@@ -1402,6 +1402,14 @@ fn point_location(point: Point2, segments: &[Segment2]) -> PointLocation {
     }
 }
 
+/// The unique outer loop of a strictly contained analytic planar layout.
+pub(crate) fn certified_analytic_planar_outer(
+    store: &Store,
+    face: crate::entity::FaceId,
+) -> Result<Option<LoopId>> {
+    analytic_face_layout::certify_plane_layout(store, face)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

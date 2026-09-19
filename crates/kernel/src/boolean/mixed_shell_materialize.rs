@@ -566,6 +566,12 @@ pub(super) fn retain_materialization_evidence(
     let mut source_spans = used
         .into_iter()
         .filter_map(|(source, span)| {
+            if bounded_source_spans
+                .iter()
+                .any(|item| item.source() == source && item.span() == &span)
+            {
+                return None;
+            }
             let MixedArrangementBinding::Planar { lineage, .. } = arrangements.get(&source)? else {
                 return None;
             };
@@ -584,6 +590,7 @@ pub(super) fn retain_materialization_evidence(
                 MixedSourceParameterEvidence::SectionRoot {
                     endpoint,
                     enclosure_bits,
+                    period_shift,
                     ..
                 } => {
                     let parameter_bits = graph
@@ -600,10 +607,7 @@ pub(super) fn retain_materialization_evidence(
                         endpoint: *endpoint,
                         enclosure_bits: *enclosure_bits,
                         parameter_bits,
-                        // Current bounded-polygon lineage is nonperiodic.
-                        // Root-split whole-circle lineage must supply its
-                        // certified source-span lift at this retention seam.
-                        period_shift: 0,
+                        period_shift: *period_shift,
                     }
                 }
             });

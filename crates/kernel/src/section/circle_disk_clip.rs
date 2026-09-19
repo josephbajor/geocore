@@ -1,8 +1,9 @@
 //! Certified clipping of a closed planar circle pcurve by a circular disk.
 //!
-//! The admitted trim is topology-owned: one loop, one fin, and one exact
-//! vertexless whole-circle edge whose complete 3D/pcurve incidence is
-//! certified by `ktopo`.  The branch circle restricted to the boundary disk
+//! Each admitted boundary is topology-owned: one fin and one exact vertexless
+//! whole-circle edge whose complete 3D/pcurve incidence is certified by
+//! `ktopo`. The planar-trim caller combines crossings from multiple loops.
+//! The branch circle restricted to one boundary disk
 //! is the harmonic
 //!
 //! `constant + cosine * cos(q) + sine * sin(q)`.
@@ -229,16 +230,17 @@ fn admit_circular_boundary_loop(
     }))
 }
 
-/// Classify a complete branch circumference against one certified circular
-/// trim loop. Strict interval separation proves constant parity; intersecting
-/// or tangent boundaries remain a gap until their crossing roots are owned.
-pub(super) fn constant_circular_trim_parity(
+/// Return topology-owned crossings and parity at the projective chart seam.
+/// Strictly separated circles have constant parity; transverse circles reuse
+/// the same complete two-root proof as disk clipping.
+pub(super) fn circular_trim_crossings(
     store: &Store,
     face: RawFaceId,
     loop_id: ktopo::entity::LoopId,
     circle: SectionUvCircle,
+    carrier_range: ParamRange,
     scope: &mut OperationScope<'_, '_>,
-) -> Result<core::result::Result<bool, ClosedConicClipGap>> {
+) -> Result<core::result::Result<(Vec<ClosedConicTrimSite>, bool), ClosedConicClipGap>> {
     charge(scope, 1)?;
     let boundary = match admit_circular_boundary_loop(store, face, loop_id, scope, false)? {
         DiskAdmission::Certified(boundary) => boundary,
@@ -261,17 +263,25 @@ pub(super) fn constant_circular_trim_parity(
     };
     let sum = branch_radius + trim_radius;
     if distance.lo() > sum.square().hi() {
-        return Ok(Ok(false));
+        return Ok(Ok((Vec::new(), false)));
     }
     let difference = trim_radius - branch_radius;
     if difference.lo() > 0.0 && distance.hi() < difference.square().lo() {
-        return Ok(Ok(true));
+        return Ok(Ok((Vec::new(), true)));
     }
     let difference = branch_radius - trim_radius;
     if difference.lo() > 0.0 && distance.hi() < difference.square().lo() {
-        return Ok(Ok(false));
+        return Ok(Ok((Vec::new(), false)));
     }
-    Ok(Err(ClosedConicClipGap::NonSecantBoundary))
+    let Some(branch) = branch_circle(circle, carrier_range) else {
+        return Ok(Err(ClosedConicClipGap::UnsupportedTrim));
+    };
+    Ok(clip_secant(branch, boundary, scope)?.and_then(|fragment| {
+        let (Some(start), Some(end)) = (fragment.start, fragment.end) else {
+            return Err(ClosedConicClipGap::MalformedTrim);
+        };
+        Ok((vec![start, end], fragment.wraps_pcurve_seam))
+    }))
 }
 
 /// Increasing `Circle2d` parameter is counterclockwise in the surface UV

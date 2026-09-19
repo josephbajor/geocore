@@ -38,7 +38,8 @@ const CORNER_CONTACT_FIRST_MINUS_SECOND: &str = "corner_contact_first_minus_seco
 const CORNER_CONTACT_SECOND_MINUS_FIRST: &str = "corner_contact_second_minus_first.x_t";
 const COMPOSED_DRILLED_PLATE: &str = "composed_drilled_plate.x_t";
 const COMPOSED_ENLARGED_PLATE: &str = "composed_enlarged_plate.x_t";
-const EXPECTED_FILES: [&str; 20] = [
+const COMPOSED_OVERLAPPING_PLATE: &str = "composed_overlapping_plate.x_t";
+const EXPECTED_FILES: [&str; 21] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -59,6 +60,7 @@ const EXPECTED_FILES: [&str; 20] = [
     CORNER_CONTACT_SECOND_MINUS_FIRST,
     COMPOSED_DRILLED_PLATE,
     COMPOSED_ENLARGED_PLATE,
+    COMPOSED_OVERLAPPING_PLATE,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -501,12 +503,56 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
     artifacts.push(build_cap_crossing_plane_cylinder_intersection()?);
     artifacts.push(build_corner_contact_subtract(false)?);
     artifacts.push(build_corner_contact_subtract(true)?);
-    artifacts.push(build_composed_drilled_plate(false)?);
-    artifacts.push(build_composed_drilled_plate(true)?);
+    let base_volume =
+        160.0 - 2.0 * core::f64::consts::PI * (0.75 * 0.75 + 0.5 * 0.5 + 0.625 * 0.625);
+    let base_counts = TopologyCounts {
+        regions: 2,
+        shells: 1,
+        faces: 9,
+        loops: 18,
+        fins: 36,
+        edges: 18,
+        vertices: 8,
+    };
+    artifacts.push(build_composed_drilled_plate(
+        None,
+        COMPOSED_DRILLED_PLATE,
+        base_volume,
+        base_counts,
+    )?);
+    let enlarged_volume =
+        160.0 - 2.0 * core::f64::consts::PI * (1.25 * 1.25 + 0.5 * 0.5 + 0.625 * 0.625);
+    artifacts.push(build_composed_drilled_plate(
+        Some((-2.5, -1.0, 1.25)),
+        COMPOSED_ENLARGED_PLATE,
+        enlarged_volume,
+        base_counts,
+    )?);
+    // Independent equal-radius lens area, r=3/4 and center distance=1/2:
+    // 2*r²*acos(d/(2*r)) - d/2*sqrt(4*r²-d²).
+    let lens = 1.0312759539150977;
+    let overlap_volume = base_volume - 2.0 * (core::f64::consts::PI * 0.75 * 0.75 - lens);
+    artifacts.push(build_composed_drilled_plate(
+        Some((-2.0, -1.0, 0.75)),
+        COMPOSED_OVERLAPPING_PLATE,
+        overlap_volume,
+        TopologyCounts {
+            faces: 10,
+            fins: 44,
+            edges: 22,
+            vertices: 12,
+            ..base_counts
+        },
+    )?);
     Ok(artifacts)
 }
 
-fn build_composed_drilled_plate(enlarge: bool) -> OracleResult<Artifact> {
+fn build_composed_drilled_plate(
+    extra: Option<(f64, f64, f64)>,
+    file: &'static str,
+    volume: f64,
+    counts: TopologyCounts,
+) -> OracleResult<Artifact> {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
     let mut body = session
@@ -525,8 +571,8 @@ fn build_composed_drilled_plate(enlarge: bool) -> OracleResult<Artifact> {
         .into_result()?
         .body();
     let mut cuts = vec![(-2.5, -1.0, 0.75), (2.0, -1.0, 0.5), (0.0, 2.0, 0.625)];
-    if enlarge {
-        cuts.push((-2.5, -1.0, 1.25));
+    if let Some(extra) = extra {
+        cuts.push(extra);
     }
     for (x, y, radius) in cuts {
         let tool = session
@@ -545,29 +591,13 @@ fn build_composed_drilled_plate(enlarge: bool) -> OracleResult<Artifact> {
         )?;
         body = results[0].clone();
     }
-    // Independent prism volume minus the three literal cylinder volumes.
-    let first_radius = if enlarge { 1.25 } else { 0.75 };
-    let volume = 160.0
-        - 2.0 * core::f64::consts::PI * (first_radius * first_radius + 0.5 * 0.5 + 0.625 * 0.625);
     make_artifact_with_volume_tolerance(
         &mut session,
         &part,
         body,
-        if enlarge {
-            COMPOSED_ENLARGED_PLATE
-        } else {
-            COMPOSED_DRILLED_PLATE
-        },
+        file,
         volume,
-        TopologyCounts {
-            regions: 2,
-            shells: 1,
-            faces: 9,
-            loops: 18,
-            fins: 36,
-            edges: 18,
-            vertices: 8,
-        },
+        counts,
         1.0e-4,
         1.0e-3,
     )

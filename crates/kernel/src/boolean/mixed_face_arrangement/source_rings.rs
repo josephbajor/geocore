@@ -29,15 +29,17 @@ pub(super) fn polygon_loop(
 
 pub(super) struct UncutRing {
     loop_id: RawLoopId,
-    containers: BTreeSet<MixedCutFragmentKey>,
+    containers: BTreeSet<usize>,
 }
 
-/// A ring may lie outside a cut disk or strictly inside it. Crossing,
-/// tangency, and unresolved interval comparisons remain unsupported.
+/// Uncut rings may lie outside a cut disk or strictly inside it. Rings with
+/// certified Section roots are delegated to the split-boundary arrangement;
+/// tangency and unresolved interval comparisons remain unsupported.
 pub(super) fn admit_rings(
     store: &Store,
     face_id: RawFaceId,
     cuts: &[FaceCutEvidence],
+    roots: &[BoundaryRootEvidence],
 ) -> Result<Vec<UncutRing>, MixedFaceArrangementError> {
     let fail = || MixedFaceArrangementError::MultipleSourceLoops;
     let polygon = polygon_loop(store, face_id)?;
@@ -76,14 +78,23 @@ pub(super) fn admit_rings(
         {
             return Err(fail());
         }
+        if roots.iter().any(|root| root.loop_id == loop_id) {
+            continue;
+        }
         let mut containers = BTreeSet::new();
         for cut in cuts {
-            let CutEmbedding::WholeCircle {
+            let (CutEmbedding::WholeCircle {
                 center,
                 radius,
                 x_direction,
                 ..
-            } = cut.embedding
+            }
+            | CutEmbedding::Circle {
+                center,
+                radius,
+                x_direction,
+                ..
+            }) = cut.embedding
             else {
                 return Err(fail());
             };
@@ -105,7 +116,7 @@ pub(super) fn admit_rings(
             }
             let margin = cut_radius - source_radius;
             if margin.lo() > 0.0 && distance.hi() < margin.square().lo() {
-                containers.insert(cut.key.clone());
+                containers.insert(cut.key.branch());
             } else {
                 return Err(fail());
             }
@@ -129,12 +140,13 @@ pub(super) fn assign_to_cells(
         return Ok(Vec::new());
     }
     let fail = || MixedFaceArrangementError::MultipleSourceLoops;
+    let polygon_anchor = arrangement.source_spans().first().ok_or_else(fail)?.key();
     let mut exterior = arrangement.cells().iter().filter(|cell| {
         cell.boundaries().iter().any(|boundary| {
             boundary
                 .uses()
                 .iter()
-                .any(|use_| matches!(use_.edge(), ArrangementEdgeKey::Source(_)))
+                .any(|use_| matches!(use_.edge(), ArrangementEdgeKey::Source(key) if key == polygon_anchor))
         })
     });
     let exterior = exterior
@@ -154,8 +166,8 @@ pub(super) fn assign_to_cells(
                 continue;
             };
             let mut label = labels[&cell].clone();
-            if !label.remove(edge.cut()) {
-                label.insert(edge.cut().clone());
+            if !label.remove(&edge.cut().branch()) {
+                label.insert(edge.cut().branch());
             }
             if let Some(existing) = labels.get(&peer) {
                 if existing != &label {

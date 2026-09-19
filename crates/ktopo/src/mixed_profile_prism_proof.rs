@@ -3,9 +3,10 @@
 //! R2 decomposition: certified simple Plane loops with certified strict hole
 //! containment bound one Jordan material region `D`; a second cap must be its
 //! bijective nonzero transverse translation; every remaining face must be
-//! exactly one four-edge product strip over one cap edge. Bounded Line edges
+//! exactly one product strip or annulus over a cap edge. Bounded Line edges
 //! require Plane strips and bounded Circle edges require Cylinder strips,
-//! while the two other strip edges must be complete translation rulings.
+//! with complete translation rulings. Closed Circle edges require full-period
+//! cylindrical annuli paired through both cap loops.
 //! Whole-fin incidence proves the authored pcurves over every complete edge range.
 //! These local witnesses identify the shell with `boundary(D x [0,1])`, so
 //! global embedding follows without convexity, layout tags, constructor
@@ -162,7 +163,8 @@ fn certify_cap_pair(
     let shell = store.get(shell_id)?;
     if first.uses.len() != second.uses.len()
         || first.vertices.len() != second.vertices.len()
-        || shell.faces.len() != first.uses.len() + 2
+        || first.rings.len() != second.rings.len()
+        || shell.faces.len() != first.uses.len() + first.rings.len() + 2
     {
         return Ok(None);
     }
@@ -275,6 +277,18 @@ fn certify_cap_pair(
         used_sides.push(side.face);
         used_second_edges.push(mapped_top.edge);
     }
+    let Some(ring_sides) =
+        certify_ring_sweeps(store, shell_id, &first, &second, translation.vector)?
+    else {
+        return Ok(None);
+    };
+    for (side, sign) in ring_sides {
+        if !side_faces.contains(&side) || used_sides.contains(&side) {
+            return Ok(None);
+        }
+        used_sides.push(side);
+        orientation_signs.push(sign);
+    }
     if used_sides.len() != side_faces.len() || used_second_edges.len() != second_edges.len() {
         return Ok(None);
     }
@@ -292,6 +306,99 @@ fn certify_cap_pair(
         embedding: ShellEmbedding::Certified,
         orientation,
     }))
+}
+
+/// A closed profile edge sweeps to an annulus. The same product theorem
+/// pairs every ring through its live cylindrical side, alongside bounded
+/// edge strips. Shared ring incidence proves the complete carrier and trim;
+/// the cap layout supplies strict containment and mutual separation.
+fn certify_ring_sweeps(
+    store: &Store,
+    shell: ShellId,
+    first: &super::shell_lemmas::Cap,
+    second: &super::shell_lemmas::Cap,
+    translation: Vec3,
+) -> Result<Option<Vec<(FaceId, i8)>>> {
+    use super::shell_lemmas::{CylinderRingBoundaryMode, certified_close, cylinder_ring_boundary};
+    let mut used = Vec::new();
+    let mut sides = Vec::new();
+    for &loop_id in &first.rings {
+        let [fin_id] = store.get(loop_id)?.fins.as_slice() else {
+            return Ok(None);
+        };
+        let fin = store.get(*fin_id)?;
+        let edge = store.get(fin.edge)?;
+        let [a, b] = edge.fins.as_slice() else {
+            return Ok(None);
+        };
+        let peer = if a == fin_id {
+            *b
+        } else if b == fin_id {
+            *a
+        } else {
+            return Ok(None);
+        };
+        let side_id = store.get(store.get(peer)?.parent)?.face;
+        let side = store.get(side_id)?;
+        let SurfaceGeom::Cylinder(cylinder) = store.get(side.surface)? else {
+            return Ok(None);
+        };
+        if side.shell != shell
+            || side.loops.len() != 2
+            || !certified_parallel(cylinder.frame().z(), translation)
+        {
+            return Ok(None);
+        }
+        let mut boundaries = Vec::new();
+        for &ring in &side.loops {
+            let Some(boundary) = cylinder_ring_boundary(
+                store,
+                shell,
+                side_id,
+                *cylinder,
+                ring,
+                CylinderRingBoundaryMode::CylindricalHost,
+            )?
+            else {
+                return Ok(None);
+            };
+            boundaries.push(boundary);
+        }
+        let Some(bottom) = boundaries
+            .iter()
+            .find(|b| b.face == first.face && b.loop_id == loop_id && b.edge == fin.edge)
+        else {
+            return Ok(None);
+        };
+        let Some(top) = boundaries
+            .iter()
+            .find(|b| b.face == second.face && second.rings.contains(&b.loop_id))
+        else {
+            return Ok(None);
+        };
+        if used.contains(&top.loop_id)
+            || !certified_close(bottom.center + translation, top.center)
+            || bottom.axial_parameter == top.axial_parameter
+            || bottom.side_traverses_positive_u == top.side_traverses_positive_u
+        {
+            return Ok(None);
+        }
+        let Some(curve_id) = edge.curve else {
+            return Ok(None);
+        };
+        let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+            return Ok(None);
+        };
+        let tangent = circle.frame().y() * sense_factor(fin.sense);
+        let expected = translation.cross(tangent);
+        let actual = circle.frame().x() * sense_factor(side.sense);
+        let Some(sign) = oriented_dot_sign(actual, expected) else {
+            return Ok(None);
+        };
+        used.push(top.loop_id);
+        sides.push((side_id, sign));
+    }
+    Ok((used.len() == second.rings.len()).then_some(sides))
 }
 
 #[cfg(test)]

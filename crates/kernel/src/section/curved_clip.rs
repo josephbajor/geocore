@@ -3,8 +3,8 @@
 //! This module owns the first curved-trim admission classes needed by a
 //! Plane/Cylinder circle branch:
 //!
-//! - a circular plane pcurve against any number of bounded polygonal trim
-//!   loops, and
+//! - a circular plane pcurve against bounded polygonal trims and topology-owned
+//!   full-circle loops (including certified transverse secants), and
 //! - a constant-height, whole-period cylinder pcurve against any number of
 //!   vertexless whole-period ring loops.
 //!
@@ -525,7 +525,11 @@ fn clip_circle_to_plane_trim(
         Ok(source) => source,
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),
     };
-    let (segments, circular_parity) = match prepare_plane_segments(store, face, circle, scope)? {
+    let PlaneTrimEvidence {
+        segments,
+        mut crossings,
+        circular_parity,
+    } = match prepare_plane_segments(store, face, circle, carrier_range, scope)? {
         Ok(prepared) => prepared,
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),
     };
@@ -534,7 +538,6 @@ fn clip_circle_to_plane_trim(
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),
     };
 
-    let mut crossings = Vec::new();
     for segment in &segments {
         match segment_crossings(&source, segment, scope)? {
             Ok(mut found) => crossings.append(&mut found),
@@ -574,26 +577,42 @@ fn clip_circle_to_plane_trim(
     Ok(ClosedConicClipOutcome::Fragments(fragments))
 }
 
+struct PlaneTrimEvidence {
+    segments: Vec<PlaneTrimSegment>,
+    crossings: Vec<Crossing>,
+    circular_parity: bool,
+}
+
 fn prepare_plane_segments(
     store: &Store,
     face: RawFaceId,
     circle: SectionUvCircle,
+    carrier_range: ParamRange,
     scope: &mut OperationScope<'_, '_>,
-) -> Result<core::result::Result<(Vec<PlaneTrimSegment>, bool), ClosedConicClipGap>> {
+) -> Result<core::result::Result<PlaneTrimEvidence, ClosedConicClipGap>> {
     let face_data = read(store.get(face))?;
     if face_data.loops().is_empty() {
         return Ok(Err(ClosedConicClipGap::MalformedTrim));
     }
     let mut segments = Vec::new();
+    let mut crossings = Vec::new();
     let mut circular_parity = false;
     for &loop_id in face_data.loops() {
         charge(scope, 1)?;
         let ring = read(store.get::<Loop>(loop_id))?;
         if ring.fins().len() == 1 {
-            match super::circle_disk_clip::constant_circular_trim_parity(
-                store, face, loop_id, circle, scope,
+            match super::circle_disk_clip::circular_trim_crossings(
+                store,
+                face,
+                loop_id,
+                circle,
+                carrier_range,
+                scope,
             )? {
-                Ok(inside) => circular_parity ^= inside,
+                Ok((found, inside)) => {
+                    circular_parity ^= inside;
+                    crossings.extend(found.into_iter().map(|site| Crossing { site }));
+                }
                 Err(gap) => return Ok(Err(gap)),
             }
             continue;
@@ -703,7 +722,11 @@ fn prepare_plane_segments(
             return Ok(Err(ClosedConicClipGap::MalformedTrim));
         }
     }
-    Ok(Ok((segments, circular_parity)))
+    Ok(Ok(PlaneTrimEvidence {
+        segments,
+        crossings,
+        circular_parity,
+    }))
 }
 
 fn seam_point(source: &CircleSource) -> IntervalPoint2 {

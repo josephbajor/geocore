@@ -130,21 +130,24 @@ pub(super) fn certify_analytic_face_layout(
 ) -> Result<bool> {
     let face = store.get(face_id)?;
     match store.get(face.surface)? {
-        SurfaceGeom::Plane(_) => certify_plane_layout(store, face_id),
+        SurfaceGeom::Plane(_) => certify_plane_layout(store, face_id).map(|outer| outer.is_some()),
         SurfaceGeom::Cylinder(_) => certify_cylinder_layout(store, face_id),
         _ => Ok(false),
     }
 }
 
-fn certify_plane_layout(store: &Store, face_id: crate::entity::FaceId) -> Result<bool> {
+pub(super) fn certify_plane_layout(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+) -> Result<Option<LoopId>> {
     let face = store.get(face_id)?;
     if face.loops.len() < 2 {
-        return Ok(true);
+        return Ok(face.loops.first().copied());
     }
     let mut envelopes = Vec::with_capacity(face.loops.len());
     for &loop_id in &face.loops {
         let Some(envelope) = prepare_plane_envelope(store, face_id, loop_id)? else {
-            return Ok(false);
+            return Ok(None);
         };
         envelopes.push(envelope);
     }
@@ -166,11 +169,11 @@ fn certify_plane_layout(store: &Store, face_id: crate::entity::FaceId) -> Result
             false
         };
         if contains_all && outer.replace(candidate).is_some() {
-            return Ok(false);
+            return Ok(None);
         }
     }
     let Some(outer) = outer else {
-        return Ok(false);
+        return Ok(None);
     };
     for left in 0..envelopes.len() {
         if left == outer {
@@ -178,11 +181,11 @@ fn certify_plane_layout(store: &Store, face_id: crate::entity::FaceId) -> Result
         }
         for right in left + 1..envelopes.len() {
             if right != outer && !plane_envelopes_separated(envelopes[left], envelopes[right]) {
-                return Ok(false);
+                return Ok(None);
             }
         }
     }
-    Ok(true)
+    Ok(Some(face.loops[outer]))
 }
 
 fn certify_cylinder_layout(store: &Store, face_id: crate::entity::FaceId) -> Result<bool> {

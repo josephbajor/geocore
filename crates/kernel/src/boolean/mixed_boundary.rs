@@ -150,9 +150,9 @@ impl PreparedMixedBoundary {
             .collect()
     }
 
-    /// Preserve uncut source annuli of an already-modified operand.
+    /// Arrange cut or uncut source annuli of an already-modified operand.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn append_uncut_annuli(
+    pub(super) fn append_source_annuli(
         &mut self,
         part: &Part<'_>,
         graph: &BodySectionGraph,
@@ -163,20 +163,21 @@ impl PreparedMixedBoundary {
         scope: &mut OperationScope<'_, '_>,
     ) -> Result<(), MixedBoundaryError> {
         for face in faces {
-            if graph
-                .branches()
+            let carried = graph
+                .curve_fragments()
                 .iter()
-                .any(|branch| branch.faces()[operand] == *face)
-            {
-                return Err(MixedBoundaryError::SourceTopology);
-            }
+                .enumerate()
+                .filter_map(|(index, fragment)| {
+                    (graph.branches()[fragment.branch()].faces()[operand] == *face).then_some(index)
+                })
+                .collect::<Vec<_>>();
             let embedding = certify_periodic_face_fragment_subset(
                 &part.state.store,
                 bodies[operand].part(),
                 graph,
                 operand,
                 face.clone(),
-                &[],
+                &carried,
                 linear,
             )
             .map_err(|_| MixedBoundaryError::MissingPeriodicFaceEvidence)?;

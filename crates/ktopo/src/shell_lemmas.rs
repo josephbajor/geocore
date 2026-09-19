@@ -54,6 +54,7 @@ pub(super) struct Cap {
     pub(super) plane: kgeom::surface::Plane,
     pub(super) vertices: Vec<VertexId>,
     pub(super) uses: Vec<CapUse>,
+    pub(super) rings: Vec<LoopId>,
     pub(super) local_orientation_valid: bool,
 }
 
@@ -92,9 +93,8 @@ pub(super) fn prepare_cap(store: &Store, face_id: FaceId) -> Result<Option<Cap>>
     )
 }
 
-/// Prepare one planar profile cap whose exact polygonal holes have certified
-/// strict containment. Single-loop analytic profiles retain the broader
-/// line/arc admission used by the other sweep theorems.
+/// Prepare a planar cap whose polygonal or analytic holes have certified
+/// strict containment. Both paths consume the shared face-layout authority.
 pub(super) fn prepare_profile_cap(store: &Store, face_id: FaceId) -> Result<Option<Cap>> {
     let face = store.get(face_id)?;
     let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
@@ -103,34 +103,48 @@ pub(super) fn prepare_profile_cap(store: &Store, face_id: FaceId) -> Result<Opti
     if face.loops.len() == 1 {
         return prepare_cap(store, face_id);
     }
-    if face.loops.is_empty()
-        || certify_loop_containment(store, &face.loops)? != LoopContainment::Certified
-    {
+    if face.loops.is_empty() {
         return Ok(None);
     }
     let layout = crate::loop_proof::certify_planar_loop_layout(store, &face.loops)?;
-    let Some(outer) = layout.outer else {
-        return Ok(None);
+    let outer = match layout.outer {
+        Some(outer) => outer,
+        None => match crate::loop_proof::certified_analytic_planar_outer(store, face_id)? {
+            Some(outer) => outer,
+            None => return Ok(None),
+        },
     };
     let mut local_orientation_valid = true;
     for &loop_id in &face.loops {
         if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
             return Ok(None);
         }
-        let Some(orientation) = layout
-            .orientations
-            .iter()
-            .find_map(|&(candidate, orientation)| {
-                (candidate == loop_id).then_some(orientation).flatten()
-            })
-        else {
+        let Some(orientation) = certify_loop_orientation(store, face_id, loop_id)? else {
             return Ok(None);
         };
         let oriented_as_face =
             (orientation == PredicateOrientation::Positive) == face.sense.is_forward();
         local_orientation_valid &= oriented_as_face == (loop_id == outer);
     }
-    prepare_cap_loops(store, face_id, *plane, &face.loops, local_orientation_valid)
+    let mut bounded = Vec::new();
+    let mut rings = Vec::new();
+    for &loop_id in &face.loops {
+        if store.get(loop_id)?.fins.len() == 1 {
+            rings.push(loop_id);
+        } else {
+            bounded.push(loop_id);
+        }
+    }
+    if bounded.is_empty() {
+        return Ok(None);
+    }
+    let Some(mut cap) =
+        prepare_cap_loops(store, face_id, *plane, &bounded, local_orientation_valid)?
+    else {
+        return Ok(None);
+    };
+    cap.rings = rings;
+    Ok(Some(cap))
 }
 
 fn prepare_cap_loops(
@@ -216,6 +230,7 @@ fn prepare_cap_loops(
         plane,
         vertices,
         uses,
+        rings: Vec::new(),
         local_orientation_valid,
     }))
 }

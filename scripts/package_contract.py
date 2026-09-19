@@ -35,6 +35,7 @@ KERNEL_PACKAGE_FILES = {
     "src/boolean/mixed_cap_boundary.rs",
     "src/boolean/mixed_face_arrangement.rs",
     "src/boolean/mixed_face_arrangement/source_rings.rs",
+    "src/boolean/mixed_face_arrangement/circular_boundaries.rs",
     "src/boolean/mixed_operand.rs",
     "src/boolean/mixed_periodic_arrangement.rs",
     "src/boolean/mixed_shell_components.rs",
@@ -42,6 +43,9 @@ KERNEL_PACKAGE_FILES = {
     "src/boolean/mixed_shell_materialize_tests.rs",
     "src/boolean/mixed_shell_plan.rs",
     "src/boolean/mixed_shell_plan/source_rings.rs",
+    "src/boolean/mixed_shell_plan/planar_lineage.rs",
+    "src/boolean/mixed_shell_plan/axial_intervals.rs",
+    "src/boolean/mixed_shell_plan/tests.rs",
     "src/boolean/mod.rs",
     "src/boolean/parallel_cylinder_boundary.rs",
     "src/boolean/parallel_cylinder_pipeline.rs",
@@ -338,6 +342,7 @@ def main() -> int:
         "\n".join(
             path.read_text().split("\n#[cfg(test)]\nmod tests", 1)[0]
             for path in mixed_shell_paths
+            if path.name != "tests.rs"  # extracted cfg(test) module, never production planning
         ),
         (str(path.relative_to(repository)) for path in repository.glob("crates/**/*.rs")),
         shell_lemmas_source=(

@@ -111,12 +111,54 @@ fn assert_lineage(
     let mut derived = Vec::new();
     let mut counts = [0, 0];
     for event in created.journal().lineage() {
+        if let LineageView::DerivedFrom {
+            derived: JournalEntity::Edge(edge),
+            source: JournalEntity::Edge(source),
+        } = &event
+        {
+            assert!(
+                part.body(created.bodies()[0].clone())
+                    .unwrap()
+                    .edges()
+                    .unwrap()
+                    .any(|id| id == *edge)
+            );
+            assert!([&fixture.left, &fixture.right].iter().any(|body| {
+                part.body((*body).clone())
+                    .unwrap()
+                    .edges()
+                    .unwrap()
+                    .any(|id| id == *source)
+            }));
+            continue;
+        }
+        if let LineageView::DerivedFrom {
+            derived: JournalEntity::Vertex(vertex),
+            source: JournalEntity::Edge(source),
+        } = &event
+        {
+            assert!(
+                part.body(created.bodies()[0].clone())
+                    .unwrap()
+                    .vertices()
+                    .unwrap()
+                    .any(|id| id == *vertex)
+            );
+            assert!([&fixture.left, &fixture.right].iter().any(|body| {
+                part.body((*body).clone())
+                    .unwrap()
+                    .edges()
+                    .unwrap()
+                    .any(|id| id == *source)
+            }));
+            continue;
+        }
         let LineageView::DerivedFrom {
             derived: JournalEntity::Face(face),
             source: JournalEntity::Face(source),
         } = event
         else {
-            panic!("expected face-only source lineage")
+            panic!("expected face-only source lineage: {event:?}")
         };
         assert!(result.contains(&face) && !derived.contains(&face));
         derived.push(face);
@@ -283,6 +325,7 @@ fn assert_work_boundaries(mut make_fixture: impl FnMut() -> BooleanFixture) {
         BOOLEAN_POST_SELECTION_WORK,
         SECTION_WORK,
         kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap(),
+        kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap(),
     ] {
         let usage = *baseline
             .report()
@@ -290,6 +333,11 @@ fn assert_work_boundaries(mut make_fixture: impl FnMut() -> BooleanFixture) {
             .iter()
             .find(|usage| usage.stage == stage && usage.resource == ResourceKind::Work)
             .unwrap();
+        if usage.consumed == 0
+            && stage == kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap()
+        {
+            continue; // Earlier shell proofs can discharge unchanged annuli.
+        }
         assert!(usage.consumed > 0);
         let settings = |allowed| {
             OperationSettings::new().with_budget_overrides(
@@ -332,11 +380,9 @@ fn assert_work_boundaries(mut make_fixture: impl FnMut() -> BooleanFixture) {
 }
 
 #[test]
-fn composed_cuts_refuse_interacting_existing_holes_without_mutation() {
-    // Secant overlap, external/internal tangency, and unresolved near contact
-    // require split source rings and still fail closed.
+fn composed_cuts_refuse_tangent_existing_holes_without_mutation() {
+    // External/internal tangency and unresolved near contact fail closed.
     for next in [
-        (-2.0, -1.0, 0.75),
         (-1.0, -1.0, 0.75),
         (-2.0, -1.0, 1.25),
         (-2.0_f64.next_down(), -1.0, 1.25),
@@ -583,4 +629,182 @@ fn composed_cuts_nested_replacement_budget_denial_is_failure_atomic() {
             (0.0, 0.0, 1.75),
         )
     });
+}
+
+/// Independent circle-lens formula; the pre-existing holes are disjoint.
+fn disk_overlap(first: (f64, f64, f64), second: (f64, f64, f64)) -> f64 {
+    let d = ((first.0 - second.0).powi(2) + (first.1 - second.1).powi(2)).sqrt();
+    let (r, s) = (first.2, second.2);
+    if d >= r + s {
+        return 0.0;
+    }
+    if d <= (r - s).abs() {
+        return core::f64::consts::PI * r.min(s).powi(2);
+    }
+    let acos = |x: f64| kcore::math::atan2((1.0 - x * x).sqrt(), x);
+    r * r * acos((d * d + r * r - s * s) / (2.0 * d * r))
+        + s * s * acos((d * d + s * s - r * r) / (2.0 * d * s))
+        - 0.5 * ((-d + r + s) * (d + r - s) * (d - r + s) * (d + r + s)).sqrt()
+}
+
+#[test]
+fn composed_cuts_split_crossing_holes_with_full_proof_and_independent_volume() {
+    type CircleCut = (f64, f64, f64);
+    let cases: &[(&[CircleCut], CircleCut)] = &[
+        (&[(0.0, 0.0, 0.75)], (0.75, 0.0, 0.75)),
+        (&[(-2.5, -1.0, 0.75)], (-2.0, -1.0, 0.75)),
+        (&[(0.0, 0.0, 0.75)], (0.625, 0.25, 0.5)),
+        (&[(0.0, 0.0, 0.75)], (-0.75, 0.0, 0.75)),
+        (&[(0.0, 0.0, 0.75)], (0.25, 0.625, 0.5)),
+        (&[(0.0, 0.0, 0.75), (3.0, 2.0, 0.25)], (0.75, 0.0, 0.75)),
+        (&[(-1.0, 0.0, 0.5), (1.0, 0.0, 0.5)], (0.0, 0.0, 1.125)),
+        (
+            &[(-1.0, 0.0, 0.5), (1.0, 0.0, 0.5), (0.0, 0.0, 0.125)],
+            (0.0, 0.0, 1.125),
+        ),
+    ];
+    for frame in frames() {
+        for &(holes, next) in cases {
+            let mut previous = None;
+            for _ in 0..2 {
+                let mut fixture = nested_cut_fixture(frame, holes, next);
+                let sources = [
+                    export(&fixture, fixture.left.clone()),
+                    export(&fixture, fixture.right.clone()),
+                ];
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                let graph = part
+                    .section_bodies(SectionBodiesRequest::new(
+                        fixture.left.clone(),
+                        fixture.right.clone(),
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(
+                    graph.completion(),
+                    SectionCompletion::Complete,
+                    "holes={holes:?}, cut={next:?}: {graph:?}"
+                );
+                let crossed = holes
+                    .iter()
+                    .filter(|&&hole| {
+                        let d = ((hole.0 - next.0).powi(2) + (hole.1 - next.1).powi(2)).sqrt();
+                        d > (hole.2 - next.2).abs() && d < hole.2 + next.2
+                    })
+                    .count();
+                let swallowed = holes
+                    .iter()
+                    .filter(|&&hole| {
+                        ((hole.0 - next.0).powi(2) + (hole.1 - next.1).powi(2)).sqrt() + hole.2
+                            < next.2
+                    })
+                    .count();
+                let swapped = part
+                    .section_bodies(SectionBodiesRequest::new(
+                        fixture.right.clone(),
+                        fixture.left.clone(),
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(swapped.completion(), SectionCompletion::Complete);
+                assert_eq!(
+                    swapped.curve_fragments().len(),
+                    graph.curve_fragments().len()
+                );
+                assert_eq!(graph.curve_fragments().len(), 4 * crossed);
+                let created = cut(&mut fixture);
+                let body = created.bodies()[0].clone();
+                let retained = holes.len() - swallowed;
+                assert_lineage(&fixture, &created, [6 + retained, crossed]);
+                assert_eq!(
+                    boolean_body_topology_signature(&fixture, body.clone()),
+                    [
+                        6 + retained + crossed,
+                        12 + 2 * retained + 4 * crossed,
+                        8 + 4 * crossed
+                    ]
+                );
+                assert_eq!(export(&fixture, fixture.left.clone()), sources[0]);
+                assert_eq!(export(&fixture, fixture.right.clone()), sources[1]);
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                let checked = part
+                    .check_body(CheckBodyRequest::new(body.clone(), CheckLevel::Full))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(checked.outcome(), CheckOutcome::Valid, "{checked:?}");
+                let mesh = part
+                    .tessellate_body(TessellateBodyRequest::new(
+                        body.clone(),
+                        TessOptions {
+                            chord_tol: 1e-3,
+                            max_edge_len: None,
+                        },
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                let volume = mesh
+                    .triangles()
+                    .iter()
+                    .map(|triangle| {
+                        let [a, b, c] =
+                            triangle.map(|i| mesh.positions()[i as usize] - frame.origin());
+                        a.dot(b.cross(c)) / 6.0
+                    })
+                    .sum::<f64>()
+                    .abs();
+                let area = core::f64::consts::PI
+                    * (next.2.powi(2) + holes.iter().map(|h| h.2.powi(2)).sum::<f64>())
+                    - holes.iter().map(|&h| disk_overlap(h, next)).sum::<f64>();
+                assert!(
+                    (volume - (160.0 - 2.0 * area)).abs() < 0.04,
+                    "holes={holes:?}, cut={next:?}, volume={volume}, expected={}",
+                    160.0 - 2.0 * area
+                );
+                let bytes = assert_deterministic_xt_and_fast_self_import(
+                    &mut fixture,
+                    std::slice::from_ref(&body),
+                );
+                if let Some(previous) = &previous {
+                    assert_eq!(&bytes, previous);
+                }
+                previous = Some(bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn composed_crossing_cut_budget_denial_is_failure_atomic() {
+    assert_work_boundaries(|| {
+        nested_cut_fixture(Frame::world(), &[(0.0, 0.0, 0.75)], (0.75, 0.0, 0.75))
+    });
+}
+
+#[test]
+fn composed_arc_boundaries_refuse_further_cuts_atomically() {
+    let mut fixture = nested_cut_fixture(Frame::world(), &[(0.0, 0.0, 0.75)], (0.75, 0.0, 0.75));
+    fixture.left = cut(&mut fixture).bodies()[0].clone();
+    fixture.right = cutter(
+        &mut fixture.session,
+        &fixture.part,
+        Frame::world(),
+        (3.0, 0.0, 0.5),
+    );
+    let before = boolean_topology_counts(&fixture);
+    let bytes = export(&fixture, fixture.left.clone());
+    let result = run_boolean(
+        &mut fixture,
+        BooleanOperation::Subtract,
+        OperationSettings::new(),
+    );
+    assert!(matches!(
+        result.into_result().unwrap(),
+        BooleanOutcome::Refused(_)
+    ));
+    assert_eq!(boolean_topology_counts(&fixture), before);
+    assert_eq!(export(&fixture, fixture.left.clone()), bytes);
 }
