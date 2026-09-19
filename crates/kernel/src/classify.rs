@@ -679,15 +679,22 @@ fn prepare_face(
         None
     };
     if !circle_rings.is_empty() {
-        let (Some(orientation), [polygon], [circle]) = (
-            convex_orientation,
-            loops.as_slice(),
-            circle_rings.as_slice(),
-        ) else {
+        let (Some(orientation), [polygon]) = (convex_orientation, loops.as_slice()) else {
             return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
         };
-        if !convex::certify_circle_hole(polygon, circle.circle, drop_axis, orientation) {
-            return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+        for (index, circle) in circle_rings.iter().enumerate() {
+            if index != 0 {
+                charge(scope, polygon.vertices.len() as u64)?;
+            }
+            if !convex::certify_circle_hole(polygon, circle.circle, drop_axis, orientation) {
+                return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+            }
+            for previous in &circle_rings[..index] {
+                charge(scope, 1)?;
+                if !convex::certify_circle_separation(previous.circle, circle.circle, drop_axis) {
+                    return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+                }
+            }
         }
     }
     Ok(PrepOutcome::Ready(PreparedBoundaryFace::Planar(

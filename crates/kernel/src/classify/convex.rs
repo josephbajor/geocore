@@ -135,9 +135,55 @@ pub(super) fn certify_circle_hole(
     true
 }
 
+/// A strict separating line between the projected disks. Stored axes need
+/// not be exactly unit: their complete harmonic support is enclosed outward.
+pub(super) fn certify_circle_separation(first: Circle, second: Circle, drop_axis: usize) -> bool {
+    let a = project(first.frame().origin().to_array(), drop_axis);
+    let b = project(second.frame().origin().to_array(), drop_axis);
+    let direction = [b[0] - a[0], b[1] - a[1]];
+    if direction.into_iter().any(|value| !value.is_finite()) {
+        return false;
+    }
+    let separation = (Interval::point(b[0]) - Interval::point(a[0]))
+        * Interval::point(direction[0])
+        + (Interval::point(b[1]) - Interval::point(a[1])) * Interval::point(direction[1]);
+    let extent = |circle: Circle| {
+        let dot = |axis: [f64; 3]| {
+            let axis = project(axis, drop_axis);
+            Interval::point(axis[0]) * Interval::point(direction[0])
+                + Interval::point(axis[1]) * Interval::point(direction[1])
+        };
+        (dot(circle.frame().x().to_array()).square() + dot(circle.frame().y().to_array()).square())
+            .sqrt()
+            .map(|amplitude| amplitude * Interval::point(circle.radius()))
+    };
+    let (Some(first), Some(second)) = (extent(first), extent(second)) else {
+        return false;
+    };
+    let sum = first + second;
+    separation.lo().is_finite() && sum.hi().is_finite() && separation.lo() > sum.hi()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_hole_separation_refuses_overlap_tangency_and_collapsed_projection() {
+        use kgeom::frame::Frame;
+        use kgeom::vec::Point3;
+        let first = Circle::new(Frame::world(), 0.5).unwrap();
+        for (offset, separated) in [(0.5, false), (1.0, false), (1.25, true)] {
+            let second = Circle::new(
+                Frame::world().with_origin(Point3::new(offset, 0.0, 0.0)),
+                0.5,
+            )
+            .unwrap();
+            assert_eq!(certify_circle_separation(first, second, 2), separated);
+            assert_eq!(certify_circle_separation(second, first, 2), separated);
+            assert!(!certify_circle_separation(first, second, 0));
+        }
+    }
 
     #[test]
     fn exact_support_order_accepts_convex_loops_and_rejects_fallback_shapes() {

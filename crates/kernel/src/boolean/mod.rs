@@ -51,6 +51,7 @@ mod mixed_boundary;
 mod mixed_cap_boundary;
 #[allow(dead_code)]
 mod mixed_face_arrangement;
+mod mixed_operand;
 #[allow(dead_code)]
 mod mixed_periodic_arrangement;
 #[allow(dead_code)]

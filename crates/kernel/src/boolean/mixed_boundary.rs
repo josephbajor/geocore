@@ -35,7 +35,6 @@ use super::disk_face_arrangement::{
     ArrangedDiskFace, DiskCellClassification, arrange_section_disk_face,
     classify_disk_face_from_anchor,
 };
-use super::extract::ExtractedPlanarSourceBody;
 use super::face_arrangement::{ArrangementDirection, ArrangementEdgeKey};
 use super::mixed_cap_boundary::{MixedCylinderCapRing, bind_cylinder_cap_ring_from_embedding};
 use super::mixed_face_arrangement::{
@@ -151,6 +150,71 @@ impl PreparedMixedBoundary {
             .collect()
     }
 
+    /// Preserve uncut source annuli of an already-modified operand.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn append_uncut_annuli(
+        &mut self,
+        part: &Part<'_>,
+        graph: &BodySectionGraph,
+        bodies: &[BodyId; 2],
+        operand: usize,
+        faces: &[FaceId],
+        linear: f64,
+        scope: &mut OperationScope<'_, '_>,
+    ) -> Result<(), MixedBoundaryError> {
+        for face in faces {
+            if graph
+                .branches()
+                .iter()
+                .any(|branch| branch.faces()[operand] == *face)
+            {
+                return Err(MixedBoundaryError::SourceTopology);
+            }
+            let embedding = certify_periodic_face_fragment_subset(
+                &part.state.store,
+                bodies[operand].part(),
+                graph,
+                operand,
+                face.clone(),
+                &[],
+                linear,
+            )
+            .map_err(|_| MixedBoundaryError::MissingPeriodicFaceEvidence)?;
+            let arrangement = arrange_mixed_periodic_face_from_embedding(graph, &embedding)
+                .map_err(MixedBoundaryError::PeriodicArrangement)?;
+            let source = source_face_key(&part.state.store, graph, face, operand)
+                .map_err(|_| MixedBoundaryError::SourceTopology)?;
+            let classes = classify_periodic_face_with_embedding(
+                part,
+                graph,
+                &bodies[1 - operand],
+                face,
+                operand,
+                &arrangement,
+                &embedding,
+                linear,
+                scope,
+            )?;
+            self.classified
+                .extend(arrangement.cells().iter().map(|cell| {
+                    ClassifiedBoundaryFragment::new(
+                        MixedShellCellKey::periodic(source, *cell.key()),
+                        operand_side(operand),
+                        (),
+                        as_boundary_classification(classes[cell.key()]),
+                    )
+                }));
+            self.periodic.push(PreparedPeriodicFace {
+                face: face.clone(),
+                operand,
+                source,
+                arrangement,
+                embedding,
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn classified(&self) -> Vec<ClassifiedBoundaryFragment<MixedShellCellKey, ()>> {
         self.classified.clone()
     }
@@ -209,7 +273,7 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
     part: &Part<'_>,
     graph: &BodySectionGraph,
     bodies: &[BodyId; 2],
-    planar: &ExtractedPlanarSourceBody,
+    planar: &[FaceId],
     cylinder: &CertifiedCylinderSource,
     planar_operand: usize,
     cylinder_operand: usize,
@@ -231,7 +295,7 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
         return Err(MixedBoundaryError::IncompleteSection);
     }
     let work = mixed_boundary_work(
-        planar.faces().len(),
+        planar.len(),
         graph.curve_fragments().len(),
         graph.curve_endpoints().len(),
         graph.curve_components().len(),
@@ -242,9 +306,9 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
         .charge(PLANAR_BOOLEAN_BSP_WORK, work)
         .map_err(Error::from)?;
     let store = &part.state.store;
-    let mut prepared_planar = Vec::with_capacity(planar.faces().len());
+    let mut prepared_planar = Vec::with_capacity(planar.len());
     let mut classified = Vec::new();
-    for source_face in planar.faces() {
+    for source_face in planar {
         let face = source_face.clone();
         let output = if contact.is_some() {
             arrange_uncut_mixed_planar_face_with_lineage(store, graph, face.clone(), planar_operand)
@@ -1136,7 +1200,7 @@ mod tests {
                 &part,
                 &graph,
                 &[left, right],
-                &planar,
+                planar.faces(),
                 &cylinder_source,
                 planar_operand,
                 cylinder_operand,
@@ -1389,7 +1453,7 @@ mod tests {
                     &part,
                     &graph,
                     &bodies,
-                    &planar,
+                    planar.faces(),
                     &cylinder_source,
                     planar_operand,
                     cylinder_operand,

@@ -43,6 +43,13 @@ the `kernel` API. Lower-layer X_T reconstruction and oracle tools remain
 trusted adapter and conformance seams; they are not examples of the ordinary
 application boundary.
 
+A composed example extrudes a plate and subtracts three separated cylindrical
+through holes, reusing each Boolean result as the next operand:
+
+```sh
+cargo run --release -p kernel-lifecycle --example drilled_plate -- target/drilled-plate.x_t
+```
+
 ## Building
 
 ```sh

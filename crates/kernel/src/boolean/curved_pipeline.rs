@@ -173,6 +173,11 @@ fn execute_stages(
     super::pipeline::validate_pipeline_budget(scope)?;
     let cylinder_mask = cylinder_scan.mask();
     if cylinder_mask == [true, true] {
+        if let Some(result) =
+            super::mixed_operand::try_execute(edit, operation, &bodies, linear, scope)?
+        {
+            return Ok(result);
+        }
         return match cylinder_scan.pair_axes_exactly_parallel() {
             Some(true) => super::parallel_cylinder_pipeline::execute_parallel_cylinder_boolean(
                 edit, operation, bodies, linear, scope,
@@ -313,7 +318,7 @@ fn execute_mixed_bounded_arc(
         &edit.as_part(),
         graph,
         bodies,
-        planar,
+        planar.faces(),
         cylinder,
         planar_operand,
         cylinder_operand,
@@ -363,7 +368,7 @@ fn execute_mixed_support_contact(
         &edit.as_part(),
         graph,
         bodies,
-        planar,
+        planar.faces(),
         cylinder,
         planar_operand,
         cylinder_operand,

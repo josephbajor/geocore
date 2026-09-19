@@ -459,6 +459,12 @@ fn source_carrier(
     {
         CurveGeom::Line(line) => Ok(AnalyticShellCurve::Line(*line)),
         CurveGeom::Circle(circle) => Ok(AnalyticShellCurve::Circle(*circle)),
+        CurveGeom::Intersection(curve) => match curve.carrier() {
+            kgraph::VerifiedIntersectionCarrier::Line(line) => Ok(AnalyticShellCurve::Line(line)),
+            kgraph::VerifiedIntersectionCarrier::Circle(circle) => {
+                Ok(AnalyticShellCurve::Circle(circle))
+            }
+        },
         _ => Err(MixedShellMaterializationError::UnsupportedSourceCurve),
     }
 }

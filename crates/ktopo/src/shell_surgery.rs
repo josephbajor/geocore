@@ -932,7 +932,25 @@ fn verify_strict_separation(
 ) -> bool {
     let first_axis = first.evidence.cylinder.frame().z();
     if evidence.direction != first_axis && evidence.direction != -first_axis {
-        return false;
+        let Some(first_range) = projected_sweep_range(
+            first.evidence.cylinder,
+            first.boundaries.map(|boundary| boundary.center),
+            evidence.direction,
+            evidence.origin,
+        ) else {
+            return false;
+        };
+        let Some(second_range) = projected_sweep_range(
+            second.evidence.cylinder,
+            second.boundaries.map(|boundary| boundary.center),
+            evidence.direction,
+            evidence.origin,
+        ) else {
+            return false;
+        };
+        return first_range.map(f64::to_bits) == evidence.first_range.map(f64::to_bits)
+            && second_range.map(f64::to_bits) == evidence.second_range.map(f64::to_bits)
+            && (first_range[1] < second_range[0] || second_range[1] < first_range[0]);
     }
     if !certified_parallel(evidence.direction, second.evidence.cylinder.frame().z()) {
         return false;
@@ -948,6 +966,43 @@ fn verify_strict_separation(
     first_range.map(f64::to_bits) == evidence.first_range.map(f64::to_bits)
         && second_range.map(f64::to_bits) == evidence.second_range.map(f64::to_bits)
         && (first_range[1] < second_range[0] || second_range[1] < first_range[0])
+}
+
+/// Outward projection of the entire solid sweep onto a proposed separating
+/// direction. The rectangular radial cover is conservative for the disk; a
+/// numerical direction is only a witness, and never an overlap decision.
+fn projected_sweep_range(
+    cylinder: Cylinder,
+    centers: [Point3; 2],
+    direction: Vec3,
+    origin: Point3,
+) -> Option<[f64; 2]> {
+    if ![direction.x, direction.y, direction.z]
+        .into_iter()
+        .all(f64::is_finite)
+        || direction == Vec3::new(0.0, 0.0, 0.0)
+    {
+        return None;
+    }
+    let absolute_bound = |value: Interval| value.lo().abs().max(value.hi().abs());
+    let x = interval_vector_dot(direction, cylinder.frame().x());
+    let y = interval_vector_dot(direction, cylinder.frame().y());
+    let radial = (Interval::point(absolute_bound(x)) + Interval::point(absolute_bound(y)))
+        * Interval::point(cylinder.radius());
+    let projections = centers.map(|center| {
+        let center_projection = (Interval::point(center.x) - Interval::point(origin.x))
+            * Interval::point(direction.x)
+            + (Interval::point(center.y) - Interval::point(origin.y))
+                * Interval::point(direction.y)
+            + (Interval::point(center.z) - Interval::point(origin.z))
+                * Interval::point(direction.z);
+        center_projection + Interval::new(-radial.hi(), radial.hi())
+    });
+    let range = [
+        projections[0].lo().min(projections[1].lo()),
+        projections[0].hi().max(projections[1].hi()),
+    ];
+    range.into_iter().all(f64::is_finite).then_some(range)
 }
 
 fn verify_exact_tangency(
@@ -1307,6 +1362,94 @@ mod tests {
             certify_evidence(transaction.store(), output.shell(), &overlapping_ranges,).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn nonaxial_sweep_separation_is_recomputed_and_tamper_evident() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_cylindrical_host_solid(&two_outward_bands())
+            .unwrap();
+        let mut evidence = accepted_evidence(transaction.store(), output.shell());
+        let direction = Vec3::new(1.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let range = |feature: &ProductSweepEvidence| {
+            projected_sweep_range(
+                feature.cylinder,
+                feature
+                    .profiles
+                    .map(|profile| profile.profile.frame().origin()),
+                direction,
+                origin,
+            )
+            .unwrap()
+        };
+        let relation = StrictSeparationEvidence {
+            first: 0,
+            second: 1,
+            direction,
+            origin,
+            first_range: range(&evidence.features[0]),
+            second_range: range(&evidence.features[1]),
+        };
+        evidence.relations[0] = PairwiseRelationEvidence::Strict(relation);
+        assert_eq!(
+            certify_evidence(transaction.store(), output.shell(), &evidence).unwrap(),
+            Some(ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Positive
+            })
+        );
+        for direction in [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            -relation.direction,
+            Vec3::new(f64::NAN, 0.0, 0.0),
+            Vec3::new(f64::INFINITY, 0.0, 0.0),
+        ] {
+            let mut tampered = evidence.clone();
+            let PairwiseRelationEvidence::Strict(claim) = &mut tampered.relations[0] else {
+                unreachable!()
+            };
+            claim.direction = direction;
+            assert_eq!(
+                certify_evidence(transaction.store(), output.shell(), &tampered).unwrap(),
+                None
+            );
+        }
+        let mut tampered = evidence;
+        let PairwiseRelationEvidence::Strict(claim) = &mut tampered.relations[0] else {
+            unreachable!()
+        };
+        claim.first_range = [-100.0, -90.0];
+        claim.second_range = [90.0, 100.0];
+        assert_eq!(
+            certify_evidence(transaction.store(), output.shell(), &tampered).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn sweep_projection_encloses_the_entire_disk_and_refuses_touching_ranges() {
+        let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+        let centers = [Point3::new(0.0, 0.0, -1.0), Point3::new(0.0, 0.0, 1.0)];
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let direction = Vec3::new(1.0, 0.0, 0.0);
+        let first = projected_sweep_range(cylinder, centers, direction, origin).unwrap();
+        assert!(first[0] <= -0.5 && first[1] >= 0.5);
+        assert!(first[1] - first[0] < 1.000_000_000_001);
+        // These exact disks touch at x=0.5. Rounding must not invent a gap.
+        for offset in [1.0_f64.next_down(), 1.0] {
+            let second_centers = centers.map(|center| center + Vec3::new(offset, 0.0, 0.0));
+            let second =
+                projected_sweep_range(cylinder, second_centers, direction, origin).unwrap();
+            assert!(first[1] >= second[0]);
+        }
+        let diagonal =
+            projected_sweep_range(cylinder, centers, Vec3::new(1.0, 1.0, 1.0), origin).unwrap();
+        // The actual extremes are ±(1 + sqrt(0.5)); the rectangle covers ±2.
+        assert!(diagonal[0] <= -2.0 && diagonal[1] >= 2.0);
     }
 
     #[test]

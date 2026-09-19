@@ -332,6 +332,89 @@ pub(crate) const fn classified_exterior_cap<K>(
     )
 }
 
+/// Bind a preserved annulus ring to its live planar mate, including a hole
+/// in a multi-loop face. The caller retains the complete periodic embedding.
+pub(crate) fn bind_annulus_source_ring(
+    store: &Store,
+    graph: &BodySectionGraph,
+    side_face: &FaceId,
+    operand: usize,
+    loop_id: RawLoopId,
+    arrangement: &MixedPeriodicFaceArrangement,
+    evidence: &crate::CertifiedSectionPeriodicFaceEmbedding,
+) -> Result<MixedCylinderCapRing, MixedCylinderCapRingGap> {
+    let fail = || MixedCylinderCapRingGap::BoundaryIncidenceMismatch;
+    if evidence.face() != *side_face || evidence.operand() != operand {
+        return Err(fail());
+    }
+    let ordinal = evidence
+        .source_loops()
+        .iter()
+        .position(|id| id.raw() == loop_id)
+        .ok_or_else(fail)?;
+    let ring = store.get(loop_id).map_err(|_| fail())?;
+    let [side_fin] = ring.fins() else {
+        return Err(fail());
+    };
+    let fin = store.get(*side_fin).map_err(|_| fail())?;
+    let edge = store.get(fin.edge()).map_err(|_| fail())?;
+    if ring.face() != side_face.raw()
+        || fin.parent() != loop_id
+        || edge.vertices() != [None, None]
+        || edge.bounds().is_some()
+        || edge.tolerance().is_some()
+        || edge.fins().len() != 2
+    {
+        return Err(fail());
+    }
+    let cap_fin = *edge
+        .fins()
+        .iter()
+        .find(|id| **id != *side_fin)
+        .ok_or_else(fail)?;
+    let mate = store.get(cap_fin).map_err(|_| fail())?;
+    let mate_loop = store.get(mate.parent()).map_err(|_| fail())?;
+    let mate_face = store.get(mate_loop.face()).map_err(|_| fail())?;
+    if mate.edge() != fin.edge()
+        || mate.sense() == fin.sense()
+        || mate_loop.fins() != [cap_fin]
+        || !mate_face.loops().contains(&mate.parent())
+        || !matches!(
+            store.surface(mate_face.surface()).map_err(|_| fail())?,
+            ktopo::geom::SurfaceGeom::Plane(_)
+        )
+    {
+        return Err(fail());
+    }
+    let cap_face = FaceId::new(side_face.part().clone(), mate_loop.face());
+    let spans = arrangement
+        .source_spans()
+        .iter()
+        .filter(|span| span.key().topology_ordinal() == ordinal)
+        .collect::<Vec<_>>();
+    let [span] = spans.as_slice() else {
+        return Err(fail());
+    };
+    if !span.is_whole_loop() {
+        return Err(fail());
+    }
+    Ok(MixedCylinderCapRing {
+        boundary: ordinal,
+        operand,
+        cap_source: source_face_key(store, graph, &cap_face, operand).map_err(|_| fail())?,
+        side_source: source_face_key(store, graph, side_face, operand).map_err(|_| fail())?,
+        cap_face,
+        side_face: side_face.clone(),
+        side_loop_key: *span.key(),
+        edge: fin.edge(),
+        cap_loop: mate.parent(),
+        cap_fin,
+        side_loop: loop_id,
+        side_fin: *side_fin,
+        merge_edge_source: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::boundary_select::{

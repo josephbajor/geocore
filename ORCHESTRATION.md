@@ -78,9 +78,7 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    star/cylinder Intersect reaches general mixed planning and Full-commits at
    17F/45E/30V with literal-derived volume, deterministic X_T, and Fast
    self-import; pure planar BSP and convex curved shortcuts still require that
-   certificate. The historical fifteen-payload Boolean identity imports and
-   compares 15/15 in Onshape at writer `fedf1ab`; its rows remain byte-identical
-   in the stale sixteen-payload bundle pending one cap-crossing host replay.
+   certificate. Historical licensed-host evidence: `docs/oracle-loop.md`.
    Proof-keyed disk-cap chords
    now feed count-independent exact disk arrangements with source-arc lineage
    and period-lifted realization. Certified maximal transverse annulus traces
@@ -99,6 +97,8 @@ Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").
 "The foundation could be stronger" is not a justification; the boolean rungs
 decide which foundation gaps are real.
+
+Composed subtraction supports separated through cuts on prior Plane/Cylinder results; evidence: `composed_cuts_reuse_results_preserve_holes_and_replay_under_rigid_frames`. Next application slice: interacting retained trims and broader result reuse; keep unsupported layouts failure-atomic and queue final X_T bytes under R5.
 
 ## Hard rules
 

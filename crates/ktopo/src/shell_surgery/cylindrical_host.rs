@@ -123,14 +123,42 @@ pub(super) fn discover(store: &Store, shell_id: ShellId) -> Result<Vec<ShellSurg
                     .map(|profile| (profile.profile.frame().origin() - origin).dot(direction));
                 [values[0].min(values[1]), values[0].max(values[1])]
             };
-            relations.push(PairwiseRelationEvidence::Strict(StrictSeparationEvidence {
+            let mut evidence = StrictSeparationEvidence {
                 first,
                 second,
                 direction,
                 origin,
                 first_range: range(&features[first]),
                 second_range: range(&features[second]),
-            }));
+            };
+            if !(evidence.first_range[1] < evidence.second_range[0]
+                || evidence.second_range[1] < evidence.first_range[0])
+            {
+                let direction = features[second].profiles[0].profile.frame().origin() - origin;
+                let projected = |feature: &ProductSweepEvidence| {
+                    projected_sweep_range(
+                        feature.cylinder,
+                        feature
+                            .profiles
+                            .map(|profile| profile.profile.frame().origin()),
+                        direction,
+                        origin,
+                    )
+                };
+                if let (Some(first_range), Some(second_range)) =
+                    (projected(&features[first]), projected(&features[second]))
+                {
+                    evidence = StrictSeparationEvidence {
+                        first,
+                        second,
+                        direction,
+                        origin,
+                        first_range,
+                        second_range,
+                    };
+                }
+            }
+            relations.push(PairwiseRelationEvidence::Strict(evidence));
         }
     }
 

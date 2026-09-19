@@ -59,14 +59,14 @@ compares clean. The 2026-07-21 supplemental Boolean run at writer `fedf1ab`
 imported and compared 15/15 clean, including the curved Plane/Cylinder payloads.
 Evidence: `docs/oracle-results.tsv`.
 
-**Current certification state (2026-07-21): base stale, Boolean stale.**
+**Current certification state: base stale, Boolean stale.**
 Finite-cylinder Full proof changed the regenerated base manifest's checker
 evidence after writer `b596027`; its 15 payload hashes are unchanged, but the
 base bundle needs licensed-host re-certification. The complete fifteen-payload
 Boolean bundle at identity
 `61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7`
-is certified by the 2026-07-21 Onshape rows; the current sixteen-payload
-record remains stale until its queued cap-crossing payload is replayed.
+is certified by the 2026-07-21 Onshape rows; the current nineteen-payload
+bundle remains stale pending cap-crossing, corner-contact, and composed-cut replay.
 
 ## 1. Generate the bundle
 
@@ -112,17 +112,18 @@ python3 scripts/oracle_loop.py certification-check \
   --record docs/oracle-boolean-certification.json
 ```
 
-Its sixteen payloads cover connected block/block unite/subtract/intersect, both
+Its nineteen payloads cover connected block/block unite/subtract/intersect, both
 bodies of a disjoint union, contained subtraction with one finite void, one
 bounded-arc block/cylinder intersection, and both public-result-order bodies of
 the bounded-arc planar-minus-cylinder subtraction, plus rectangular and
 five-portal cap-retaining Unite/cylinder-left Subtract, the seam-crossing
 five-portal cylinder-left Subtract, nonconvex star/cylinder Intersect, and the
-cap-crossing circular-segment plane/cylinder Intersect.
-Generation requires Full-valid committed results, independent volumes, local X_T import,
+cap-crossing circular-segment plane/cylinder Intersect, both corner-contact
+Subtractions, and a plate with three sequential through cuts.
+Generation requires Full-valid committed results, independent volumes where declared, local X_T import,
 byte-stable replay, and an empty output directory. The prior fifteen-payload
 identity is certified 15/15 by Onshape; the record is stale only because the
-new sixteenth payload has not yet received licensed-host evidence. Later writer-byte
+four added payloads have not yet received licensed-host evidence. Later writer-byte
 changes must also mark the record stale and queue a final-byte replay under the
 invalidation rule above.
 

@@ -140,6 +140,18 @@ fn admit_disk_boundary(
     let [loop_id] = face_data.loops() else {
         return Ok(DiskAdmission::NotDisk);
     };
+    admit_circular_boundary_loop(store, face, *loop_id, scope, true)
+}
+
+fn admit_circular_boundary_loop(
+    store: &Store,
+    face: RawFaceId,
+    loop_id: ktopo::entity::LoopId,
+    scope: &OperationScope<'_, '_>,
+    require_outer: bool,
+) -> Result<DiskAdmission> {
+    let face_data = read(store.get(face))?;
+    let loop_id = &loop_id;
     let loop_ = read(store.get(*loop_id))?;
     let [fin_id] = loop_.fins() else {
         return Ok(DiskAdmission::NotDisk);
@@ -185,7 +197,8 @@ fn admit_disk_boundary(
         || edge.tolerance().is_some()
         || !edge.fins().contains(fin_id)
         || !source_is_circle
-        || !is_outer_disk_orientation(face_data.sense(), fin.sense(), use_.sense())
+        || (require_outer
+            && !is_outer_disk_orientation(face_data.sense(), fin.sense(), use_.sense()))
         || use_.closure_winding() != Some([0, 0])
         || use_.seam().is_some()
         || !use_.chart().is_identity()
@@ -214,6 +227,51 @@ fn admit_disk_boundary(
         circle: *circle,
         use_,
     }))
+}
+
+/// Classify a complete branch circumference against one certified circular
+/// trim loop. Strict interval separation proves constant parity; intersecting
+/// or tangent boundaries remain a gap until their crossing roots are owned.
+pub(super) fn constant_circular_trim_parity(
+    store: &Store,
+    face: RawFaceId,
+    loop_id: ktopo::entity::LoopId,
+    circle: SectionUvCircle,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<core::result::Result<bool, ClosedConicClipGap>> {
+    charge(scope, 1)?;
+    let boundary = match admit_circular_boundary_loop(store, face, loop_id, scope, false)? {
+        DiskAdmission::Certified(boundary) => boundary,
+        DiskAdmission::Indeterminate(gap) => return Ok(Err(gap)),
+        DiskAdmission::NotDisk => return Ok(Err(ClosedConicClipGap::UnsupportedTrim)),
+    };
+    let delta_x = Interval::point(circle.center().x) - Interval::point(boundary.circle.center().x);
+    let delta_y = Interval::point(circle.center().y) - Interval::point(boundary.circle.center().y);
+    let distance = delta_x.square() + delta_y.square();
+    let effective_radius = |radius: f64, x: kgeom::vec::Vec2| {
+        (Interval::point(x.x).square() + Interval::point(x.y).square())
+            .sqrt()
+            .map(|gram| Interval::point(radius) * gram)
+    };
+    let (Some(branch_radius), Some(trim_radius)) = (
+        effective_radius(circle.radius(), circle.x_direction()),
+        effective_radius(boundary.circle.radius(), boundary.circle.x_dir()),
+    ) else {
+        return Ok(Err(ClosedConicClipGap::ArithmeticGuard));
+    };
+    let sum = branch_radius + trim_radius;
+    if distance.lo() > sum.square().hi() {
+        return Ok(Ok(false));
+    }
+    let difference = trim_radius - branch_radius;
+    if difference.lo() > 0.0 && distance.hi() < difference.square().lo() {
+        return Ok(Ok(true));
+    }
+    let difference = branch_radius - trim_radius;
+    if difference.lo() > 0.0 && distance.hi() < difference.square().lo() {
+        return Ok(Ok(false));
+    }
+    Ok(Err(ClosedConicClipGap::NonSecantBoundary))
 }
 
 /// Increasing `Circle2d` parameter is counterclockwise in the surface UV

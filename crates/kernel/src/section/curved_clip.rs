@@ -525,12 +525,12 @@ fn clip_circle_to_plane_trim(
         Ok(source) => source,
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),
     };
-    let segments = match prepare_plane_segments(store, face, scope)? {
-        Ok(segments) => segments,
+    let (segments, circular_parity) = match prepare_plane_segments(store, face, circle, scope)? {
+        Ok(prepared) => prepared,
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),
     };
     let seam_inside = match seam_inside_polygon(&source, &segments, scope)? {
-        Ok(inside) => inside,
+        Ok(inside) => inside != circular_parity,
         Err(gap) => return Ok(ClosedConicClipOutcome::Indeterminate(gap)),
     };
 
@@ -577,16 +577,27 @@ fn clip_circle_to_plane_trim(
 fn prepare_plane_segments(
     store: &Store,
     face: RawFaceId,
+    circle: SectionUvCircle,
     scope: &mut OperationScope<'_, '_>,
-) -> Result<core::result::Result<Vec<PlaneTrimSegment>, ClosedConicClipGap>> {
+) -> Result<core::result::Result<(Vec<PlaneTrimSegment>, bool), ClosedConicClipGap>> {
     let face_data = read(store.get(face))?;
     if face_data.loops().is_empty() {
         return Ok(Err(ClosedConicClipGap::MalformedTrim));
     }
     let mut segments = Vec::new();
+    let mut circular_parity = false;
     for &loop_id in face_data.loops() {
         charge(scope, 1)?;
         let ring = read(store.get::<Loop>(loop_id))?;
+        if ring.fins().len() == 1 {
+            match super::circle_disk_clip::constant_circular_trim_parity(
+                store, face, loop_id, circle, scope,
+            )? {
+                Ok(inside) => circular_parity ^= inside,
+                Err(gap) => return Ok(Err(gap)),
+            }
+            continue;
+        }
         if ring.fins().len() < 3 {
             return Ok(Err(ClosedConicClipGap::MalformedTrim));
         }
@@ -620,7 +631,11 @@ fn prepare_plane_segments(
             if !lo.is_finite()
                 || !hi.is_finite()
                 || lo >= hi
-                || !matches!(read(store.curve(curve_id))?, CurveGeom::Line(_))
+                || !match read(store.curve(curve_id))? {
+                    CurveGeom::Line(_) => true,
+                    CurveGeom::Intersection(curve) => curve.carrier().as_line().is_some(),
+                    _ => false,
+                }
                 || !use_.chart().is_identity()
                 || use_.closure_winding().is_some()
                 || use_.seam().is_some()
@@ -688,7 +703,7 @@ fn prepare_plane_segments(
             return Ok(Err(ClosedConicClipGap::MalformedTrim));
         }
     }
-    Ok(Ok(segments))
+    Ok(Ok((segments, circular_parity)))
 }
 
 fn seam_point(source: &CircleSource) -> IntervalPoint2 {

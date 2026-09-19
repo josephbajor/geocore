@@ -34,6 +34,8 @@ mod bounded_skew_through_contacts;
 mod bounded_skew_xt;
 #[path = "lifecycle/cap_crossing_secant.rs"]
 mod cap_crossing_secant;
+#[path = "lifecycle/composed_cuts.rs"]
+mod composed_cuts;
 #[path = "lifecycle/curved_cavity.rs"]
 mod curved_cavity;
 #[path = "lifecycle/curved_constructive_contact.rs"]

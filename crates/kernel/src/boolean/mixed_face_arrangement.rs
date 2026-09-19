@@ -6,6 +6,9 @@
 //! section publisher's exact root ordinals remain compatible with intrinsic
 //! edge order.
 
+mod source_rings;
+use super::face_arrangement::ArrangementEdgeKey;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use kcore::predicates::{Orientation, affine_dot3, orient2d, polygon_orientation2d};
@@ -260,6 +263,7 @@ impl MixedSourceSpanLineage {
 /// Certified source topology behind every opaque arrangement ordinal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MixedPlanarSourceLineage {
+    pub(crate) retained_rings: Vec<(RawLoopId, usize)>,
     pub(crate) spans: Vec<MixedSourceSpanLineage>,
     pub(crate) source_vertices: Vec<RawVertexId>,
 }
@@ -408,6 +412,7 @@ enum CutEmbedding {
         branch: usize,
         center: [f64; 2],
         radius: f64,
+        x_direction: [f64; 2],
         orientation: Orientation,
     },
 }
@@ -605,6 +610,7 @@ fn adapt_fragment(
                 branch: fragment.branch(),
                 center: [circle.center().x, circle.center().y],
                 radius: circle.radius(),
+                x_direction: [circle.x_direction().x, circle.x_direction().y],
                 orientation,
             },
         });
@@ -813,6 +819,7 @@ fn arrange_planar_face_evidence_with_lineage(
     face: RawFaceId,
     cuts: Vec<FaceCutEvidence>,
 ) -> Result<MixedPlanarFaceOutput, MixedFaceArrangementError> {
+    let retained_loops = source_rings::untouched_rings(store, face, &cuts)?;
     let roots = collect_unique_roots(&cuts)?;
     let split = split_source_boundary(store, face, &roots)?;
     certify_cut_embedding(&cuts)?;
@@ -844,9 +851,26 @@ fn arrange_planar_face_evidence_with_lineage(
         }
         Err(error) => return Err(MixedFaceArrangementError::Arrangement(error)),
     };
+    let retained_cell = arrangement
+        .cells
+        .iter()
+        .find(|cell| {
+            cell.boundaries.iter().any(|cycle| {
+                cycle
+                    .uses()
+                    .iter()
+                    .any(|use_| matches!(use_.edge(), ArrangementEdgeKey::Source(_)))
+            })
+        })
+        .map(|cell| cell.key)
+        .ok_or(MixedFaceArrangementError::EmptySourceLoop)?;
     Ok(MixedPlanarFaceOutput {
         arrangement,
         lineage: MixedPlanarSourceLineage {
+            retained_rings: retained_loops
+                .into_iter()
+                .map(|ring| (ring, retained_cell))
+                .collect(),
             spans: split.lineage,
             source_vertices: split.source_vertices,
         },
@@ -1121,12 +1145,8 @@ fn source_boundary_orientation(
     store: &Store,
     face: RawFaceId,
 ) -> Result<Orientation, MixedFaceArrangementError> {
-    let face = store
-        .get(face)
-        .map_err(|_| MixedFaceArrangementError::MissingSourceFace)?;
-    let [loop_id] = face.loops() else {
-        return Err(MixedFaceArrangementError::SourceBoundaryOrientationRequired);
-    };
+    let loop_id = source_rings::polygon_loop(store, face)?;
+    let loop_id = &loop_id;
     let loop_ = store
         .get(*loop_id)
         .map_err(|_| MixedFaceArrangementError::SourceBoundaryOrientationRequired)?;
@@ -1413,16 +1433,8 @@ fn split_source_boundary(
     face_id: RawFaceId,
     roots: &[BoundaryRootEvidence],
 ) -> Result<SplitSourceBoundary, MixedFaceArrangementError> {
-    let face = store
-        .get(face_id)
-        .map_err(|_| MixedFaceArrangementError::MissingSourceFace)?;
-    let [loop_id] = face.loops() else {
-        return if face.loops().is_empty() {
-            Err(MixedFaceArrangementError::EmptySourceLoop)
-        } else {
-            Err(MixedFaceArrangementError::MultipleSourceLoops)
-        };
-    };
+    let loop_id = source_rings::polygon_loop(store, face_id)?;
+    let loop_id = &loop_id;
     let loop_ = store
         .get(*loop_id)
         .map_err(|_| MixedFaceArrangementError::MissingSourceLoop)?;

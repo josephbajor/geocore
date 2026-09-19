@@ -25,6 +25,7 @@ pub(crate) mod materialize;
 mod parallel_cylinder_lens;
 #[path = "mixed_shell_plan/projected_source_circle.rs"]
 mod projected_source_circle;
+mod source_rings;
 
 pub(crate) use parallel_cylinder_lens::arrange_parallel_cylinder_coincident_boolean;
 pub(crate) use projected_source_circle::{
@@ -130,6 +131,7 @@ impl MixedShellCellKey {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum MixedArrangementBinding<'a> {
     Planar {
         face: FaceId,
@@ -659,13 +661,16 @@ pub(crate) fn arrange_mixed_shell<'a>(
         .curve_fragments()
         .iter()
         .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole));
-    arrange_selected_mixed_shell(
+    let bindings = bindings.into_iter().collect::<Vec<_>>();
+    let mut arrangement = arrange_selected_mixed_shell(
         store,
         graph,
-        bindings,
+        bindings.iter().cloned(),
         selected.into_iter().map(selected_cell),
         face_only_lineage,
-    )
+    )?;
+    source_rings::attach(store, graph, &bindings, &mut arrangement)?;
+    Ok(arrangement)
 }
 
 pub(crate) fn arrange_projected_ring_hole_mixed_shell<'a>(
@@ -2573,9 +2578,25 @@ fn validate_planar_lineage(
 ) -> Result<(), MixedShellPlanError> {
     let fail = || MixedShellPlanError::PlanarLineageMismatch(source);
     let raw_face = store.get(face.raw()).map_err(|_| fail())?;
-    let [loop_id] = raw_face.loops() else {
+    let loop_id = lineage.spans().first().ok_or_else(fail)?.loop_id();
+    let mut covered = vec![loop_id];
+    for &(ring, cell) in &lineage.retained_rings {
+        if covered.contains(&ring)
+            || !arrangement
+                .cells()
+                .iter()
+                .any(|candidate| candidate.key() == cell)
+        {
+            return Err(fail());
+        }
+        covered.push(ring);
+    }
+    if covered.len() != raw_face.loops().len()
+        || raw_face.loops().iter().any(|ring| !covered.contains(ring))
+    {
         return Err(fail());
-    };
+    }
+    let loop_id = &loop_id;
     let loop_ = store.get(*loop_id).map_err(|_| fail())?;
     let mut expected_vertices = Vec::new();
     for fin_id in loop_.fins() {
