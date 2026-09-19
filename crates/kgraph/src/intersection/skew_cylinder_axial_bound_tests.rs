@@ -132,6 +132,71 @@ fn mixed_simple_repeated_contact_has_three_exact_roots() {
     assert_eq!(reversed.open_cell_signs, vec![StrictSign::Positive]);
 }
 
+#[test]
+fn rotated_non_cardinal_mixed_contact_has_three_exact_roots() {
+    let frame = Frame::world();
+    let rotated_axis = frame.x() * 0.8 - frame.y() * 0.6;
+    let rotated_radial = frame.x() * 0.6 + frame.y() * 0.8;
+    let cylinders = [
+        // The stored transverse harmonic is exactly
+        //     3/64 cos(u) + 1/16 sin(u) - 5/128.
+        // Its 5/128 level has simple half-angle roots t=-1/3 and t=3,
+        // while its 5/64 maximum at t=1/2 touches the opposite 5/128
+        // level with even multiplicity. None is a cardinal longitude.
+        Cylinder::new(frame, 0.078125).unwrap(),
+        Cylinder::new(
+            Frame::new(
+                frame.origin() + rotated_radial * 0.0390625,
+                rotated_axis,
+                rotated_radial,
+            )
+            .unwrap(),
+            0.0390625,
+        )
+        .unwrap(),
+    ];
+    let topology =
+        classify_skew_cylinder_exact_discriminant(cylinders, SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK)
+            .unwrap();
+    let SkewCylinderExactDiscriminantTopology::Contact(contact) = topology else {
+        panic!("expected rotated mixed contact topology, got {topology:#?}")
+    };
+    assert_eq!(contact.roots.len(), 3, "{contact:#?}");
+    assert_eq!(
+        contact.roots.iter().filter(|root| root.repeated).count(),
+        1,
+        "{contact:#?}"
+    );
+    assert_eq!(
+        contact.open_cell_signs,
+        vec![
+            StrictSign::Positive,
+            StrictSign::Negative,
+            StrictSign::Positive
+        ],
+        "{contact:#?}"
+    );
+    let folded = certify_skew_cylinder_folded_support_topologies(*contact).unwrap();
+    assert_eq!(folded.len(), 1);
+    assert_eq!(folded[0].root_ordinals(), [1, 2]);
+    assert_eq!(folded[0].interior_touching_root_ordinal(), Some(0));
+    assert_eq!(
+        folded[0].positive_cell(),
+        SkewCylinderFoldedSupportCellLocation::AcrossCanonicalSeam
+    );
+    let reversed = classify_skew_cylinder_exact_discriminant(
+        [cylinders[1], cylinders[0]],
+        SKEW_CYLINDER_AXIAL_BOUND_EXACT_WORK,
+    )
+    .unwrap();
+    let SkewCylinderExactDiscriminantTopology::Contact(reversed) = reversed else {
+        panic!("expected reversed non-cardinal mixed contact topology, got {reversed:#?}")
+    };
+    assert_eq!(reversed.roots.len(), 1, "{reversed:#?}");
+    assert!(reversed.roots[0].repeated(), "{reversed:#?}");
+    assert_eq!(reversed.open_cell_signs, vec![StrictSign::Positive]);
+}
+
 fn provenance(
     source_operand: usize,
     boundary: SkewCylinderAxialBoundary,

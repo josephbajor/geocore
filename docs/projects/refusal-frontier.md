@@ -6,7 +6,16 @@ Statuses are `open`, `in-progress`, `converted:<PR-or-commit>`, or `blocked:<blo
 
 ## Selection
 
-`diagnostic::SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE` remains first by dependency and leverage. Commits `691fd11`, `35d80a4`, `ff6e21d`, `f0d07bf`, `a3833d7`, `79880d9`, `82a81a9`, `b130f2f`, `2213839`, `4870f97`, `7423518`, `201789e`, `57f649d`, `16253da`, `a3c9a34`, `9b5eb3d`, `05b2394`, `9c6429f`, `d8622ab`, and `5417bd3` converted Whole-sheet Contact, isolated support strata, unique-open Contact, both two-simple-root folded layouts, repeated-root touching support, both `0/π` pole-pair orientations, all four short/long seam-root cells, exact isolated support roots on either source's authored seam, and the four-simple-root cycle. The current sub-rung converts the exact cardinal mixed-multiplicity cycle. One ruling chart proves simple roots at complete ordinals `0` and `2`, a repeated root at ordinal `1`, and cyclic signs `Positive/Positive/Negative`; its reverse chart sees one all-positive repeated root, but deterministic admission retains the richer complete topology. The existing folded-support theorem owns the simple-root-bounded positive component while retaining the repeated root as two explicit continuation ports. Four guarded members charge one atomic 3088-unit publication; 3087 refuses with zero consumed open-span work. Graph publication yields four open branches and is deterministic under replay, operand swap, and two exact frames. Complete discriminant-root identity now reaches Section without component-local aliasing; Section stitches two closed two-fragment components that share the repeated point through distinct ports. Subtract reaches `CurvedResultTopologyUnsupported` in either order without source mutation. No theorem authority, stage, freeze, golden exception, or invented Boolean representation is added; X_T is not queued because the Boolean result is deliberately not materialized. Non-cardinal mixed simple/repeated layouts remain pending, so the diagnostic stays `in-progress`. Broader X_T breadth still defers behind theorem-certified native topology, and licensed-host replay is an operator event rather than local conformance.
+`diagnostic::SKEW_CYLINDER_CONTACT_TOPOLOGY_INCOMPLETE` remains the queue head, in progress.
+Mixed folded support now partitions certified cyclic roots at the repeated contact and authored seam,
+selects finite half-angle charts, and charges the resulting member count atomically. Four-quadrant
+non-cardinal fixtures publish complete Section graphs with two closed components under replay,
+operand swap, and exact frame changes. Evidence: `mixed_folded_partition_follows_cyclic_root_order`,
+`non_cardinal_mixed_section_is_complete_replay_swap_and_frame_stable`,
+`non_cardinal_seam_mixed_folded_support_owns_atomic_work`, and
+`non_cardinal_mixed_subtract_refuses_without_mutation`. Open: mixed roots aligned with chart poles and cells
+requiring additional chart transitions; endpoint resolution and unsupported Boolean result topology
+remain fail-closed. No X_T result is materialized by this slice; licensed-host replay remains an operator event.
 
 ## Entries
 

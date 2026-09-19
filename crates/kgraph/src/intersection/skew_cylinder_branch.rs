@@ -117,13 +117,15 @@ pub use support_contact::{
     SKEW_CYLINDER_LONG_SEAM_ROOT_FOLDED_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_MIXED_FOLDED_SUPPORT_EXACT_WORK,
     SKEW_CYLINDER_OPPOSITE_POLE_TOUCHING_SUPPORT_EXACT_WORK,
-    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
+    SKEW_CYLINDER_SEAM_FOLDED_SUPPORT_EXACT_WORK,
+    SKEW_CYLINDER_SEAM_MIXED_FOLDED_SUPPORT_EXACT_WORK, SKEW_CYLINDER_TOUCHING_SUPPORT_EXACT_WORK,
     certify_persistent_skew_cylinder_folded_support,
     certify_persistent_skew_cylinder_support_contact,
     certify_persistent_skew_cylinder_touching_support,
     persistent_skew_cylinder_folded_support_exact_work,
     persistent_skew_cylinder_touching_support_exact_work,
     plan_persistent_skew_cylinder_support_contact_boundaries,
+    supports_persistent_skew_cylinder_mixed_folded_support_layout,
 };
 
 #[path = "skew_cylinder_finite_window_topology.rs"]

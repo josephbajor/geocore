@@ -710,23 +710,8 @@ fn is_mixed_folded_support_topology(
         let [component] = components.as_slice() else {
             return false;
         };
-        if component.root_ordinals() != [0, 2]
-            || component.interior_touching_root_ordinal() != Some(1)
-        {
-            return false;
-        }
-        let roots = component.topology().roots();
-        let [first, repeated, second] = roots else {
-            return false;
-        };
-        let angular = [first, repeated, second]
-            .map(|root| kgraph::SkewCylinderDiscriminantRoot::angular_bracket(*root));
-        angular[0].lo.to_bits() == 0.0_f64.to_bits()
-            && angular[0].hi.to_bits() == 0.0_f64.to_bits()
-            && angular[1].lo.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
-            && angular[1].hi.to_bits() == core::f64::consts::FRAC_PI_2.to_bits()
-            && angular[2].lo.to_bits() == core::f64::consts::PI.to_bits()
-            && angular[2].hi.to_bits() == core::f64::consts::PI.to_bits()
+        component.interior_touching_root_ordinal().is_some()
+            && kgraph::supports_persistent_skew_cylinder_mixed_folded_support_layout(component)
     })
 }
 

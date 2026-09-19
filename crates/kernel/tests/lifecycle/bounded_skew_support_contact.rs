@@ -321,6 +321,57 @@ fn mixed_folded_support_fixture(frame: Frame) -> Fixture {
     }
 }
 
+fn non_cardinal_mixed_folded_support_fixture(frame: Frame, radial: [f64; 2]) -> Fixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (first, second) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let first_radius = 0.078125;
+        let second_radius = 0.0390625;
+        let second_axis_offset = 0.21875;
+        let first = edit
+            .create_cylinder(CylinderRequest::new(
+                frame,
+                first_radius,
+                4.0 * second_radius,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        // Reflect both directions together so the stored shifted origin
+        // preserves the exact contact identity in every quadrant.
+        let second_axis =
+            frame.x() * (0.8 * radial[0].signum()) - frame.y() * (0.6 * radial[1].signum());
+        let second_radial = frame.x() * radial[0] + frame.y() * radial[1];
+        let second_frame = Frame::new(
+            frame.origin() + second_radial * second_radius - second_axis * second_axis_offset
+                + frame.z() * (2.0 * second_radius),
+            second_axis,
+            second_radial,
+        )
+        .unwrap();
+        let second = edit
+            .create_cylinder(CylinderRequest::new(
+                second_frame,
+                second_radius,
+                2.0 * second_axis_offset,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (first, second)
+    };
+    Fixture {
+        session,
+        part,
+        first,
+        second,
+        frame,
+    }
+}
+
 fn seam_folded_support_fixture(frame: Frame) -> Fixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
@@ -1119,6 +1170,125 @@ fn assert_mixed_folded_support_components(fixture: &Fixture, graph: &BodySection
     touching_ports.sort_unstable();
     assert_eq!(simple_roots, vec![0, 2]);
     assert_eq!(touching_ports, vec![0, 1]);
+    assert_eq!(graph.periodic_face_embeddings().len(), 2);
+    assert!(graph.periodic_face_embeddings().iter().all(|embedding| {
+        matches!(
+            embedding.gap(),
+            Some(SectionPeriodicEmbeddingGap::NonLinearCylinderPcurve { .. })
+        )
+    }));
+}
+
+fn assert_non_cardinal_mixed_folded_support_components(
+    fixture: &Fixture,
+    graph: &BodySectionGraph,
+    radial: [f64; 2],
+    simple: [usize; 2],
+    repeated: usize,
+    members: usize,
+) {
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "radial={radial:?}, frame={:?}: {graph:#?}",
+        fixture.frame
+    );
+    assert!(graph.gaps().is_empty(), "{:#?}", graph.gaps());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
+    assert!(graph.rings().is_empty());
+    assert!(graph.isolated_contacts().is_empty());
+    assert!(graph.through_contacts().is_empty());
+    assert_eq!(graph.branches().len(), members);
+    assert_eq!(graph.curve_fragments().len(), members);
+    assert_eq!(graph.curve_endpoints().len(), members);
+    assert_eq!(graph.curve_components().len(), 2);
+    let mut component_sizes = graph
+        .curve_components()
+        .iter()
+        .map(|component| {
+            assert!(component.closed());
+            assert!(component.isolated_contacts().is_empty());
+            component.fragments().len()
+        })
+        .collect::<Vec<_>>();
+    component_sizes.sort_unstable();
+    assert_eq!(component_sizes, vec![2, members - 2]);
+
+    let mut endpoint_incidence = vec![0_usize; members];
+    for fragment in graph.curve_fragments() {
+        let branch = &graph.branches()[fragment.branch()];
+        assert_eq!(branch.topology(), SectionBranchTopology::Open);
+        assert!(branch.embedding_certificate().is_none());
+        let SectionCurveFragmentSpan::FoldedSupport { endpoints } = fragment.span() else {
+            panic!("non-cardinal seam-mixed support retained a non-folded fragment")
+        };
+        for endpoint in endpoints.iter() {
+            endpoint_incidence[endpoint.endpoint()] += 1;
+            let local = fixture.frame.to_local(endpoint.point());
+            assert!(
+                (local.x * local.x + local.y * local.y - 0.078125_f64.powi(2)).abs() <= 1.0e-10
+            );
+            let second_radial = local.x * radial[0] + local.y * radial[1] - 0.0390625;
+            let second_height = local.z - 0.078125;
+            assert!(
+                (second_radial * second_radial + second_height * second_height
+                    - 0.0390625_f64.powi(2))
+                .abs()
+                    <= 1.0e-10
+            );
+        }
+    }
+    assert_eq!(endpoint_incidence, vec![2; members]);
+
+    let mut simple_roots = Vec::new();
+    let mut touching_ports = Vec::new();
+    let mut seams = Vec::new();
+    for endpoint in graph.curve_endpoints() {
+        match endpoint.topology() {
+            SectionCurveEndpointTopology::FoldedSupportJoin { root_ordinal, .. } => {
+                simple_roots.push(*root_ordinal);
+            }
+            SectionCurveEndpointTopology::TouchingSupportRootJoin {
+                root_ordinal,
+                continuation,
+                root_interval,
+                ..
+            } => {
+                assert_eq!(usize::from(*root_ordinal), repeated);
+                assert!(root_interval.lo().is_finite());
+                assert!(root_interval.hi().is_finite());
+                assert!(root_interval.lo() <= root_interval.hi());
+                touching_ports.push(*continuation);
+            }
+            SectionCurveEndpointTopology::FoldedSupportSeamJoin { sheet, .. } => {
+                seams.push(*sheet);
+            }
+            topology => panic!(
+                "non-cardinal seam-mixed support acquired an unexpected endpoint: {topology:?}"
+            ),
+        }
+    }
+    simple_roots.sort_unstable();
+    touching_ports.sort_unstable();
+    seams.sort_by_key(|sheet| match sheet {
+        SectionFoldedSupportSheet::Lower => 0,
+        SectionFoldedSupportSheet::Upper => 1,
+    });
+    assert_eq!(simple_roots, simple);
+    assert_eq!(touching_ports, vec![0, 1]);
+    assert_eq!(
+        seams,
+        if members == 6 {
+            vec![
+                SectionFoldedSupportSheet::Lower,
+                SectionFoldedSupportSheet::Upper,
+            ]
+        } else {
+            vec![]
+        }
+    );
     assert_eq!(graph.periodic_face_embeddings().len(), 2);
     assert!(graph.periodic_face_embeddings().iter().all(|embedding| {
         matches!(
@@ -1951,6 +2121,81 @@ fn mixed_folded_support_subtract_refuses_without_mutation() {
             assert!(part.body(fixture.first.clone()).is_ok());
             assert!(part.body(fixture.second.clone()).is_ok());
             assert_mixed_folded_support_components(&fixture, &section(&fixture, swapped));
+        }
+    }
+}
+
+#[test]
+fn non_cardinal_mixed_section_is_complete_replay_swap_and_frame_stable() {
+    for (radial, simple, repeated, members) in [
+        ([0.6, 0.8], [1, 2], 0, 6),
+        ([-0.6, 0.8], [0, 2], 1, 4),
+        ([-0.6, -0.8], [0, 2], 1, 4),
+        ([0.6, -0.8], [0, 1], 2, 6),
+    ] {
+        for frame in folded_exact_frames() {
+            let fixture = non_cardinal_mixed_folded_support_fixture(frame, radial);
+            let forward = section(&fixture, false);
+            let replay = section(&fixture, false);
+            let swapped = section(&fixture, true);
+            let swapped_replay = section(&fixture, true);
+            assert_eq!(forward, replay);
+            assert_eq!(swapped, swapped_replay);
+            assert_non_cardinal_mixed_folded_support_components(
+                &fixture, &forward, radial, simple, repeated, members,
+            );
+            assert_non_cardinal_mixed_folded_support_components(
+                &fixture, &swapped, radial, simple, repeated, members,
+            );
+        }
+    }
+}
+
+#[test]
+fn non_cardinal_mixed_subtract_refuses_without_mutation() {
+    for (radial, simple, repeated, members) in [
+        ([0.6, 0.8], [1, 2], 0, 6),
+        ([-0.6, 0.8], [0, 2], 1, 4),
+        ([-0.6, -0.8], [0, 2], 1, 4),
+        ([0.6, -0.8], [0, 1], 2, 6),
+    ] {
+        for frame in folded_exact_frames() {
+            for swapped in [false, true] {
+                let mut fixture = non_cardinal_mixed_folded_support_fixture(frame, radial);
+                let bodies = if swapped {
+                    [fixture.second.clone(), fixture.first.clone()]
+                } else {
+                    [fixture.first.clone(), fixture.second.clone()]
+                };
+                let outcome = fixture
+                    .session
+                    .edit_part(fixture.part.clone())
+                    .unwrap()
+                    .boolean_bodies(BooleanBodiesRequest::new(
+                        BooleanOperation::Subtract,
+                        bodies[0].clone(),
+                        bodies[1].clone(),
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert!(matches!(
+                    outcome,
+                    BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+                ));
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                assert_eq!(part.bodies().len(), 2);
+                assert!(part.body(fixture.first.clone()).is_ok());
+                assert!(part.body(fixture.second.clone()).is_ok());
+                assert_non_cardinal_mixed_folded_support_components(
+                    &fixture,
+                    &section(&fixture, swapped),
+                    radial,
+                    simple,
+                    repeated,
+                    members,
+                );
+            }
         }
     }
 }
