@@ -99,3 +99,5 @@ date	host	host_version	fixture	import_ok	host_checker	host_volume_m3	reexport_ok
 2026-07-21	onshape	cloud-2026-07-21	five_portal_cylinder_minus_plane.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
 2026-07-21	onshape	cloud-2026-07-21	seam_crossing_five_portal_cylinder_minus_plane.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
 2026-07-21	onshape	cloud-2026-07-21	nonconvex_star_plane_cylinder_intersection.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-09-20	onshape	cloud-2026-09-20	cap_crossing_plane_cylinder_intersect.x_t	yes	none	-	yes	yes	writer=661cd9a; accepted; bundle=a8b6de45b2eb8cc44c41b9083b90e0c36c82c688aecede1476f95ca9697a6cd5
+2026-09-20	onshape	cloud-2026-09-20	corner_contact_first_minus_second.x_t	yes	none	-	error	-	writer=661cd9a; accepted; bundle=a8b6de45b2eb8cc44c41b9083b90e0c36c82c688aecede1476f95ca9697a6cd5; re-export HTTP 429; session stopped at 47/200 requests

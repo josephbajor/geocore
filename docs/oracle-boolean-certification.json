@@ -1,7 +1,7 @@
 {
   "schema_version": "kernel-oracle-certification.v1",
   "status": "stale",
-  "reason": "eight added payloads (cap-crossing, two corner-contact, and five composed-cut plates) await licensed-host replay of the final 23-payload bundle; the historical 15-payload host identity is preserved",
+  "reason": "the final 23-payload bundle has seven additions awaiting complete licensed replay; cap-crossing passed, but HTTP 429 stopped the 2026-09-20 session after 47 requests during the first corner-contact re-export; the historical 15-payload identity is preserved",
   "certified_at": "2026-07-21",
   "host": "onshape",
   "host_version": "cloud-2026-07-21",
@@ -26,5 +26,35 @@
     "five_portal_cylinder_minus_plane.x_t": "c1cc6e46f7b3ece2a5dce920fe00cbfc44f1a01e1afe8844f54618589636d31c",
     "seam_crossing_five_portal_cylinder_minus_plane.x_t": "cbefa7fcea0ee9f846430863b2ff20bb095712624ee303629408f46183fff550",
     "nonconvex_star_plane_cylinder_intersection.x_t": "d5b3c6e284a04988079e3b76ecd17457b61f728a66c07bdd8f73921defdb7b2c"
+  },
+  "partial_replay": {
+    "date": "2026-09-20",
+    "writer_revision": "661cd9a",
+    "bundle_sha256": "a8b6de45b2eb8cc44c41b9083b90e0c36c82c688aecede1476f95ca9697a6cd5",
+    "fixture_count": 23,
+    "requests_used": 47,
+    "request_limit": 200,
+    "stop_reason": "HTTP 429 during re-export; no retry in the rate-limited session",
+    "imported": [
+      "cap_crossing_plane_cylinder_intersect.x_t",
+      "corner_contact_first_minus_second.x_t"
+    ],
+    "compared_clean": [
+      "cap_crossing_plane_cylinder_intersect.x_t"
+    ],
+    "fixtures_sha256": {
+      "cap_crossing_plane_cylinder_intersect.x_t": "160f07ef9e0ea27a92215bf7d666862c6887a09c6223eda11c33304b29a757cb",
+      "corner_contact_first_minus_second.x_t": "df19ec754622251a42335982586692ce0b88e778713db0043483fd582b9f8d19"
+    },
+    "pending_fixtures": [
+      "corner_contact_first_minus_second.x_t",
+      "corner_contact_second_minus_first.x_t",
+      "composed_drilled_plate.x_t",
+      "composed_enlarged_plate.x_t",
+      "composed_overlapping_plate.x_t",
+      "composed_reused_separated_plate.x_t",
+      "composed_reused_crossing_plate.x_t"
+    ],
+    "results_reference": "docs/oracle-results.tsv rows dated 2026-09-20 at writer=661cd9a"
   }
 }

@@ -66,7 +66,10 @@ base bundle needs licensed-host re-certification. The complete fifteen-payload
 Boolean bundle at identity
 `61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7`
 is certified by the 2026-07-21 Onshape rows; the current twenty-three-payload
-bundle remains stale pending cap-crossing, corner-contact, and composed-cut replay.
+bundle remains stale. The 2026-09-20 catch-up at `661cd9a` passed cap-crossing
+import/round-trip and imported the first corner-contact Subtract; HTTP 429
+stopped its re-export after 47/200 requests. Seven additions still need complete
+replay; exact pending names and bundle identity are in the Boolean record.
 
 ## 1. Generate the bundle
 
@@ -123,7 +126,7 @@ Subtractions, a plate with three sequential through cuts, its enlarged-hole resu
 Generation requires Full-valid committed results, independent volumes where declared, local X_T import,
 byte-stable replay, and an empty output directory. The prior fifteen-payload
 identity is certified 15/15 by Onshape; the record is stale only because the
-eight added payloads have not yet received licensed-host evidence. Later writer-byte
+seven additions lack complete replay after the partial 2026-09-20 catch-up. Later writer-byte
 changes must also mark the record stale and queue a final-byte replay under the
 invalidation rule above.
 
