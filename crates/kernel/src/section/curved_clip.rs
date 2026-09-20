@@ -16,6 +16,8 @@
 //! coincident boundaries, overlapping root enclosures, or unsupported trim
 //! geometry return an explicit indeterminate outcome.
 
+mod bounded;
+
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
@@ -617,6 +619,24 @@ fn prepare_plane_segments(
             }
             continue;
         }
+        let has_arcs = ring.fins().iter().any(|&fin| {
+            store
+                .get(fin)
+                .ok()
+                .and_then(|fin| fin.pcurve)
+                .and_then(|use_| store.pcurve(use_.curve()).ok())
+                .is_some_and(|curve| matches!(curve, Curve2dGeom::Circle(_)))
+        });
+        if has_arcs {
+            match bounded::crossings(store, face, loop_id, circle, carrier_range, scope)? {
+                Ok((found, inside)) => {
+                    crossings.extend(found);
+                    circular_parity ^= inside;
+                }
+                Err(gap) => return Ok(Err(gap)),
+            }
+            continue;
+        }
         if ring.fins().len() < 3 {
             return Ok(Err(ClosedConicClipGap::MalformedTrim));
         }
@@ -1003,6 +1023,15 @@ fn clip_longitude_to_periodic_trim(
         charge(scope, 1)?;
         let ring = read(store.get::<Loop>(loop_id))?;
         let [fin_id] = ring.fins() else {
+            if let Some(work) = ktopo::bounded_trim::preparation_work(ring.fins().len()) {
+                charge(scope, work)?;
+                if let Some(trim) = read(ktopo::bounded_trim::prepare(store, face, loop_id))? {
+                    let height = trim.bounds()[1];
+                    if trace_height.hi() < height.lo() || trace_height.lo() > height.hi() {
+                        continue;
+                    }
+                }
+            }
             return Ok(ClosedConicClipOutcome::Indeterminate(
                 ClosedConicClipGap::UnsupportedTrim,
             ));

@@ -67,6 +67,7 @@ pub mod benchmark;
 pub(crate) mod body_copy;
 pub mod body_distance;
 pub mod body_properties;
+pub mod bounded_trim;
 pub mod btess;
 pub mod check;
 pub(crate) mod convex_containment;

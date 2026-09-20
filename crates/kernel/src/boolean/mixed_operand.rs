@@ -14,7 +14,8 @@ use ktopo::check::{CheckLevel, CheckOutcome, check_body_report_in_scope};
 use ktopo::geom::SurfaceGeom;
 
 /// Admit a composite minuend and a primitive cylindrical cutter. Every
-/// existing cylindrical annulus is arranged from its complete Section subset;
+/// existing cylindrical face is arranged from its complete Section subset in
+/// either a whole-period annulus or a certified bounded chart;
 /// split and untouched boundaries retain topology-owned source lineage.
 pub(super) fn try_execute(
     edit: &mut PartEdit<'_>,
@@ -37,6 +38,7 @@ pub(super) fn try_execute(
     let mut planes = Vec::new();
     let mut annuli = Vec::new();
     let mut topology_work = 0_u64;
+    let mut trim_work = 0_u64;
     for raw in raw_faces {
         let face = edit.state.store.get(raw)?;
         let fail = || PipelineFailure::Refused(CurvedBooleanPipelineRefusal::WorkCountOverflow);
@@ -44,6 +46,11 @@ pub(super) fn try_execute(
         for &ring in face.loops() {
             let fins = edit.state.store.get(ring)?.fins().len();
             let count = u64::try_from(fins).map_err(|_| fail())?;
+            if fins > 1 {
+                trim_work = trim_work
+                    .checked_add(ktopo::bounded_trim::preparation_work(fins).ok_or_else(fail)?)
+                    .ok_or_else(fail)?;
+            }
             topology_work = topology_work
                 .checked_add(1)
                 .and_then(|n| n.checked_add(count))
@@ -86,6 +93,15 @@ pub(super) fn try_execute(
         .ok()
         .and_then(|n| n.checked_add(topology_work))
         .and_then(|n| n.checked_mul(topology_work))
+        .and_then(|n| {
+            trim_work
+                .checked_mul(
+                    u64::try_from(graph.curve_fragments().len())
+                        .ok()?
+                        .checked_add(4)?,
+                )
+                .and_then(|trims| n.checked_add(trims))
+        })
         .ok_or(PipelineFailure::Refused(
             CurvedBooleanPipelineRefusal::WorkCountOverflow,
         ))?;

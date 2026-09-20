@@ -16,11 +16,20 @@ pub(super) fn polygon_loop(
         let ring = store
             .get(loop_id)
             .map_err(|_| MixedFaceArrangementError::MissingSourceLoop)?;
-        if ring.fins().len() >= 3 {
+        if ring.fins().len() >= 3
+            && ring.fins().iter().all(|&fin| {
+                store
+                    .get(fin)
+                    .ok()
+                    .and_then(|fin| fin.pcurve())
+                    .and_then(|use_| store.pcurve(use_.curve()).ok())
+                    .is_some_and(|curve| matches!(curve, Curve2dGeom::Line(_)))
+            })
+        {
             if polygon.replace(loop_id).is_some() {
                 return Err(MixedFaceArrangementError::MultipleSourceLoops);
             }
-        } else if ring.fins().len() != 1 {
+        } else if ring.fins().is_empty() {
             return Err(MixedFaceArrangementError::MultipleSourceLoops);
         }
     }
@@ -51,7 +60,42 @@ pub(super) fn admit_rings(
         }
         let ring = store.get(loop_id).map_err(|_| fail())?;
         let [fin_id] = ring.fins() else {
-            return Err(fail());
+            let trim = ktopo::bounded_trim::prepare(store, face_id, loop_id)
+                .map_err(|_| fail())?
+                .ok_or_else(fail)?;
+            if roots.iter().any(|root| root.loop_id == loop_id) {
+                continue;
+            }
+            // An uncut bounded hole is assigned to the exterior cell only
+            // after its entire boundary is strictly outside every cut disk.
+            for cut in cuts {
+                let (CutEmbedding::Circle {
+                    center,
+                    radius,
+                    x_direction,
+                    ..
+                }
+                | CutEmbedding::WholeCircle {
+                    center,
+                    radius,
+                    x_direction,
+                    ..
+                }) = cut.embedding
+                else {
+                    return Err(fail());
+                };
+                let r2 = Interval::point(radius).square()
+                    * (Interval::point(x_direction[0]).square()
+                        + Interval::point(x_direction[1]).square());
+                if trim.cover().any(|bounds| {
+                    let x = bounds[0] - Interval::point(center[0]);
+                    let y = bounds[1] - Interval::point(center[1]);
+                    (x.square() + y.square()).lo() <= r2.hi()
+                }) {
+                    return Err(fail());
+                }
+            }
+            continue;
         };
         let fin = store.get(*fin_id).map_err(|_| fail())?;
         let use_ = fin.pcurve().ok_or_else(fail)?;

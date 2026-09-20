@@ -5,7 +5,7 @@
 //! windows never become trim authority.
 //! Supported trims are deliberately exact-family and fail closed:
 //! - polygonal loops (including holes and non-convex loops) on a plane, and
-//! - vertex-less whole-period horizontal ring loops on a cylinder.
+//! - whole-period rings or certified bounded Line2d loops on a cylinder.
 //!
 //! Crossings retain conservative carrier- and source-edge-parameter
 //! enclosures.  Root ordinals are intentionally absent: the section
@@ -530,6 +530,13 @@ fn clip_longitude_to_periodic_trim(
         ));
     }
     let face_data = read(store.get(face))?;
+    if face_data
+        .loops()
+        .iter()
+        .all(|&id| store.get(id).is_ok_and(|ring| ring.fins().len() > 1))
+    {
+        return bounded_longitude_clip(store, face, trace, carrier_range, scope);
+    }
     if face_data.loops().is_empty() {
         return Ok(RulingClipOutcome::Indeterminate(
             RulingClipGap::MalformedTrim,
@@ -613,6 +620,104 @@ fn clip_longitude_to_periodic_trim(
             carrier_parameter,
             edge_parameter,
         });
+    }
+    finish_crossings(crossings, carrier_range, scope)
+}
+
+fn bounded_longitude_clip(
+    store: &Store,
+    face: RawFaceId,
+    trace: SectionUvLine,
+    carrier_range: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<RulingClipOutcome> {
+    let gap = |reason| RulingClipOutcome::Indeterminate(reason);
+    let mut crossings = Vec::new();
+    for &loop_id in read(store.get(face))?.loops() {
+        let count = read(store.get(loop_id))?.fins().len();
+        let Some(work) = ktopo::bounded_trim::preparation_work(count) else {
+            return Ok(gap(RulingClipGap::ArithmeticGuard));
+        };
+        charge(scope, work)?;
+        let Some(trim) = read(ktopo::bounded_trim::prepare(store, face, loop_id))? else {
+            return Ok(gap(RulingClipGap::UnsupportedTrim));
+        };
+        let bounds = trim.bounds();
+        let period = Interval::point(core::f64::consts::TAU);
+        if bounds[0].width() >= core::f64::consts::TAU {
+            return Ok(gap(RulingClipGap::UnsupportedTrim));
+        }
+        let Some(shifts) = (bounds[0] - Interval::point(trace.origin().x)).checked_div(period)
+        else {
+            return Ok(gap(RulingClipGap::ArithmeticGuard));
+        };
+        let first = shifts.lo().ceil();
+        let last = shifts.hi().floor();
+        if first > last {
+            continue;
+        }
+        if !first.is_finite()
+            || !last.is_finite()
+            || first.abs().max(last.abs()) > i32::MAX as f64
+            || last - first > 1.0
+        {
+            return Ok(gap(RulingClipGap::ArithmeticGuard));
+        }
+        for winding in first as i32..=last as i32 {
+            let longitude =
+                Interval::point(trace.origin().x) + Interval::point(f64::from(winding)) * period;
+            for span in trim.spans() {
+                let Curve2dGeom::Line(line) = span.curve else {
+                    return Ok(gap(RulingClipGap::UnsupportedTrim));
+                };
+                let relative =
+                    longitude - Interval::point(span.offset.x) - Interval::point(line.origin().x);
+                if line.dir().x == 0.0 {
+                    if relative.contains_zero() {
+                        return Ok(gap(RulingClipGap::CoincidentBoundary));
+                    }
+                    continue;
+                }
+                let Some(q) = relative.checked_div(Interval::point(line.dir().x)) else {
+                    return Ok(gap(RulingClipGap::ArithmeticGuard));
+                };
+                let low = span.parameters[0].min(span.parameters[1]);
+                let high = span.parameters[0].max(span.parameters[1]);
+                if q.hi() < low || q.lo() > high {
+                    continue;
+                }
+                if q.lo() <= low || q.hi() >= high {
+                    return Ok(gap(RulingClipGap::VertexContact));
+                }
+                let height = Interval::point(line.origin().y)
+                    + Interval::point(line.dir().y) * q
+                    + Interval::point(span.offset.y);
+                let use_ =
+                    read(store.get(span.fin))?
+                        .pcurve
+                        .ok_or(Error::InconsistentTopology {
+                            source: kcore::error::Error::InvalidGeometry {
+                                reason: "certified trim lost pcurve",
+                            },
+                        })?;
+                let (Some(carrier_parameter), Some(edge_parameter)) = (
+                    (height - Interval::point(trace.origin().y))
+                        .checked_div(Interval::point(trace.direction().y)),
+                    (q - Interval::point(use_.edge_to_pcurve().offset()))
+                        .checked_div(Interval::point(use_.edge_to_pcurve().scale())),
+                ) else {
+                    return Ok(gap(RulingClipGap::ArithmeticGuard));
+                };
+                crossings.push(RulingTrimSite {
+                    face,
+                    loop_id,
+                    fin: span.fin,
+                    edge: span.edge,
+                    carrier_parameter,
+                    edge_parameter,
+                });
+            }
+        }
     }
     finish_crossings(crossings, carrier_range, scope)
 }

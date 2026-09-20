@@ -39,7 +39,9 @@ const CORNER_CONTACT_SECOND_MINUS_FIRST: &str = "corner_contact_second_minus_fir
 const COMPOSED_DRILLED_PLATE: &str = "composed_drilled_plate.x_t";
 const COMPOSED_ENLARGED_PLATE: &str = "composed_enlarged_plate.x_t";
 const COMPOSED_OVERLAPPING_PLATE: &str = "composed_overlapping_plate.x_t";
-const EXPECTED_FILES: [&str; 21] = [
+const COMPOSED_REUSED_SEPARATED_PLATE: &str = "composed_reused_separated_plate.x_t";
+const COMPOSED_REUSED_CROSSING_PLATE: &str = "composed_reused_crossing_plate.x_t";
+const EXPECTED_FILES: [&str; 23] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -61,6 +63,8 @@ const EXPECTED_FILES: [&str; 21] = [
     COMPOSED_DRILLED_PLATE,
     COMPOSED_ENLARGED_PLATE,
     COMPOSED_OVERLAPPING_PLATE,
+    COMPOSED_REUSED_SEPARATED_PLATE,
+    COMPOSED_REUSED_CROSSING_PLATE,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -515,7 +519,7 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
         vertices: 8,
     };
     artifacts.push(build_composed_drilled_plate(
-        None,
+        &[],
         COMPOSED_DRILLED_PLATE,
         base_volume,
         base_counts,
@@ -523,7 +527,7 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
     let enlarged_volume =
         160.0 - 2.0 * core::f64::consts::PI * (1.25 * 1.25 + 0.5 * 0.5 + 0.625 * 0.625);
     artifacts.push(build_composed_drilled_plate(
-        Some((-2.5, -1.0, 1.25)),
+        &[(-2.5, -1.0, 1.25)],
         COMPOSED_ENLARGED_PLATE,
         enlarged_volume,
         base_counts,
@@ -533,7 +537,7 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
     let lens = 1.0312759539150977;
     let overlap_volume = base_volume - 2.0 * (core::f64::consts::PI * 0.75 * 0.75 - lens);
     artifacts.push(build_composed_drilled_plate(
-        Some((-2.0, -1.0, 0.75)),
+        &[(-2.0, -1.0, 0.75)],
         COMPOSED_OVERLAPPING_PLATE,
         overlap_volume,
         TopologyCounts {
@@ -544,11 +548,40 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
             ..base_counts
         },
     )?);
+    artifacts.push(build_composed_drilled_plate(
+        &[(-2.0, -1.0, 0.75), (0.0, -2.0, 0.5)],
+        COMPOSED_REUSED_SEPARATED_PLATE,
+        overlap_volume - 2.0 * core::f64::consts::PI * 0.25,
+        TopologyCounts {
+            faces: 11,
+            loops: 22,
+            fins: 48,
+            edges: 24,
+            vertices: 12,
+            ..base_counts
+        },
+    )?);
+    // Independent unequal-radius lens: r=3/4, s=1/2, d=1. The first
+    // and last disks are disjoint, so there is no triple-overlap term.
+    let next_lens = 0.12436198867005838;
+    artifacts.push(build_composed_drilled_plate(
+        &[(-2.0, -1.0, 0.75), (-1.0, -1.0, 0.5)],
+        COMPOSED_REUSED_CROSSING_PLATE,
+        overlap_volume - 2.0 * (core::f64::consts::PI * 0.25 - next_lens),
+        TopologyCounts {
+            faces: 12,
+            loops: 20,
+            fins: 56,
+            edges: 28,
+            vertices: 16,
+            ..base_counts
+        },
+    )?);
     Ok(artifacts)
 }
 
 fn build_composed_drilled_plate(
-    extra: Option<(f64, f64, f64)>,
+    extra: &[(f64, f64, f64)],
     file: &'static str,
     volume: f64,
     counts: TopologyCounts,
@@ -571,9 +604,7 @@ fn build_composed_drilled_plate(
         .into_result()?
         .body();
     let mut cuts = vec![(-2.5, -1.0, 0.75), (2.0, -1.0, 0.5), (0.0, 2.0, 0.625)];
-    if let Some(extra) = extra {
-        cuts.push(extra);
-    }
+    cuts.extend_from_slice(extra);
     for (x, y, radius) in cuts {
         let tool = session
             .edit_part(part.clone())?

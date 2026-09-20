@@ -163,6 +163,55 @@ impl PreparedMixedBoundary {
         scope: &mut OperationScope<'_, '_>,
     ) -> Result<(), MixedBoundaryError> {
         for face in faces {
+            let raw = part
+                .state
+                .store
+                .get(face.raw())
+                .map_err(|_| MixedBoundaryError::SourceTopology)?;
+            if raw.loops().len() == 1
+                && part
+                    .state
+                    .store
+                    .get(raw.loops()[0])
+                    .map_err(|_| MixedBoundaryError::SourceTopology)?
+                    .fins()
+                    .len()
+                    > 1
+            {
+                let output = arrange_mixed_planar_face_with_lineage(
+                    &part.state.store,
+                    graph,
+                    face.clone(),
+                    operand,
+                )
+                .map_err(MixedBoundaryError::PlanarArrangement)?;
+                let source = source_face_key(&part.state.store, graph, face, operand)
+                    .map_err(|_| MixedBoundaryError::SourceTopology)?;
+                let classes = classify_planar_face(
+                    part,
+                    &bodies[1 - operand],
+                    output.arrangement(),
+                    output.lineage(),
+                    linear,
+                    scope,
+                )?;
+                self.classified
+                    .extend(output.arrangement().cells().iter().map(|cell| {
+                        ClassifiedBoundaryFragment::new(
+                            MixedShellCellKey::planar(source, cell.key()),
+                            operand_side(operand),
+                            (),
+                            as_boundary_classification(classes[&cell.key()]),
+                        )
+                    }));
+                self.planar.push(PreparedPlanarFace {
+                    face: face.clone(),
+                    operand,
+                    source,
+                    output,
+                });
+                continue;
+            }
             let carried = graph
                 .curve_fragments()
                 .iter()

@@ -2,7 +2,7 @@
 //! Part of the existing lifecycle target; release wall-time budget: 10 seconds.
 
 use super::*;
-use kernel::BOOLEAN_SOURCE_EXTRACTION_WORK;
+use kernel::{BOOLEAN_SOURCE_EXTRACTION_WORK, PointBodyVerdict};
 
 const CUTS: [(f64, f64, f64); 3] = [(-2.5, -1.0, 0.75), (2.0, -1.0, 0.5), (0.0, 2.0, 0.625)];
 
@@ -324,6 +324,7 @@ fn assert_work_boundaries(mut make_fixture: impl FnMut() -> BooleanFixture) {
         BOOLEAN_BSP_WORK,
         BOOLEAN_POST_SELECTION_WORK,
         SECTION_WORK,
+        kernel::POINT_CLASSIFICATION_WORK,
         kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap(),
         kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap(),
     ] {
@@ -334,11 +335,12 @@ fn assert_work_boundaries(mut make_fixture: impl FnMut() -> BooleanFixture) {
             .find(|usage| usage.stage == stage && usage.resource == ResourceKind::Work)
             .unwrap();
         if usage.consumed == 0
-            && stage == kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap()
+            && (stage == kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap()
+                || stage == kernel::StageId::new("ktopo.check.shell-surgery-work").unwrap())
         {
-            continue; // Earlier shell proofs can discharge unchanged annuli.
+            continue; // These independent shell proofs discharge different representations.
         }
-        assert!(usage.consumed > 0);
+        assert!(usage.consumed > 0, "unused budget stage: {stage:?}");
         let settings = |allowed| {
             OperationSettings::new().with_budget_overrides(
                 BudgetPlan::new([LimitSpec::new(
@@ -784,27 +786,133 @@ fn composed_crossing_cut_budget_denial_is_failure_atomic() {
     });
 }
 
-#[test]
-fn composed_arc_boundaries_refuse_further_cuts_atomically() {
-    let mut fixture = nested_cut_fixture(Frame::world(), &[(0.0, 0.0, 0.75)], (0.75, 0.0, 0.75));
+fn reused_arc_fixture(frame: Frame, next: (f64, f64, f64)) -> BooleanFixture {
+    let mut fixture = nested_cut_fixture(
+        frame,
+        &[(0.0, 0.0, 0.75), (3.0, 2.0, 0.25)],
+        (0.75, 0.0, 0.75),
+    );
     fixture.left = cut(&mut fixture).bodies()[0].clone();
-    fixture.right = cutter(
-        &mut fixture.session,
-        &fixture.part,
-        Frame::world(),
-        (3.0, 0.0, 0.5),
-    );
-    let before = boolean_topology_counts(&fixture);
-    let bytes = export(&fixture, fixture.left.clone());
-    let result = run_boolean(
-        &mut fixture,
-        BooleanOperation::Subtract,
-        OperationSettings::new(),
-    );
-    assert!(matches!(
-        result.into_result().unwrap(),
-        BooleanOutcome::Refused(_)
-    ));
-    assert_eq!(boolean_topology_counts(&fixture), before);
-    assert_eq!(export(&fixture, fixture.left.clone()), bytes);
+    fixture.right = cutter(&mut fixture.session, &fixture.part, frame, next);
+    fixture
+}
+
+#[test]
+fn composed_arc_results_support_separated_and_crossing_followup_cuts() {
+    for frame in frames() {
+        for next in [(3.0, -2.0, 0.5), (1.5, 0.0, 0.5), (1.375, 0.375, 0.5)] {
+            let mut previous = None;
+            for _ in 0..2 {
+                let mut fixture = reused_arc_fixture(frame, next);
+                let graph = fixture
+                    .session
+                    .part(fixture.part.clone())
+                    .unwrap()
+                    .section_bodies(SectionBodiesRequest::new(
+                        fixture.left.clone(),
+                        fixture.right.clone(),
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(
+                    graph.completion(),
+                    SectionCompletion::Complete,
+                    "next={next:?}, frame={frame:?}: {graph:?}"
+                );
+                let sources = [
+                    export(&fixture, fixture.left.clone()),
+                    export(&fixture, fixture.right.clone()),
+                ];
+                let created = cut(&mut fixture);
+                let body = created.bodies()[0].clone();
+                let crossing = disk_overlap((0.75, 0.0, 0.75), next) > 0.0;
+                assert_lineage(&fixture, &created, [if crossing { 10 } else { 9 }, 1]);
+                assert_eq!(
+                    boolean_body_topology_signature(&fixture, body.clone()),
+                    if crossing { [11, 26, 16] } else { [10, 22, 12] }
+                );
+                assert_eq!(export(&fixture, fixture.left.clone()), sources[0]);
+                assert_eq!(export(&fixture, fixture.right.clone()), sources[1]);
+                let part = fixture.session.part(fixture.part.clone()).unwrap();
+                for (x, y, expected) in [
+                    (0.0, 0.0, PointBodyVerdict::Exterior),
+                    (0.75, 0.0, PointBodyVerdict::Exterior),
+                    (next.0, next.1, PointBodyVerdict::Exterior),
+                    (3.0, 2.0, PointBodyVerdict::Exterior),
+                    (4.0, -3.0, PointBodyVerdict::Interior),
+                ] {
+                    let value = part
+                        .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                            body.clone(),
+                            frame.point_at(x, y, 1.0),
+                        ))
+                        .unwrap()
+                        .into_result()
+                        .unwrap();
+                    assert_eq!(value.verdict(), &expected, "next={next:?}: {value:?}");
+                }
+                let wall = part
+                    .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                        body.clone(),
+                        frame.point_at(-0.75, 0.0, 1.0),
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert!(
+                    matches!(wall.verdict(), PointBodyVerdict::Boundary { .. }),
+                    "{wall:?}"
+                );
+                let mesh = part
+                    .tessellate_body(TessellateBodyRequest::new(
+                        body.clone(),
+                        TessOptions {
+                            chord_tol: 1e-3,
+                            max_edge_len: None,
+                        },
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                let volume = mesh
+                    .triangles()
+                    .iter()
+                    .map(|triangle| {
+                        let [a, b, c] =
+                            triangle.map(|i| mesh.positions()[i as usize] - frame.origin());
+                        a.dot(b.cross(c)) / 6.0
+                    })
+                    .sum::<f64>()
+                    .abs();
+                // The first and third intersecting disks are disjoint, so no
+                // triple-overlap term is present in this independent oracle.
+                let first = (0.0, 0.0, 0.75);
+                let second = (0.75, 0.0, 0.75);
+                let area = core::f64::consts::PI
+                    * (2.0 * 0.75_f64.powi(2) + 0.25_f64.powi(2) + next.2.powi(2))
+                    - disk_overlap(first, second)
+                    - disk_overlap(second, next);
+                assert!(
+                    (volume - (160.0 - 2.0 * area)).abs() < 0.04,
+                    "next={next:?}, volume={volume}"
+                );
+                let bytes = assert_deterministic_xt_and_fast_self_import(
+                    &mut fixture,
+                    std::slice::from_ref(&body),
+                );
+                if let Some(previous) = &previous {
+                    assert_eq!(&bytes, previous);
+                }
+                previous = Some(bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn composed_arc_reuse_budget_denial_is_failure_atomic() {
+    for next in [(3.0, -2.0, 0.5), (1.5, 0.0, 0.5)] {
+        assert_work_boundaries(|| reused_arc_fixture(Frame::world(), next));
+    }
 }

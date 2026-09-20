@@ -10,8 +10,9 @@
 //! predicates on stored vertex
 //! coordinates, never on derived intersection points. The certified slice
 //! covers polygonal planar faces, full-circle planar trims, one convex polygon
-//! with a strictly contained circular hole, and finite full-period cylindrical
-//! bands with whole-edge analytic incidence bounds. Solid parity additionally
+//! with strictly contained circular or bounded analytic holes, and finite
+//! cylindrical bands and contractible trimmed faces with whole-edge analytic
+//! incidence bounds. Solid parity additionally
 //! covers admitted planar/cylindrical mixtures through a certified common-axis
 //! ray. Every other configuration returns
 //! [`PointFaceVerdict::Indeterminate`] /
@@ -24,6 +25,7 @@
 //! tolerances — are `Indeterminate` by design, because no verdict about them
 //! is certifiable from the stored geometry.
 
+mod bounded;
 mod convex;
 mod curved;
 
@@ -496,6 +498,8 @@ struct PreparedFace {
     /// face. The current admitted mixed layout is one convex polygon and one
     /// topology-owned circle; broader curved loop arrangements fail closed.
     circle_rings: Vec<curved::CircleRing>,
+    bounded_trims: Vec<ktopo::bounded_trim::BoundedTrim>,
+    trim_frame: Option<Box<kgeom::frame::Frame>>,
     /// Metric half-width of the on-surface band (session linear resolution).
     on_tol: f64,
     /// Conservative half-width outside which off-face is certified: covers
@@ -576,6 +580,7 @@ fn prepare_face(
     charge(scope, face.loops().len() as u64)?;
     let mut loops = Vec::with_capacity(face.loops().len());
     let mut circle_rings = Vec::new();
+    let mut bounded_trims = Vec::new();
     let mut max_elem_tol = linear;
     let mut deviation_sq_hi: f64 = 0.0;
     for &loop_id in face.loops() {
@@ -598,6 +603,20 @@ fn prepare_face(
                 circle_rings.push(circle);
                 continue;
             }
+        }
+        if ring.fins().iter().any(|&fin| {
+            store
+                .get(fin)
+                .ok()
+                .and_then(|fin| fin.pcurve())
+                .and_then(|use_| store.pcurve(use_.curve()).ok())
+                .is_some_and(|curve| matches!(curve, ktopo::geom::Curve2dGeom::Circle(_)))
+        }) {
+            let Some(trim) = bounded::prepare(store, raw, loop_id, scope)? else {
+                return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+            };
+            bounded_trims.push(trim);
+            continue;
         }
         let mut vertices = Vec::with_capacity(ring.fins().len());
         for &fin_id in ring.fins() {
@@ -705,6 +724,8 @@ fn prepare_face(
             normal_sq,
             loops,
             circle_rings,
+            trim_frame: (!bounded_trims.is_empty()).then(|| Box::new(*plane.frame())),
+            bounded_trims,
             on_tol: linear,
             guard,
             drop_axis,
@@ -913,7 +934,10 @@ fn winding_parity(face: &PreparedFace, point: [f64; 3]) -> WindingOutcome {
             }
         }
     }
-    let polygon_inside = crossings % 2 == 1;
+    let Some(bounded_inside) = bounded::plane_parity(face, point.map(Interval::point)) else {
+        return WindingOutcome::Gap;
+    };
+    let polygon_inside = (crossings % 2 == 1) ^ bounded_inside;
     match curved::circular_trim_parity(&face.circle_rings, point) {
         curved::TrimParity::Inside if polygon_inside => WindingOutcome::Outside,
         curved::TrimParity::Inside => WindingOutcome::Inside,
@@ -969,6 +993,7 @@ fn face_site(
         curved::RingScan::Gap => return Ok(SiteOutcome::Gap(GAP_GUARD_BAND)),
         curved::RingScan::Clear => {}
     }
+    bounded::charge_query(&face.bounded_trims, scope)?;
     match winding_parity(face, point) {
         WindingOutcome::Inside => Ok(SiteOutcome::On(RawSite::Interior)),
         WindingOutcome::Outside => Ok(SiteOutcome::Off),

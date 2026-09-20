@@ -77,6 +77,7 @@ pub(super) struct CylinderFace {
     frame: Frame,
     radius: f64,
     rings: Vec<CylinderRing>,
+    bounded_trims: Vec<ktopo::bounded_trim::BoundedTrim>,
     on_tol: f64,
     guard: f64,
 }
@@ -356,12 +357,20 @@ fn prepare_cylinder(
         return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
     }
     let mut rings = Vec::with_capacity(face.loops().len());
+    let mut bounded_trims = Vec::new();
     let mut max_tol = linear.max(face.tolerance().map_or(0.0, |value| value.value()));
     for &loop_id in face.loops() {
         let ring = read(store.get::<Loop>(loop_id))?;
         charge(scope, ring.fins().len() as u64)?;
         let [fin_id] = ring.fins() else {
-            return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
+            let Some(trim) = super::bounded::prepare(store, raw, loop_id, scope)? else {
+                return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
+            };
+            if trim.bounds()[0].width() >= core::f64::consts::TAU {
+                return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
+            }
+            bounded_trims.push(trim);
+            continue;
         };
         let fin = read(store.get(*fin_id))?;
         let edge = read(store.get(fin.edge))?;
@@ -417,13 +426,19 @@ fn prepare_cylinder(
         });
     }
     let guard = (4.0 * max_tol).next_up();
-    if !guard.is_finite() || rings.len() != 2 || rings[0].edge == rings[1].edge {
+    if !guard.is_finite()
+        || (!bounded_trims.is_empty() && !rings.is_empty())
+        || (bounded_trims.is_empty() && (rings.len() != 2 || rings[0].edge == rings[1].edge))
+    {
         return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
     }
-    let separation = (Interval::point(rings[0].axial_parameter)
-        - Interval::point(rings[1].axial_parameter))
-    .square()
-    .sqrt();
+    let separation = if bounded_trims.is_empty() {
+        (Interval::point(rings[0].axial_parameter) - Interval::point(rings[1].axial_parameter))
+            .square()
+            .sqrt()
+    } else {
+        Some(Interval::point(f64::MAX))
+    };
     if separation.is_none_or(|value| value.lo() <= 2.0 * guard) {
         return Ok(CurvedPrepOutcome::Gap(GAP_CYLINDER_TRIM));
     }
@@ -433,6 +448,7 @@ fn prepare_cylinder(
             frame: *cylinder.frame(),
             radius: cylinder.radius(),
             rings,
+            bounded_trims,
             on_tol: linear,
             guard,
         },
@@ -508,6 +524,21 @@ fn cylinder_site(
         MetricBand::On => {}
     }
 
+    if !face.bounded_trims.is_empty() {
+        super::bounded::charge_query(&face.bounded_trims, scope)?;
+        return Ok(
+            match super::bounded::cylinder_parity(
+                &face.frame,
+                &face.bounded_trims,
+                point,
+                face.guard,
+            ) {
+                Some(true) => SiteOutcome::On(RawSite::Interior),
+                Some(false) => SiteOutcome::Off,
+                None => SiteOutcome::Gap(super::GAP_PROJECTED_CONTACT),
+            },
+        );
+    }
     let axis = as_coords(face.frame.z());
     let origin = as_coords(face.frame.origin());
     let mut below = 0_u64;
@@ -974,7 +1005,14 @@ fn axial_parity_direction(
                 };
                 polygon_crossings % 2 == 1
             };
-            polygon_inside ^ circle_inside
+            let hit = core::array::from_fn(|i| {
+                Interval::point(point[i]) + Interval::point(direction[i]) * t
+            });
+            super::bounded::charge_query(&plane.bounded_trims, scope)?;
+            let Some(bounded_inside) = super::bounded::plane_parity(plane, hit) else {
+                return Ok(None);
+            };
+            polygon_inside ^ circle_inside ^ bounded_inside
         } else {
             circle_inside
         };

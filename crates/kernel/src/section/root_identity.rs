@@ -9,8 +9,8 @@
 //! This exact-family slice admits bounded line edges against cylindrical
 //! faces and vertexless whole-period circle edges against planar or
 //! cylindrical faces, including nonparallel Circle/Cylinder supports. Bounded
-//! or vertex-backed circle edges remain unsupported until periodic copy
-//! enumeration has its own certified integer-range proof. Root coefficients
+//! arcs retain only strictly interior periodic copies of the complete carrier
+//! roots, ordered in the source edge parameter. Root coefficients
 //! and enclosures use outward interval arithmetic over authored source values.
 //! Exact affine predicates decide family admission and semantic degeneracies.
 //! The complete second-harmonic Circle/Cylinder restriction is certified as a
@@ -406,6 +406,11 @@ fn certify_query(
     };
     let curve = read(store.curve(curve_id))?;
     let surface = read(store.surface(face.surface()))?;
+    if matches!(curve, CurveGeom::Circle(_))
+        && let Err(gap) = retain_circle_edge_roots(edge, Vec::new())
+    {
+        return Ok(RootOrderOutcome::Indeterminate(gap));
+    }
     // One fixed analytic certificate unit. Limit failures remain facade
     // errors and are never cached as semantic root gaps.
     charge(scope, 4)?;
@@ -424,21 +429,13 @@ fn certify_query(
             certify_line_cylinder(*line, *cylinder, active)
         }
         (CurveGeom::Circle(circle), SurfaceGeom::Plane(plane)) => {
-            if edge.bounds().is_some() || edge.vertices() != [None, None] {
-                return Ok(RootOrderOutcome::Indeterminate(
-                    RootIdentityGap::UnsupportedGeometry,
-                ));
-            }
             certify_circle_plane(*circle, *plane)
+                .and_then(|roots| retain_circle_edge_roots(edge, roots))
         }
         (CurveGeom::Circle(circle), SurfaceGeom::Cylinder(cylinder)) => {
-            if edge.bounds().is_some() || edge.vertices() != [None, None] {
-                return Ok(RootOrderOutcome::Indeterminate(
-                    RootIdentityGap::UnsupportedGeometry,
-                ));
-            }
             charge_circle_cylinder_quartic(scope)?;
             certify_circle_cylinder(*circle, *cylinder)
+                .and_then(|roots| retain_circle_edge_roots(edge, roots))
         }
         _ => {
             return Ok(RootOrderOutcome::Indeterminate(
@@ -450,6 +447,43 @@ fn certify_query(
         Ok(roots) => RootOrderOutcome::Certified(CertifiedSourceRootOrder { query, roots }),
         Err(gap) => RootOrderOutcome::Indeterminate(gap),
     })
+}
+
+fn retain_circle_edge_roots(
+    edge: &ktopo::entity::Edge,
+    roots: Vec<Interval>,
+) -> core::result::Result<Vec<Interval>, RootIdentityGap> {
+    if edge.bounds().is_none() && edge.vertices() == [None, None] {
+        return Ok(roots);
+    }
+    let (Some((lo, hi)), [Some(_), Some(_)]) = (edge.bounds(), edge.vertices()) else {
+        return Err(RootIdentityGap::MalformedSourceEdge);
+    };
+    let period = core::f64::consts::TAU;
+    if !lo.is_finite() || !hi.is_finite() || lo >= hi || hi - lo >= period {
+        return Err(RootIdentityGap::UnsupportedGeometry);
+    }
+    let base = (lo / period).floor();
+    if !base.is_finite() || base.abs() > i32::MAX as f64 {
+        return Err(RootIdentityGap::ArithmeticGuard);
+    }
+    let mut retained = Vec::new();
+    for root in roots {
+        let mut found = false;
+        for offset in [-1.0, 0.0, 1.0, 2.0] {
+            let lifted = root + Interval::point(base + offset) * Interval::point(period);
+            if lifted.hi() < lo || lifted.lo() > hi {
+                continue;
+            }
+            if lifted.lo() <= lo || lifted.hi() >= hi || found {
+                return Err(RootIdentityGap::EdgeBoundaryContact);
+            }
+            found = true;
+            retained.push(lifted);
+        }
+    }
+    strict_sort(&mut retained)?;
+    Ok(retained)
 }
 
 fn certify_line_cylinder(

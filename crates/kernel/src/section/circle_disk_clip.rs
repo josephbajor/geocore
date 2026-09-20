@@ -284,6 +284,61 @@ pub(super) fn circular_trim_crossings(
     }))
 }
 
+/// Intersect the complete circle carriers, then retain only roots certified
+/// strictly inside the topology-owned bounded source edge.
+pub(super) fn bounded_arc_crossings(
+    store: &Store,
+    face: RawFaceId,
+    loop_id: RawLoopId,
+    fin_id: RawFinId,
+    circle: SectionUvCircle,
+    carrier_range: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<core::result::Result<Vec<ClosedConicTrimSite>, ClosedConicClipGap>> {
+    let fin = read(store.get(fin_id))?;
+    let edge = read(store.get(fin.edge))?;
+    let (Some(use_), Some((lo, hi))) = (fin.pcurve, edge.bounds) else {
+        return Ok(Err(ClosedConicClipGap::UnsupportedTrim));
+    };
+    let Curve2dGeom::Circle(boundary_circle) = read(store.pcurve(use_.curve()))? else {
+        return Ok(Err(ClosedConicClipGap::UnsupportedTrim));
+    };
+    if !use_.chart().is_identity() || hi - lo >= PERIOD {
+        return Ok(Err(ClosedConicClipGap::UnsupportedTrim));
+    }
+    let boundary = DiskBoundary {
+        face,
+        loop_id,
+        fin: fin_id,
+        edge: fin.edge,
+        circle: *boundary_circle,
+        use_,
+    };
+    let Some(branch) = branch_circle(circle, carrier_range) else {
+        return Ok(Err(ClosedConicClipGap::UnsupportedTrim));
+    };
+    let fragment = match clip_secant(branch, boundary, scope)? {
+        Ok(fragment) => fragment,
+        Err(ClosedConicClipGap::NonSecantBoundary) => return Ok(Ok(Vec::new())),
+        Err(gap) => return Ok(Err(gap)),
+    };
+    let mut sites = Vec::new();
+    for site in [fragment.start, fragment.end].into_iter().flatten() {
+        if site.edge_parameter.hi() < lo || site.edge_parameter.lo() > hi {
+            continue;
+        }
+        if site.edge_parameter.lo() <= lo || site.edge_parameter.hi() >= hi {
+            return Ok(Err(ClosedConicClipGap::ParameterSeamContact));
+        }
+        sites.push(site);
+    }
+    sites.sort_by(|a, b| interval_order(&a.edge_parameter, &b.edge_parameter));
+    for (ordinal, site) in sites.iter_mut().enumerate() {
+        site.root_ordinal = ordinal;
+    }
+    Ok(Ok(sites))
+}
+
 /// Increasing `Circle2d` parameter is counterclockwise in the surface UV
 /// chart. Loop traversal composes the fin's edge sense with the pcurve map
 /// sense. Since the admitted face has exactly one loop, that loop is its
@@ -504,6 +559,14 @@ fn boundary_edge_parameter(
         .ok_or(ClosedConicClipGap::ArithmeticGuard)?;
     let principal = twice_atan_interval(half_angle)?;
     let active = boundary.use_.range();
+    let bounded = active.width() != PERIOD;
+    // The complete carrier root is lifted into the period beginning at the
+    // active arc. The caller then excludes the complementary open interval.
+    let active = if bounded {
+        ParamRange::new(active.lo, active.lo + PERIOD)
+    } else {
+        active
+    };
     let pcurve_parameter = lift_principal_to_active(principal, active)
         .ok_or(ClosedConicClipGap::ParameterSeamContact)?;
     let map = boundary.use_.edge_to_pcurve();
@@ -511,14 +574,18 @@ fn boundary_edge_parameter(
         .checked_div(Interval::point(map.scale()))
         .filter(|value| finite(*value))
         .ok_or(ClosedConicClipGap::ArithmeticGuard)?;
-    if edge_parameter.lo() <= 0.0 || edge_parameter.hi() >= PERIOD {
+    if !bounded && (edge_parameter.lo() <= 0.0 || edge_parameter.hi() >= PERIOD) {
         return Err(ClosedConicClipGap::ParameterSeamContact);
     }
     Ok(edge_parameter)
 }
 
 fn lift_principal_to_active(principal: Interval, active: ParamRange) -> Option<Interval> {
-    if !finite(principal) || !active.is_finite() || active.width() != PERIOD {
+    if !finite(principal)
+        || !active.is_finite()
+        || active.width() <= 0.0
+        || active.width() >= 2.0 * PERIOD
+    {
         return None;
     }
     let midpoint = 0.5 * principal.lo() + 0.5 * principal.hi();

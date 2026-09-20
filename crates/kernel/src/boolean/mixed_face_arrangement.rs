@@ -531,9 +531,13 @@ fn arrange_mixed_planar_face_with_lineage_admission(
         .map_err(|_| MixedFaceArrangementError::MissingSourceFace)?
     {
         SurfaceGeom::Plane(_) => {}
+        SurfaceGeom::Cylinder(_)
+            if source_face.loops().len() == 1
+                && ktopo::bounded_trim::prepare(store, raw_face, source_face.loops()[0])
+                    .ok()
+                    .flatten()
+                    .is_some() => {}
         SurfaceGeom::Cylinder(_) => {
-            // Section does not yet publish periodic chart-unwrapping plus
-            // cycle-to-cell embedding assignments for a cylinder side.
             return Err(MixedFaceArrangementError::PeriodicSurfaceEmbeddingEvidenceRequired);
         }
         _ => return Err(MixedFaceArrangementError::UnsupportedSourceSurface),
@@ -853,7 +857,7 @@ fn arrange_planar_face_evidence_with_lineage(
         .filter(|root| root.loop_id == polygon)
         .cloned()
         .collect::<Vec<_>>();
-    let mut split = split_source_boundary(store, face, &polygon_roots)?;
+    let mut split = split_source_boundary_loop(store, face, polygon, &polygon_roots)?;
     let split_rings = circular_boundaries::append_split_rings(store, face, &roots, &mut split)?;
     certify_cut_embedding(&cuts)?;
     let cut_fragments = cuts
@@ -1168,6 +1172,15 @@ fn source_boundary_orientation(
     face: RawFaceId,
 ) -> Result<Orientation, MixedFaceArrangementError> {
     let loop_id = source_rings::polygon_loop(store, face)?;
+    if store
+        .get(face)
+        .ok()
+        .and_then(|face| store.surface(face.surface()).ok())
+        .is_some_and(|surface| matches!(surface, SurfaceGeom::Cylinder(_)))
+        && let Ok(Some(trim)) = ktopo::bounded_trim::prepare(store, face, loop_id)
+    {
+        return Ok(trim.orientation());
+    }
     let loop_id = &loop_id;
     let loop_ = store
         .get(*loop_id)
@@ -1450,12 +1463,12 @@ struct SplitSourceBoundary {
     lineage: Vec<MixedSourceSpanLineage>,
 }
 
-fn split_source_boundary(
+fn split_source_boundary_loop(
     store: &Store,
     face_id: RawFaceId,
+    loop_id: RawLoopId,
     roots: &[BoundaryRootEvidence],
 ) -> Result<SplitSourceBoundary, MixedFaceArrangementError> {
-    let loop_id = source_rings::polygon_loop(store, face_id)?;
     let loop_id = &loop_id;
     let loop_ = store
         .get(*loop_id)
@@ -2241,7 +2254,13 @@ mod tests {
     fn repeated_or_branched_endpoint_incidence_never_guesses_a_rotation() {
         let fixture = planar_fixture(false);
         let roots = collect_unique_roots(&[chord(&fixture)]).unwrap();
-        let source = split_source_boundary(&fixture.store, fixture.face, &roots).unwrap();
+        let source = split_source_boundary_loop(
+            &fixture.store,
+            fixture.face,
+            source_rings::polygon_loop(&fixture.store, fixture.face).unwrap(),
+            &roots,
+        )
+        .unwrap();
         let boundary = MixedArrangementVertex::SectionEndpoint(10);
         let cuts = vec![
             DirectedCutFragment::new(

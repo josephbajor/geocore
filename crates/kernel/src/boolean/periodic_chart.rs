@@ -285,14 +285,17 @@ pub(super) fn select_common_periodic_window(
     authored: ParamRange,
     intervals: &[(f64, f64)],
 ) -> Result<ParamRange, PeriodicChartError> {
-    if !period.is_finite()
-        || period <= 0.0
-        || !authored.is_finite()
-        || authored.lo >= authored.hi
-        || authored.width() != period
-    {
+    if !period.is_finite() || period <= 0.0 || !authored.is_finite() || authored.lo >= authored.hi {
         return Err(PeriodicChartError::InvalidAnalyticGeometry);
     }
+    // A previously trimmed cylindrical face has a bounded work box. It is
+    // only a chart preference: extend it to one exact period before testing
+    // the complete retained pcurve intervals below.
+    let authored = if authored.width() == period {
+        authored
+    } else {
+        centered_exact_period_window(authored.lo, period).unwrap_or(ParamRange::new(0.0, period))
+    };
     if intervals
         .iter()
         .all(|interval| periodic_interval_shift(period, authored, *interval).is_ok())
@@ -787,6 +790,10 @@ mod tests {
     fn invalid_period_window_interval_and_ring_fail_closed() {
         assert_eq!(
             select_common_periodic_window(TAU, ParamRange::new(0.0, PI), &[]),
+            Ok(ParamRange::new(0.0, TAU))
+        );
+        assert_eq!(
+            select_common_periodic_window(TAU, ParamRange::new(0.0, 0.0), &[]),
             Err(PeriodicChartError::InvalidAnalyticGeometry)
         );
         assert_eq!(

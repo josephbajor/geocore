@@ -20,7 +20,44 @@ pub(super) fn append_split_rings(
         }
         let ring = store.get(loop_id).map_err(|_| fail())?;
         let [fin_id] = ring.fins() else {
-            return Err(fail());
+            let loop_roots = roots
+                .iter()
+                .filter(|root| root.loop_id == loop_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut bounded = split_source_boundary_loop(store, face, loop_id, &loop_roots)?;
+            let vertex_base = split.source_vertices.len();
+            for span in &mut bounded.lineage {
+                span.key.fin_loop_ordinal += fin_ordinal;
+                for parameter in &mut span.range {
+                    if let MixedSourceParameterEvidence::SourceVertex {
+                        topology_ordinal, ..
+                    } = parameter
+                    {
+                        *topology_ordinal += vertex_base;
+                    }
+                }
+            }
+            for span in bounded.spans {
+                let mut key = span.key().clone();
+                key.fin_loop_ordinal += fin_ordinal;
+                let ends = span.endpoints().map(|v| match v {
+                    MixedArrangementVertex::SourceVertex(index) => {
+                        MixedArrangementVertex::SourceVertex(index + vertex_base)
+                    }
+                    value => value.clone(),
+                });
+                split.spans.push(DirectedSourceSpan::new(
+                    key,
+                    ends[0].clone(),
+                    ends[1].clone(),
+                ));
+            }
+            split.source_vertices.extend(bounded.source_vertices);
+            split.lineage.extend(bounded.lineage);
+            count += 1;
+            fin_ordinal += ring.fins().len();
+            continue;
         };
         let fin = store.get(*fin_id).map_err(|_| fail())?;
         let mut ordered = roots
@@ -113,17 +150,29 @@ pub(super) fn arrange(
 ) -> Result<MixedPlanarFaceArrangement, MixedFaceArrangementError> {
     let fail = || MixedFaceArrangementError::MultipleSourceLoops;
     let polygon = source_rings::polygon_loop(store, face)?;
-    let first = cuts.first().ok_or_else(fail)?;
-    let CutEmbedding::Circle {
-        branch,
-        orientation,
-        ..
-    } = first.embedding
-    else {
+    let embedding = cuts.first().map(|cut| cut.embedding.clone());
+    let orientation = source_boundary_orientation(store, face)?;
+    let (branch, orientation) = if let Some(
+        CutEmbedding::Circle {
+            branch,
+            orientation,
+            ..
+        }
+        | CutEmbedding::WholeCircle {
+            branch,
+            orientation,
+            ..
+        },
+    ) = embedding
+    {
+        (branch, orientation)
+    } else if embedding.is_none() {
+        (usize::MAX, orientation)
+    } else {
         return Err(fail());
     };
-    if cuts.iter().any(|cut| !matches!(cut.embedding, CutEmbedding::Circle { branch: b, orientation: o, .. } if b == branch && o == orientation)
-        || cut.endpoints.iter().any(|end| end.boundary_root.as_ref().is_none_or(|root| root.loop_id == polygon))) {
+    if cuts.iter().any(|cut| !matches!(cut.embedding, CutEmbedding::Circle { branch: b, orientation: o, .. } | CutEmbedding::WholeCircle { branch: b, orientation: o, .. } if b == branch && o == orientation)
+        || cut.endpoints.iter().any(|end| end.boundary_root.as_ref().is_some_and(|root| root.loop_id == polygon))) {
         return Err(fail());
     }
     let forward_inside = orientation == source_boundary_orientation(store, face)?;
@@ -169,9 +218,6 @@ pub(super) fn arrange(
             cells.push(CertifiedCellTopology::new(key, 1));
             CertifiedCycleSide::Cell(key)
         } else {
-            if side.is_none() && !polygon_side {
-                return Err(fail());
-            }
             polygon_found |= polygon_side;
             outside_cycles += 1;
             CertifiedCycleSide::Cell(0)
